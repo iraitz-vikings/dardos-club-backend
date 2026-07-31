@@ -1,0 +1,128 @@
+generator client {
+  provider = "prisma-client-js"
+  }
+
+  datasource db {
+    provider = "postgresql"
+      url      = env("DATABASE_URL")
+      }
+
+      enum Rol {
+        jugador
+          capitan
+            admin
+            }
+
+            enum OrigenTorneo {
+              automatico
+                manual
+                }
+
+                enum OrigenActualizacion {
+                  scraper
+                    manual
+                    }
+
+                    model Usuario {
+                      id            String    @id @default(uuid())
+                        nombre        String
+                          email         String    @unique
+                            passwordHash  String
+                              rol           Rol       @default(jugador)
+                                creadoEn      DateTime  @default(now())
+
+                                  jugador       Jugador?
+                                    noticias      NoticiaEvento[]
+                                      notificacionesDisparadas Notificacion[]
+                                      }
+
+                                      model Jugador {
+                                        id          String   @id @default(uuid())
+                                          nombre      String
+                                            usuarioId   String?  @unique
+                                              usuario     Usuario? @relation(fields: [usuarioId], references: [id])
+
+                                                equipos     EquipoJugador[]
+                                                  equiposCapitaneados EquipoTorneo[] @relation("capitan")
+                                                  }
+
+                                                  model Plataforma {
+                                                    id                   String   @id @default(uuid())
+                                                      nombre               String   @unique
+                                                        adaptador            String?
+                                                          credencialesCifradas String?
+
+                                                            torneos              Torneo[]
+                                                            }
+
+                                                            model Torneo {
+                                                              id            String        @id @default(uuid())
+                                                                nombre        String
+                                                                  nivel         String?
+                                                                    temporada     String?
+                                                                      origen        OrigenTorneo
+                                                                        plataformaId  String?
+                                                                          plataforma    Plataforma?   @relation(fields: [plataformaId], references: [id])
+                                                                            idExterno     String?
+
+                                                                              equipos       EquipoTorneo[]
+                                                                              }
+
+                                                                              model EquipoTorneo {
+                                                                                id                String   @id @default(uuid())
+                                                                                  torneoId          String
+                                                                                    torneo            Torneo   @relation(fields: [torneoId], references: [id])
+                                                                                      nombreEquipo      String?
+                                                                                        idExternoEquipo   String?
+                                                                                          capitanId         String?
+                                                                                            capitan           Jugador? @relation("capitan", fields: [capitanId], references: [id])
+
+                                                                                              jugadores         EquipoJugador[]
+                                                                                                partidos          Partido[]
+                                                                                                }
+
+                                                                                                model EquipoJugador {
+                                                                                                  id             String       @id @default(uuid())
+                                                                                                    equipoTorneoId String
+                                                                                                      equipoTorneo   EquipoTorneo @relation(fields: [equipoTorneoId], references: [id])
+                                                                                                        jugadorId      String
+                                                                                                          jugador        Jugador      @relation(fields: [jugadorId], references: [id])
+                                                                                                          
+                                                                                                            @@unique([equipoTorneoId, jugadorId])
+                                                                                                            }
+                                                                                                            
+                                                                                                            model Partido {
+                                                                                                              id                   String              @id @default(uuid())
+                                                                                                                equipoTorneoId       String
+                                                                                                                  equipoTorneo         EquipoTorneo        @relation(fields: [equipoTorneoId], references: [id])
+                                                                                                                    fecha                DateTime
+                                                                                                                      rival                String?
+                                                                                                                        resultado            String?
+                                                                                                                          fijado               Boolean             @default(false)
+                                                                                                                            notaCapitan          String?
+                                                                                                                              origenActualizacion  OrigenActualizacion @default(manual)
+                                                                                                                                ultimaActualizacion  DateTime            @updatedAt
+                                                                                                                                
+                                                                                                                                  notificaciones       Notificacion[]
+                                                                                                                                  }
+                                                                                                                                  
+                                                                                                                                  model Notificacion {
+                                                                                                                                    id            String    @id @default(uuid())
+                                                                                                                                      partidoId     String
+                                                                                                                                        partido       Partido   @relation(fields: [partidoId], references: [id])
+                                                                                                                                          mensaje       String
+                                                                                                                                            enviadaEn     DateTime  @default(now())
+                                                                                                                                              disparadaPorId String?
+                                                                                                                                                disparadaPor  Usuario?  @relation(fields: [disparadaPorId], references: [id])
+                                                                                                                                                }
+                                                                                                                                                
+                                                                                                                                                model NoticiaEvento {
+                                                                                                                                                  id                String   @id @default(uuid())
+                                                                                                                                                    titulo            String
+                                                                                                                                                      contenido         String
+                                                                                                                                                        fotos             String[]
+                                                                                                                                                          fechaPublicacion  DateTime @default(now())
+                                                                                                                                                            autorId           String?
+                                                                                                                                                              autor             Usuario? @relation(fields: [autorId], references: [id])
+                                                                                                                                                              }
+                                                                                                                                                              

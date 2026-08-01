@@ -1,22 +1,24 @@
 {
-      "name": "dardos-club-backend",
-      "version": "0.1.0",
-      "private": true,
-      "type": "module",
-      "scripts": {
-              "dev": "node --watch src/index.js",
-              "build": "prisma generate",
-              "start": "prisma db push --skip-generate --accept-data-loss && node src/index.js",
-              "prisma:generate": "prisma generate",
-              "prisma:migrate": "prisma migrate dev"
-      },
-      "dependencies": {
-              "@prisma/client": "^5.20.0",
-              "express": "^4.19.2",
-              "cors": "^2.8.5",
-              "dotenv": "^16.4.5"
-      },
-      "devDependencies": {
-              "prisma": "^5.20.0"
-      }
+        "name": "dardos-club-backend",
+        "version": "0.1.0",
+        "private": true,
+        "type": "module",
+        "scripts": {
+                  "dev": "node --watch src/index.js",
+                  "build": "prisma generate",
+                  "start": "prisma db push --skip-generate --accept-data-loss && node src/index.js",
+                  "prisma:generate": "prisma generate",
+                  "prisma:migrate": "prisma migrate dev"
+        },
+        "dependencies": {
+                  "@prisma/client": "^5.20.0",
+                  "cloudinary": "^2.5.1",
+                  "cors": "^2.8.5",
+                  "dotenv": "^16.4.5",
+                  "express": "^4.19.2",
+                  "multer": "^1.4.5-lts.1"
+        },
+        "devDependencies": {
+                  "prisma": "^5.20.0"
+        }
 }

@@ -126,3 +126,13 @@ generator client {
                                                                                                                                                               autor             Usuario? @relation(fields: [autorId], references: [id])
                                                                                                                                                               }
                                                                                                                                                               
+
+
+model TorneoDestacado {
+  id            String   @id @default(uuid())
+  nombre        String
+  fechaInicio   DateTime
+  fechaFin      DateTime
+  insigniaUrl   String?
+  actualizadoEn DateTime @updatedAt
+}

@@ -5,6 +5,7 @@ import "dotenv/config";
 import noticiasRouter from "./routes/noticias.js";
 import torneosRouter from "./routes/torneos.js";
 import uploadRouter from "./routes/upload.js";
+import torneoDestacadoRouter from "./routes/torneoDestacado.js";
 
 const app = express();
 app.use(cors());
@@ -12,6 +13,9 @@ app.use(express.json());
 
 // Web pública
 app.use("/api/noticias", noticiasRouter);
+
+// Torneo destacado (mostrado en la home)
+app.use("/api/torneo-destacado", torneoDestacadoRouter);
 
 // Portal (torneos, partidos, equipos)
 app.use("/api/torneos", torneosRouter);

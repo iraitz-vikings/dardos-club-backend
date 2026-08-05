@@ -121,6 +121,7 @@ model NoticiaEvento {
   titulo           String
   contenido        String
   fotos            String[]
+  videos           String[] @default([])
   fechaPublicacion DateTime @default(now())
   autorId          String?
   autor            Usuario? @relation(fields: [autorId], references: [id])

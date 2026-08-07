@@ -36,7 +36,14 @@ router.post("/", requireAdmin, upload.single("imagen"), async (req, res) => {
       stream.end(req.file.buffer);
     });
 
-    res.status(201).json({ url: resultado.secure_url, tipo: resultado.resource_type });
+    // Si es un vídeo, pedimos la entrega en MP4 (compatible con todos los
+    // navegadores) sin importar el formato original que se haya subido (AVI, MOV...).
+    const url =
+      resultado.resource_type === "video"
+        ? resultado.secure_url.replace(/\.[a-zA-Z0-9]+$/, ".mp4")
+        : resultado.secure_url;
+
+    res.status(201).json({ url, tipo: resultado.resource_type });
   } catch (err) {
     if (err?.http_code === 400 && /File size too large/i.test(err.message || "")) {
       return res.status(413).json({ error: "El archivo supera el límite de tamaño (100 MB)." });

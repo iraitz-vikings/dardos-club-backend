@@ -295,6 +295,34 @@ router.put("/partidos/:partidoId", requireAdmin, async (req, res) => {
         data: { [campo]: perdedor },
       });
     }
+
+    // Gran final (doble eliminación): si gana el jugador que venía del cuadro de
+    // perdedores (jugador2), ambos quedan con una derrota y hace falta un segundo
+    // partido decisivo. Si en cambio gana el que venía de ganadores, el torneo
+    // termina ahí y se quita el partido decisivo si se había creado por error.
+    if (partido.rama === "final" && partido.posicion === 0) {
+      if (ganador === jug2) {
+        const existeDesempate = await prisma.cuadroPartido.findFirst({
+          where: { cuadranteId: partido.cuadranteId, rama: "final", posicion: 1 },
+        });
+        if (!existeDesempate) {
+          await prisma.cuadroPartido.create({
+            data: {
+              cuadranteId: partido.cuadranteId,
+              rama: "final",
+              ronda: partido.ronda + 1,
+              posicion: 1,
+              jugador1: jug1,
+              jugador2: jug2,
+            },
+          });
+        }
+      } else {
+        await prisma.cuadroPartido.deleteMany({
+          where: { cuadranteId: partido.cuadranteId, rama: "final", posicion: 1 },
+        });
+      }
+    }
   }
 
   res.json(partido);

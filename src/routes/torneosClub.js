@@ -236,15 +236,35 @@ router.post("/:id/cuadrantes", requireAdmin, async (req, res) => {
   res.status(201).json(cuadranteCompleto);
 });
 
-// POST /api/torneos-club/cuadrantes/:cuadranteId/sorteo - reparte aleatoriamente la
-// lista de participantes en los enfrentamientos de la ronda 1 del cuadro de ganadores
-// (protegido). Si hay menos participantes que el tamaño del cuadrante, el resto de
-// posiciones quedan como "bye" (pase directo a la ronda 2), repartidas al azar.
+// Calcula, para un cuadro de `tamano` posiciones, en qué posición (0-indexada) debe
+// ir cada cabeza de serie (1ª, 2ª, 3ª...) para que no se crucen hasta fases avanzadas.
+// Es el reparto clásico de un cuadro de torneo (1 vs último, 2 vs penúltimo, etc.).
+function ordenSemillas(tamano) {
+  let orden = [1, 2];
+  while (orden.length < tamano) {
+    const total = orden.length * 2;
+    const siguiente = [];
+    for (const s of orden) {
+      siguiente.push(s);
+      siguiente.push(total + 1 - s);
+    }
+    orden = siguiente;
+  }
+  return orden; // orden[posicion] = número de cabeza de serie que va en esa posición
+}
+
+// POST /api/torneos-club/cuadrantes/:cuadranteId/sorteo - reparte la lista de
+// participantes en los enfrentamientos de la ronda 1 del cuadro de ganadores
+// (protegido). Las "cabezasDeSerie" (si se indican, en orden del mejor al peor) se
+// colocan en posiciones fijas para no cruzarse pronto; el resto se sortea al azar. Si
+// hay menos participantes que el tamaño del cuadrante, el resto de posiciones quedan
+// como "bye" (pase directo a la ronda 2), repartidas al azar entre los no sembrados.
 router.post("/cuadrantes/:cuadranteId/sorteo", requireAdmin, async (req, res) => {
   const { cuadranteId } = req.params;
-  const { participantes } = req.body;
+  const { participantes, cabezasDeSerie } = req.body;
 
   const nombres = Array.isArray(participantes) ? participantes.map((n) => String(n).trim()).filter(Boolean) : [];
+  const semillas = Array.isArray(cabezasDeSerie) ? cabezasDeSerie.map((n) => String(n).trim()).filter(Boolean) : [];
 
   const cuadrante = await prisma.cuadrante.findUnique({ where: { id: cuadranteId } });
   if (!cuadrante) return res.status(404).json({ error: "Cuadrante no encontrado" });
@@ -265,21 +285,60 @@ router.post("/cuadrantes/:cuadranteId/sorteo", requireAdmin, async (req, res) =>
       error: `Con ${nombres.length} participantes hacen falta demasiados pases directos para un cuadrante de ${cuadrante.tamano}. Elige un tamaño de cuadrante menor.`,
     });
   }
-
-  // Barajado (Fisher-Yates)
-  for (let i = nombres.length - 1; i > 0; i--) {
-    const j = Math.floor(Math.random() * (i + 1));
-    [nombres[i], nombres[j]] = [nombres[j], nombres[i]];
+  const semillasValidas = semillas.filter((s) => nombres.includes(s));
+  if (semillasValidas.length > numPartidosR1) {
+    return res.status(400).json({ error: "Hay más cabezas de serie que enfrentamientos en la ronda 1." });
   }
 
-  // Se eligen al azar qué partidos de la ronda 1 son "bye" (un único participante,
-  // que pasa directo a la ronda 2 sin jugar).
-  const indicesPartidos = Array.from({ length: numPartidosR1 }, (_, i) => i);
-  for (let i = indicesPartidos.length - 1; i > 0; i--) {
+  const noSembrados = nombres.filter((n) => !semillasValidas.includes(n));
+  // Barajado (Fisher-Yates) de los no sembrados
+  for (let i = noSembrados.length - 1; i > 0; i--) {
     const j = Math.floor(Math.random() * (i + 1));
-    [indicesPartidos[i], indicesPartidos[j]] = [indicesPartidos[j], indicesPartidos[i]];
+    [noSembrados[i], noSembrados[j]] = [noSembrados[j], noSembrados[i]];
   }
-  const indicesBye = new Set(indicesPartidos.slice(0, byes));
+
+  // Posiciones (0-indexadas) del cuadro, tamaño = cuadrante.tamano. Las cabezas de
+  // serie ocupan posiciones fijas; el resto (participantes + huecos "bye") se reparte
+  // al azar en las posiciones restantes.
+  const orden = ordenSemillas(cuadrante.tamano);
+  const posiciones = new Array(cuadrante.tamano).fill(null);
+  semillasValidas.forEach((nombre, i) => {
+    const pos = orden.indexOf(i + 1);
+    posiciones[pos] = nombre;
+  });
+
+  const pool = [...noSembrados, ...Array(byes).fill(null)];
+  for (let i = pool.length - 1; i > 0; i--) {
+    const j = Math.floor(Math.random() * (i + 1));
+    [pool[i], pool[j]] = [pool[j], pool[i]];
+  }
+  let cursorPool = 0;
+  for (let i = 0; i < posiciones.length; i++) {
+    if (posiciones[i] === null) posiciones[i] = pool[cursorPool++] ?? undefined;
+    else if (posiciones[i] === undefined) posiciones[i] = pool[cursorPool++];
+  }
+  // pool puede contener nulls (bye); distinguimos "sin asignar todavía" con undefined arriba
+  for (let i = 0; i < posiciones.length; i++) {
+    if (posiciones[i] === undefined) posiciones[i] = pool[cursorPool++];
+  }
+
+  // Ningún enfrentamiento puede tener dos "bye" a la vez: si ocurre, se intercambia
+  // con un participante real de otro enfrentamiento que no sea cabeza de serie.
+  for (let m = 0; m < numPartidosR1; m++) {
+    const a = m * 2, b = m * 2 + 1;
+    if (posiciones[a] === null && posiciones[b] === null) {
+      for (let m2 = 0; m2 < numPartidosR1; m2++) {
+        const c = m2 * 2, d = m2 * 2 + 1;
+        if (posiciones[c] !== null && posiciones[d] !== null && !semillasValidas.includes(posiciones[c])) {
+          [posiciones[a], posiciones[c]] = [posiciones[c], posiciones[a]];
+          break;
+        } else if (posiciones[c] !== null && posiciones[d] !== null && !semillasValidas.includes(posiciones[d])) {
+          [posiciones[a], posiciones[d]] = [posiciones[d], posiciones[a]];
+          break;
+        }
+      }
+    }
+  }
 
   // Se limpia todo el cuadrante (nombres, ganadores, resultados) antes de aplicar el
   // sorteo nuevo, para no dejar datos de un sorteo anterior a medias.
@@ -293,31 +352,73 @@ router.post("/cuadrantes/:cuadranteId/sorteo", requireAdmin, async (req, res) =>
     orderBy: { posicion: "asc" },
   });
 
-  let cursor = 0;
   for (let i = 0; i < ronda1.length; i++) {
     const partido = ronda1[i];
-    if (indicesBye.has(i)) {
-      const jugador = nombres[cursor++];
+    const jugador1 = posiciones[i * 2];
+    const jugador2 = posiciones[i * 2 + 1];
+    if (jugador1 && !jugador2) {
       await prisma.cuadroPartido.update({
         where: { id: partido.id },
-        data: { jugador1: jugador, jugador2: null, ganador: jugador },
+        data: { jugador1, jugador2: null, ganador: jugador1 },
       });
       if (partido.siguientePartidoGanadorId) {
         const campo = partido.siguienteSlotGanador === 2 ? "jugador2" : "jugador1";
         await prisma.cuadroPartido.update({
           where: { id: partido.siguientePartidoGanadorId },
-          data: { [campo]: jugador },
+          data: { [campo]: jugador1 },
+        });
+      }
+    } else if (!jugador1 && jugador2) {
+      await prisma.cuadroPartido.update({
+        where: { id: partido.id },
+        data: { jugador1: jugador2, jugador2: null, ganador: jugador2 },
+      });
+      if (partido.siguientePartidoGanadorId) {
+        const campo = partido.siguienteSlotGanador === 2 ? "jugador2" : "jugador1";
+        await prisma.cuadroPartido.update({
+          where: { id: partido.siguientePartidoGanadorId },
+          data: { [campo]: jugador2 },
         });
       }
     } else {
-      const jugador1 = nombres[cursor++];
-      const jugador2 = nombres[cursor++];
       await prisma.cuadroPartido.update({
         where: { id: partido.id },
         data: { jugador1, jugador2 },
       });
     }
   }
+
+  const cuadranteCompleto = await prisma.cuadrante.findUnique({
+    where: { id: cuadranteId },
+    include: { partidos: { orderBy: [{ rama: "asc" }, { ronda: "asc" }, { posicion: "asc" }] } },
+  });
+  res.json(cuadranteCompleto);
+});
+
+// POST /api/torneos-club/cuadrantes/:cuadranteId/reiniciar - vacía ganadores,
+// resultados y "en curso" de todo el cuadrante, sin volver a sortear: la ronda 1
+// mantiene el reparto de participantes (y los "bye" que hubiera), pero las rondas
+// siguientes quedan vacías otra vez, listas para jugarse desde cero (protegido).
+router.post("/cuadrantes/:cuadranteId/reiniciar", requireAdmin, async (req, res) => {
+  const { cuadranteId } = req.params;
+  const cuadrante = await prisma.cuadrante.findUnique({ where: { id: cuadranteId } });
+  if (!cuadrante) return res.status(404).json({ error: "Cuadrante no encontrado" });
+
+  const ronda1 = await prisma.cuadroPartido.findMany({ where: { cuadranteId, rama: "ganadores", ronda: 1 } });
+  const idsBye = ronda1.filter((p) => p.jugador1 && !p.jugador2).map((p) => p.id);
+
+  // Limpia ganador/resultado/en curso en todo, salvo los "bye" de la ronda 1 (su
+  // pase automático se mantiene).
+  await prisma.cuadroPartido.updateMany({
+    where: { cuadranteId, id: { notIn: idsBye } },
+    data: { ganador: null, resultado: null, enCurso: false },
+  });
+  // Vacía los nombres en todo lo que no sea la ronda 1 del cuadro de ganadores
+  // (esos nombres se rellenaban solos al avanzar, así que hay que borrarlos).
+  await prisma.cuadroPartido.updateMany({
+    where: { cuadranteId, NOT: { rama: "ganadores", ronda: 1 } },
+    data: { jugador1: null, jugador2: null },
+  });
 
   const cuadranteCompleto = await prisma.cuadrante.findUnique({
     where: { id: cuadranteId },

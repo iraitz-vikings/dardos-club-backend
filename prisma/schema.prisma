@@ -149,6 +149,7 @@ model TorneoClub {
   visibilidad     Visibilidad @default(privado)
   numeroMaquinas  Int?
   tipoEliminacion String? // "directa" | "doble"
+  finalizado      Boolean     @default(false)
   creadoEn        DateTime    @default(now())
   actualizadoEn   DateTime    @updatedAt
 

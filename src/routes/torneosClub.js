@@ -146,6 +146,16 @@ router.get("/todos", requireAdmin, async (_req, res) => {
   res.json(torneos);
 });
 
+// GET /api/torneos-club/:id - un torneo público concreto, con todo su detalle (para la página del torneo)
+router.get("/:id", async (req, res) => {
+  const { id } = req.params;
+  const torneo = await prisma.torneoClub.findUnique({ where: { id }, include: includeCompleto });
+  if (!torneo || torneo.visibilidad !== "publico") {
+    return res.status(404).json({ error: "Torneo no encontrado" });
+  }
+  res.json(torneo);
+});
+
 router.post("/", requireAdmin, async (req, res) => {
   const { nombre, descripcion, fechaInicio, fechaFin, insigniaUrl, visibilidad, numeroMaquinas, tipoEliminacion } = req.body;
   if (!nombre || !fechaInicio || !fechaFin) {
@@ -168,7 +178,7 @@ router.post("/", requireAdmin, async (req, res) => {
 
 router.put("/:id", requireAdmin, async (req, res) => {
   const { id } = req.params;
-  const { nombre, descripcion, fechaInicio, fechaFin, insigniaUrl, visibilidad, numeroMaquinas, tipoEliminacion } = req.body;
+  const { nombre, descripcion, fechaInicio, fechaFin, insigniaUrl, visibilidad, numeroMaquinas, tipoEliminacion, finalizado } = req.body;
   try {
     const torneo = await prisma.torneoClub.update({
       where: { id },
@@ -181,6 +191,7 @@ router.put("/:id", requireAdmin, async (req, res) => {
         visibilidad: visibilidad === "publico" ? "publico" : "privado",
         numeroMaquinas: numeroMaquinas !== undefined ? (numeroMaquinas ? Number(numeroMaquinas) : null) : undefined,
         tipoEliminacion: tipoEliminacion || undefined,
+        finalizado: finalizado !== undefined ? !!finalizado : undefined,
       },
     });
     res.json(torneo);

@@ -6,6 +6,7 @@ import noticiasRouter from "./routes/noticias.js";
 import torneosRouter from "./routes/torneos.js";
 import uploadRouter from "./routes/upload.js";
 import torneoDestacadoRouter from "./routes/torneoDestacado.js";
+import galeriaRouter from "./routes/galeria.js";
 
 const app = express();
 app.use(cors());
@@ -13,6 +14,9 @@ app.use(express.json());
 
 // Web pública
 app.use("/api/noticias", noticiasRouter);
+
+// Galería (fotos/vídeos sueltos, sin noticia asociada)
+app.use("/api/galeria", galeriaRouter);
 
 // Torneo destacado (mostrado en la home)
 app.use("/api/torneo-destacado", torneoDestacadoRouter);

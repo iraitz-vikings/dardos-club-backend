@@ -20,7 +20,7 @@ router.get("/", async (_req, res) => {
 
 // PUT /api/torneo-destacado - crea o actualiza el torneo destacado (protegido)
 router.put("/", requireAdmin, async (req, res) => {
-      const { nombre, descripcion, fechaInicio, fechaFin, insigniaUrl } = req.body;
+      const { nombre, descripcion, fechaInicio, fechaFin, insigniaUrl, cartelUrl } = req.body;
       if (!nombre || !fechaInicio || !fechaFin) {
               return res.status(400).json({ error: "Faltan campos obligatorios" });
       }
@@ -32,6 +32,7 @@ router.put("/", requireAdmin, async (req, res) => {
                                fechaInicio: new Date(fechaInicio),
                                fechaFin: new Date(fechaFin),
                                insigniaUrl: insigniaUrl || null,
+                               cartelUrl: cartelUrl || null,
                      };
                      const torneo = await prisma.torneoDestacado.upsert({
                                where: { id: "actual" },

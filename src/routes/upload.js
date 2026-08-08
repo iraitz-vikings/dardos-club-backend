@@ -52,4 +52,25 @@ router.post("/", requireAdmin, upload.single("imagen"), async (req, res) => {
   }
 });
 
+// GET /api/upload/existentes - lista las imágenes ya subidas a Cloudinary, para poder
+// reutilizarlas en vez de subir el mismo archivo otra vez (protegido)
+router.get("/existentes", requireAdmin, async (_req, res) => {
+  try {
+    const resultado = await cloudinary.api.resources({
+      type: "upload",
+      prefix: "dardos-club/",
+      resource_type: "image",
+      max_results: 100,
+      direction: "desc",
+    });
+    const imagenes = (resultado.resources || []).map((r) => ({
+      url: r.secure_url,
+      creadoEn: r.created_at,
+    }));
+    res.json(imagenes);
+  } catch {
+    res.status(500).json({ error: "No se pudo obtener el listado de imágenes" });
+  }
+});
+
 export default router;

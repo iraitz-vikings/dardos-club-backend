@@ -23,6 +23,11 @@ enum OrigenActualizacion {
   manual
 }
 
+enum Visibilidad {
+  publico
+  privado
+}
+
 model Usuario {
   id            String    @id @default(uuid())
   nombre        String
@@ -132,6 +137,36 @@ model GaleriaItem {
   url       String
   tipo      String
   creadoEn  DateTime @default(now())
+}
+
+model TorneoClub {
+  id            String      @id @default(uuid())
+  nombre        String
+  descripcion   String?
+  fechaInicio   DateTime
+  fechaFin      DateTime
+  insigniaUrl   String?
+  visibilidad   Visibilidad @default(privado)
+  creadoEn      DateTime    @default(now())
+  actualizadoEn DateTime    @updatedAt
+
+  partidos CuadroPartido[]
+}
+
+model CuadroPartido {
+  id            String     @id @default(uuid())
+  torneoClubId  String
+  torneoClub    TorneoClub @relation(fields: [torneoClubId], references: [id])
+  nivel         String
+  maquina       String
+  ronda         String
+  orden         Int        @default(0)
+  jugador1      String?
+  jugador2      String?
+  resultado     String?
+  ganador       String?
+  enCurso       Boolean    @default(false)
+  actualizadoEn DateTime   @updatedAt
 }
 
 model TorneoDestacado {

@@ -197,5 +197,6 @@ model TorneoDestacado {
   fechaInicio   DateTime
   fechaFin      DateTime
   insigniaUrl   String?
+  cartelUrl     String?
   actualizadoEn DateTime @updatedAt
 }

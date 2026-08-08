@@ -7,6 +7,7 @@ import torneosRouter from "./routes/torneos.js";
 import uploadRouter from "./routes/upload.js";
 import torneoDestacadoRouter from "./routes/torneoDestacado.js";
 import galeriaRouter from "./routes/galeria.js";
+import torneosClubRouter from "./routes/torneosClub.js";
 
 const app = express();
 app.use(cors());
@@ -17,6 +18,9 @@ app.use("/api/noticias", noticiasRouter);
 
 // Galería (fotos/vídeos sueltos, sin noticia asociada)
 app.use("/api/galeria", galeriaRouter);
+
+// Torneos del club (con cuadro por maquina)
+app.use("/api/torneos-club", torneosClubRouter);
 
 // Torneo destacado (mostrado en la home)
 app.use("/api/torneo-destacado", torneoDestacadoRouter);

@@ -236,6 +236,55 @@ router.post("/:id/cuadrantes", requireAdmin, async (req, res) => {
   res.status(201).json(cuadranteCompleto);
 });
 
+// POST /api/torneos-club/cuadrantes/:cuadranteId/sorteo - reparte aleatoriamente la
+// lista de participantes en los enfrentamientos de la ronda 1 del cuadro de ganadores
+// (protegido). El número de nombres debe coincidir con el tamaño del cuadrante.
+router.post("/cuadrantes/:cuadranteId/sorteo", requireAdmin, async (req, res) => {
+  const { cuadranteId } = req.params;
+  const { participantes } = req.body;
+
+  const nombres = Array.isArray(participantes) ? participantes.map((n) => String(n).trim()).filter(Boolean) : [];
+
+  const cuadrante = await prisma.cuadrante.findUnique({ where: { id: cuadranteId } });
+  if (!cuadrante) return res.status(404).json({ error: "Cuadrante no encontrado" });
+
+  if (nombres.length !== cuadrante.tamano) {
+    return res.status(400).json({
+      error: `Este cuadrante es de ${cuadrante.tamano} participantes, pero se han recibido ${nombres.length} nombres.`,
+    });
+  }
+
+  // Barajado (Fisher-Yates)
+  for (let i = nombres.length - 1; i > 0; i--) {
+    const j = Math.floor(Math.random() * (i + 1));
+    [nombres[i], nombres[j]] = [nombres[j], nombres[i]];
+  }
+
+  const ronda1 = await prisma.cuadroPartido.findMany({
+    where: { cuadranteId, rama: "ganadores", ronda: 1 },
+    orderBy: { posicion: "asc" },
+  });
+
+  for (let i = 0; i < ronda1.length; i++) {
+    await prisma.cuadroPartido.update({
+      where: { id: ronda1[i].id },
+      data: {
+        jugador1: nombres[i * 2],
+        jugador2: nombres[i * 2 + 1],
+        ganador: null,
+        resultado: null,
+        enCurso: false,
+      },
+    });
+  }
+
+  const cuadranteCompleto = await prisma.cuadrante.findUnique({
+    where: { id: cuadranteId },
+    include: { partidos: { orderBy: [{ rama: "asc" }, { ronda: "asc" }, { posicion: "asc" }] } },
+  });
+  res.json(cuadranteCompleto);
+});
+
 router.delete("/cuadrantes/:cuadranteId", requireAdmin, async (req, res) => {
   const { cuadranteId } = req.params;
   await prisma.cuadroPartido.deleteMany({ where: { cuadranteId } });

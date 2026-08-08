@@ -127,6 +127,13 @@ model NoticiaEvento {
   autor            Usuario? @relation(fields: [autorId], references: [id])
 }
 
+model GaleriaItem {
+  id        String   @id @default(uuid())
+  url       String
+  tipo      String
+  creadoEn  DateTime @default(now())
+}
+
 model TorneoDestacado {
   id            String   @id @default(uuid())
   nombre        String

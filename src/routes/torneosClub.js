@@ -238,7 +238,8 @@ router.post("/:id/cuadrantes", requireAdmin, async (req, res) => {
 
 // POST /api/torneos-club/cuadrantes/:cuadranteId/sorteo - reparte aleatoriamente la
 // lista de participantes en los enfrentamientos de la ronda 1 del cuadro de ganadores
-// (protegido). El número de nombres debe coincidir con el tamaño del cuadrante.
+// (protegido). Si hay menos participantes que el tamaño del cuadrante, el resto de
+// posiciones quedan como "bye" (pase directo a la ronda 2), repartidas al azar.
 router.post("/cuadrantes/:cuadranteId/sorteo", requireAdmin, async (req, res) => {
   const { cuadranteId } = req.params;
   const { participantes } = req.body;
@@ -248,9 +249,20 @@ router.post("/cuadrantes/:cuadranteId/sorteo", requireAdmin, async (req, res) =>
   const cuadrante = await prisma.cuadrante.findUnique({ where: { id: cuadranteId } });
   if (!cuadrante) return res.status(404).json({ error: "Cuadrante no encontrado" });
 
-  if (nombres.length !== cuadrante.tamano) {
+  const numPartidosR1 = cuadrante.tamano / 2;
+
+  if (nombres.length < 2) {
+    return res.status(400).json({ error: "Hacen falta al menos 2 participantes." });
+  }
+  if (nombres.length > cuadrante.tamano) {
     return res.status(400).json({
-      error: `Este cuadrante es de ${cuadrante.tamano} participantes, pero se han recibido ${nombres.length} nombres.`,
+      error: `Este cuadrante es de ${cuadrante.tamano} participantes como máximo, y se han recibido ${nombres.length}.`,
+    });
+  }
+  const byes = cuadrante.tamano - nombres.length;
+  if (byes > numPartidosR1) {
+    return res.status(400).json({
+      error: `Con ${nombres.length} participantes hacen falta demasiados pases directos para un cuadrante de ${cuadrante.tamano}. Elige un tamaño de cuadrante menor.`,
     });
   }
 
@@ -260,22 +272,51 @@ router.post("/cuadrantes/:cuadranteId/sorteo", requireAdmin, async (req, res) =>
     [nombres[i], nombres[j]] = [nombres[j], nombres[i]];
   }
 
+  // Se eligen al azar qué partidos de la ronda 1 son "bye" (un único participante,
+  // que pasa directo a la ronda 2 sin jugar).
+  const indicesPartidos = Array.from({ length: numPartidosR1 }, (_, i) => i);
+  for (let i = indicesPartidos.length - 1; i > 0; i--) {
+    const j = Math.floor(Math.random() * (i + 1));
+    [indicesPartidos[i], indicesPartidos[j]] = [indicesPartidos[j], indicesPartidos[i]];
+  }
+  const indicesBye = new Set(indicesPartidos.slice(0, byes));
+
+  // Se limpia todo el cuadrante (nombres, ganadores, resultados) antes de aplicar el
+  // sorteo nuevo, para no dejar datos de un sorteo anterior a medias.
+  await prisma.cuadroPartido.updateMany({
+    where: { cuadranteId },
+    data: { jugador1: null, jugador2: null, ganador: null, resultado: null, enCurso: false },
+  });
+
   const ronda1 = await prisma.cuadroPartido.findMany({
     where: { cuadranteId, rama: "ganadores", ronda: 1 },
     orderBy: { posicion: "asc" },
   });
 
+  let cursor = 0;
   for (let i = 0; i < ronda1.length; i++) {
-    await prisma.cuadroPartido.update({
-      where: { id: ronda1[i].id },
-      data: {
-        jugador1: nombres[i * 2],
-        jugador2: nombres[i * 2 + 1],
-        ganador: null,
-        resultado: null,
-        enCurso: false,
-      },
-    });
+    const partido = ronda1[i];
+    if (indicesBye.has(i)) {
+      const jugador = nombres[cursor++];
+      await prisma.cuadroPartido.update({
+        where: { id: partido.id },
+        data: { jugador1: jugador, jugador2: null, ganador: jugador },
+      });
+      if (partido.siguientePartidoGanadorId) {
+        const campo = partido.siguienteSlotGanador === 2 ? "jugador2" : "jugador1";
+        await prisma.cuadroPartido.update({
+          where: { id: partido.siguientePartidoGanadorId },
+          data: { [campo]: jugador },
+        });
+      }
+    } else {
+      const jugador1 = nombres[cursor++];
+      const jugador2 = nombres[cursor++];
+      await prisma.cuadroPartido.update({
+        where: { id: partido.id },
+        data: { jugador1, jugador2 },
+      });
+    }
   }
 
   const cuadranteCompleto = await prisma.cuadrante.findUnique({

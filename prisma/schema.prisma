@@ -140,33 +140,53 @@ model GaleriaItem {
 }
 
 model TorneoClub {
-  id            String      @id @default(uuid())
-  nombre        String
-  descripcion   String?
-  fechaInicio   DateTime
-  fechaFin      DateTime
-  insigniaUrl   String?
-  visibilidad   Visibilidad @default(privado)
-  creadoEn      DateTime    @default(now())
-  actualizadoEn DateTime    @updatedAt
+  id              String      @id @default(uuid())
+  nombre          String
+  descripcion     String?
+  fechaInicio     DateTime
+  fechaFin        DateTime
+  insigniaUrl     String?
+  visibilidad     Visibilidad @default(privado)
+  numeroMaquinas  Int?
+  tipoEliminacion String? // "directa" | "doble"
+  creadoEn        DateTime    @default(now())
+  actualizadoEn   DateTime    @updatedAt
+
+  cuadrantes Cuadrante[]
+}
+
+model Cuadrante {
+  id              String   @id @default(uuid())
+  torneoClubId    String
+  torneoClub      TorneoClub @relation(fields: [torneoClubId], references: [id])
+  nombre          String
+  tamano          Int
+  tipoEliminacion String // "directa" | "doble"
+  creadoEn        DateTime @default(now())
 
   partidos CuadroPartido[]
 }
 
 model CuadroPartido {
-  id            String     @id @default(uuid())
-  torneoClubId  String
-  torneoClub    TorneoClub @relation(fields: [torneoClubId], references: [id])
-  nivel         String
-  maquina       String
-  ronda         String
-  orden         Int        @default(0)
+  id            String    @id @default(uuid())
+  cuadranteId   String
+  cuadrante     Cuadrante @relation(fields: [cuadranteId], references: [id])
+  rama          String // "ganadores" | "perdedores" | "final"
+  ronda         Int
+  posicion      Int
+  maquina       String?
   jugador1      String?
   jugador2      String?
   resultado     String?
   ganador       String?
-  enCurso       Boolean    @default(false)
-  actualizadoEn DateTime   @updatedAt
+  enCurso       Boolean   @default(false)
+
+  siguientePartidoGanadorId  String?
+  siguienteSlotGanador       Int?
+  siguientePartidoPerdedorId String?
+  siguienteSlotPerdedor      Int?
+
+  actualizadoEn DateTime  @updatedAt
 }
 
 model TorneoDestacado {

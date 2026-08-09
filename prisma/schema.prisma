@@ -53,6 +53,8 @@ model Jugador {
 
   equipos             EquipoJugador[]
   equiposCapitaneados EquipoTorneo[] @relation("capitan")
+  comoJugador1        ParticipanteCuadrante[] @relation("participanteJugador1")
+  comoJugador2        ParticipanteCuadrante[] @relation("participanteJugador2")
 }
 
 model Plataforma {
@@ -166,10 +168,11 @@ model Cuadrante {
   torneoClub      TorneoClub @relation(fields: [torneoClubId], references: [id])
   nombre          String
   tamano          Int
-  tipoEliminacion String // "directa" | "doble"
+  tipoEliminacion String
   creadoEn        DateTime @default(now())
 
-  partidos CuadroPartido[]
+  partidos      CuadroPartido[]
+  participantes ParticipanteCuadrante[]
 }
 
 model CuadroPartido {

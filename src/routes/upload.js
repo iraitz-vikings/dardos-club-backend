@@ -41,7 +41,7 @@ function requireAdminOAuth(req, res, next) {
 // POST /api/upload - sube una imagen o vídeo a Cloudinary y devuelve su URL (protegido)
 // resource_type "auto" detecta si es imagen o vídeo; los vídeos se convierten
 // automáticamente a un formato reproducible en cualquier navegador.
-router.post("/", requireAdmin, upload.single("imagen"), async (req, res) => {
+router.post("/", requireAdminOAuth, upload.single("imagen"), async (req, res) => {
   if (!req.file) {
     return res.status(400).json({ error: "No se ha recibido ningún archivo" });
   }

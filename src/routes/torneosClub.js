@@ -194,7 +194,7 @@ router.get("/todos", requireAdmin, async (_req, res) => {
 router.get("/:id", async (req, res) => {
   const { id } = req.params;
   const torneo = await prisma.torneoClub.findUnique({ where: { id }, include: includeCompleto });
-  if (!torneo || torneo.visibilidad !== "publico") {
+  if (!torneo) {
     return res.status(404).json({ error: "Torneo no encontrado" });
   }
   res.json(torneo);

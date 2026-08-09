@@ -404,6 +404,9 @@ router.post("/cuadrantes/:cuadranteId/sorteo", requireAdmin, async (req, res) =>
           data: { [campo]: jugador1 },
         });
       }
+      if (partido.siguientePartidoPerdedorId) {
+        await intentarResolverBye(partido.siguientePartidoPerdedorId);
+      }
     } else if (!jugador1 && jugador2) {
       await prisma.cuadroPartido.update({
         where: { id: partido.id },
@@ -415,6 +418,9 @@ router.post("/cuadrantes/:cuadranteId/sorteo", requireAdmin, async (req, res) =>
           where: { id: partido.siguientePartidoGanadorId },
           data: { [campo]: jugador2 },
         });
+      }
+      if (partido.siguientePartidoPerdedorId) {
+        await intentarResolverBye(partido.siguientePartidoPerdedorId);
       }
     } else {
       await prisma.cuadroPartido.update({

@@ -571,6 +571,7 @@ router.post("/cuadrantes/:cuadranteId/reiniciar", requireAdmin, async (req, res)
 router.delete("/cuadrantes/:cuadranteId", requireAdmin, async (req, res) => {
   const { cuadranteId } = req.params;
   await prisma.cuadroPartido.deleteMany({ where: { cuadranteId } });
+  await prisma.participanteCuadrante.deleteMany({ where: { cuadranteId } });
   await prisma.cuadrante.delete({ where: { id: cuadranteId } });
   res.status(204).end();
 });

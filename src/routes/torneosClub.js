@@ -355,12 +355,7 @@ router.post("/cuadrantes/:cuadranteId/sorteo", requireAdmin, async (req, res) =>
   }
   let cursorPool = 0;
   for (let i = 0; i < posiciones.length; i++) {
-    if (posiciones[i] === null) posiciones[i] = pool[cursorPool++] ?? undefined;
-    else if (posiciones[i] === undefined) posiciones[i] = pool[cursorPool++];
-  }
-  // pool puede contener nulls (bye); distinguimos "sin asignar todavía" con undefined arriba
-  for (let i = 0; i < posiciones.length; i++) {
-    if (posiciones[i] === undefined) posiciones[i] = pool[cursorPool++];
+    if (posiciones[i] === null) posiciones[i] = pool[cursorPool++];
   }
 
   // Ningún enfrentamiento puede tener dos "bye" a la vez: si ocurre, se intercambia

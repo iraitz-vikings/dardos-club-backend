@@ -130,18 +130,20 @@ function generarPartidos(tamano, tipoEliminacion) {
 // Si un partido se queda con un único jugador asignado y su rival nunca va a
 // llegar (porque el partido que debía darle el perdedor era, a su vez, un "bye"
 // sin enfrentamiento real), este partido también se resuelve solo como pase
-// directo, y se propaga en cascada si hace falta.
+// directo, y se propaga en cascada si hace falta. Si los DOS partidos que debían
+// alimentar este cruce eran bye, no hay nadie que lo juegue: se marca como
+// resuelto (sin ganador) para no bloquear la cascada hacia partidos posteriores.
 async function intentarResolverBye(partidoId) {
   const partido = await prisma.cuadroPartido.findUnique({ where: { id: partidoId } });
-  if (!partido || partido.ganador) return;
+  if (!partido || partido.ganador || partido.resultado === "__BYE_DOBLE__") return;
 
-  // Solo aplica a partidos que reciben perdedores de otros (cuadro de perdedores).
   const feeders = await prisma.cuadroPartido.findMany({
     where: { siguientePartidoPerdedorId: partido.id },
   });
   if (feeders.length === 0) return;
 
-  const feederPendiente = feeders.some((f) => !f.ganador);
+  const feederResuelto = (f) => !!f.ganador || f.resultado === "__BYE_DOBLE__";
+  const feederPendiente = feeders.some((f) => !feederResuelto(f));
   const jugadoresPresentes = [partido.jugador1, partido.jugador2].filter(Boolean);
 
   if (jugadoresPresentes.length === 1 && !feederPendiente) {
@@ -156,13 +158,16 @@ async function intentarResolverBye(partidoId) {
       await intentarResolverBye(partido.siguientePartidoGanadorId);
     }
   } else if (jugadoresPresentes.length === 0 && !feederPendiente) {
-    // Caso raro: los dos partidos que debían alimentar este cruce eran bye. No hay
-    // nadie que lo juegue; se deja vacío.
+    await prisma.cuadroPartido.update({
+      where: { id: partido.id },
+      data: { resultado: "__BYE_DOBLE__" },
+    });
     if (partido.siguientePartidoGanadorId) {
       await intentarResolverBye(partido.siguientePartidoGanadorId);
     }
   }
 }
+
 // ---------- Rutas de torneos del club ----------
 
 router.get("/", async (_req, res) => {

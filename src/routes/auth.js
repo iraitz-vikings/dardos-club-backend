@@ -1,0 +1,164 @@
+import { Router } from "express";
+import { PrismaClient } from "@prisma/client";
+import bcrypt from "bcryptjs";
+import jwt from "jsonwebtoken";
+
+const prisma = new PrismaClient();
+const router = Router();
+
+function requireAdmin(req, res, next) {
+  const token = req.headers["x-admin-token"];
+  if (!token || token !== process.env.ADMIN_TOKEN) {
+    return res.status(401).json({ error: "No autorizado" });
+  }
+  next();
+}
+
+// Middleware para rutas que requieren socio logueado (se reutilizará en fases futuras)
+export function requireAuth(req, res, next) {
+  const header = req.headers.authorization || "";
+  const token = header.startsWith("Bearer ") ? header.slice(7) : null;
+  if (!token) return res.status(401).json({ error: "No autenticado" });
+  try {
+    req.usuario = jwt.verify(token, process.env.JWT_SECRET);
+    next();
+  } catch {
+    return res.status(401).json({ error: "Token inválido o caducado" });
+  }
+}
+
+// Middleware para restringir por rol, ej. requireRole("capitan", "admin")
+export function requireRole(...roles) {
+  return (req, res, next) => {
+    if (!req.usuario || !roles.includes(req.usuario.rol)) {
+      return res.status(403).json({ error: "No tienes permiso para esto" });
+    }
+    next();
+  };
+}
+
+function firmarToken(usuario) {
+  return jwt.sign({ sub: usuario.id, rol: usuario.rol }, process.env.JWT_SECRET, {
+    expiresIn: "30d",
+  });
+}
+
+// POST /api/auth/registro - alta pública con código de invitación, queda pendiente de aprobación
+router.post("/registro", async (req, res) => {
+  const { nombre, email, password, codigoInvitacion } = req.body;
+  if (!nombre || !email || !password || !codigoInvitacion) {
+    return res.status(400).json({ error: "Faltan datos" });
+  }
+  if (codigoInvitacion !== process.env.CODIGO_INVITACION) {
+    return res.status(403).json({ error: "Código de invitación incorrecto" });
+  }
+  const emailNormalizado = email.trim().toLowerCase();
+  const existente = await prisma.usuario.findUnique({ where: { email: emailNormalizado } });
+  if (existente) {
+    return res.status(409).json({ error: "Ya existe una cuenta con ese email" });
+  }
+  const passwordHash = await bcrypt.hash(password, 10);
+  const usuario = await prisma.usuario.create({
+    data: { nombre, email: emailNormalizado, passwordHash, aprobado: false },
+  });
+  res.status(201).json({
+    mensaje: "Cuenta creada. Un admin del club debe aprobarla antes de que puedas entrar.",
+    id: usuario.id,
+  });
+});
+
+// POST /api/auth/login
+router.post("/login", async (req, res) => {
+  const { email, password } = req.body;
+  if (!email || !password) {
+    return res.status(400).json({ error: "Faltan datos" });
+  }
+  const usuario = await prisma.usuario.findUnique({ where: { email: email.trim().toLowerCase() } });
+  if (!usuario) {
+    return res.status(401).json({ error: "Email o contraseña incorrectos" });
+  }
+  const passwordOk = await bcrypt.compare(password, usuario.passwordHash);
+  if (!passwordOk) {
+    return res.status(401).json({ error: "Email o contraseña incorrectos" });
+  }
+  if (!usuario.aprobado) {
+    return res.status(403).json({ error: "Tu cuenta todavía no ha sido aprobada por el club" });
+  }
+  const token = firmarToken(usuario);
+  res.json({
+    token,
+    usuario: { id: usuario.id, nombre: usuario.nombre, email: usuario.email, rol: usuario.rol },
+  });
+});
+
+// GET /api/auth/pendientes - lista de cuentas por aprobar (admin)
+router.get("/pendientes", requireAdmin, async (_req, res) => {
+  const pendientes = await prisma.usuario.findMany({
+    where: { aprobado: false },
+    orderBy: { creadoEn: "asc" },
+    select: { id: true, nombre: true, email: true, creadoEn: true },
+  });
+  res.json(pendientes);
+});
+
+// POST /api/auth/:id/aprobar - aprueba una cuenta y le asigna rol (admin)
+router.post("/:id/aprobar", requireAdmin, async (req, res) => {
+  const { rol } = req.body; // "jugador" | "capitan" | "admin", opcional (por defecto jugador)
+  const usuario = await prisma.usuario.update({
+    where: { id: req.params.id },
+    data: { aprobado: true, ...(rol ? { rol } : {}) },
+  });
+  res.json({ id: usuario.id, nombre: usuario.nombre, rol: usuario.rol, aprobado: usuario.aprobado });
+});
+
+// DELETE /api/auth/:id - rechaza/borra una cuenta pendiente, o elimina un socio (admin)
+router.delete("/:id", requireAdmin, async (req, res) => {
+  await prisma.usuario.delete({ where: { id: req.params.id } });
+  res.status(204).end();
+});
+
+// GET /api/auth/socios - lista completa de socios aprobados, para gestionar roles (admin)
+router.get("/socios", requireAdmin, async (_req, res) => {
+  const socios = await prisma.usuario.findMany({
+    where: { aprobado: true },
+    orderBy: { nombre: "asc" },
+    select: { id: true, nombre: true, email: true, rol: true, creadoEn: true },
+  });
+  res.json(socios);
+});
+
+// PATCH /api/auth/:id/rol - cambia el rol de un socio ya aprobado (admin)
+router.patch("/:id/rol", requireAdmin, async (req, res) => {
+  const { rol } = req.body;
+  if (!["jugador", "capitan", "admin"].includes(rol)) {
+    return res.status(400).json({ error: "Rol inválido" });
+  }
+  const usuario = await prisma.usuario.update({ where: { id: req.params.id }, data: { rol } });
+  res.json({ id: usuario.id, nombre: usuario.nombre, rol: usuario.rol });
+});
+
+// POST /api/auth/crear-manual - el admin crea una cuenta directamente, ya aprobada (admin)
+router.post("/crear-manual", requireAdmin, async (req, res) => {
+  const { nombre, email, password, rol } = req.body;
+  if (!nombre || !email || !password) {
+    return res.status(400).json({ error: "Faltan datos" });
+  }
+  const emailNormalizado = email.trim().toLowerCase();
+  const existente = await prisma.usuario.findUnique({ where: { email: emailNormalizado } });
+  if (existente) {
+    return res.status(409).json({ error: "Ya existe una cuenta con ese email" });
+  }
+  const passwordHash = await bcrypt.hash(password, 10);
+  const usuario = await prisma.usuario.create({
+    data: {
+      nombre,
+      email: emailNormalizado,
+      passwordHash,
+      rol: rol || "jugador",
+      aprobado: true,
+    },
+  });
+  res.status(201).json({ id: usuario.id, nombre: usuario.nombre, email: usuario.email, rol: usuario.rol });
+});
+
+export default router;

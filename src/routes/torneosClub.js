@@ -127,6 +127,42 @@ function generarPartidos(tamano, tipoEliminacion) {
   return partidos;
 }
 
+// Si un partido se queda con un único jugador asignado y su rival nunca va a
+// llegar (porque el partido que debía darle el perdedor era, a su vez, un "bye"
+// sin enfrentamiento real), este partido también se resuelve solo como pase
+// directo, y se propaga en cascada si hace falta.
+async function intentarResolverBye(partidoId) {
+  const partido = await prisma.cuadroPartido.findUnique({ where: { id: partidoId } });
+  if (!partido || partido.ganador) return;
+
+  // Solo aplica a partidos que reciben perdedores de otros (cuadro de perdedores).
+  const feeders = await prisma.cuadroPartido.findMany({
+    where: { siguientePartidoPerdedorId: partido.id },
+  });
+  if (feeders.length === 0) return;
+
+  const feederPendiente = feeders.some((f) => !f.ganador);
+  const jugadoresPresentes = [partido.jugador1, partido.jugador2].filter(Boolean);
+
+  if (jugadoresPresentes.length === 1 && !feederPendiente) {
+    const ganador = jugadoresPresentes[0];
+    await prisma.cuadroPartido.update({ where: { id: partido.id }, data: { ganador } });
+    if (partido.siguientePartidoGanadorId) {
+      const campo = partido.siguienteSlotGanador === 2 ? "jugador2" : "jugador1";
+      await prisma.cuadroPartido.update({
+        where: { id: partido.siguientePartidoGanadorId },
+        data: { [campo]: ganador },
+      });
+      await intentarResolverBye(partido.siguientePartidoGanadorId);
+    }
+  } else if (jugadoresPresentes.length === 0 && !feederPendiente) {
+    // Caso raro: los dos partidos que debían alimentar este cruce eran bye. No hay
+    // nadie que lo juegue; se deja vacío.
+    if (partido.siguientePartidoGanadorId) {
+      await intentarResolverBye(partido.siguientePartidoGanadorId);
+    }
+  }
+}
 // ---------- Rutas de torneos del club ----------
 
 router.get("/", async (_req, res) => {

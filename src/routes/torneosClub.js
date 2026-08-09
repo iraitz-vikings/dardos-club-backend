@@ -246,6 +246,7 @@ router.delete("/:id", requireAdmin, async (req, res) => {
   const cuadrantes = await prisma.cuadrante.findMany({ where: { torneoClubId: id }, select: { id: true } });
   const cuadranteIds = cuadrantes.map((c) => c.id);
   await prisma.cuadroPartido.deleteMany({ where: { cuadranteId: { in: cuadranteIds } } });
+  await prisma.participanteCuadrante.deleteMany({ where: { cuadranteId: { in: cuadranteIds } } });
   await prisma.cuadrante.deleteMany({ where: { torneoClubId: id } });
   await prisma.torneoClub.delete({ where: { id } });
   res.status(204).end();

@@ -8,6 +8,7 @@ import uploadRouter from "./routes/upload.js";
 import torneoDestacadoRouter from "./routes/torneoDestacado.js";
 import galeriaRouter from "./routes/galeria.js";
 import torneosClubRouter from "./routes/torneosClub.js";
+import patrocinadoresRouter from "./routes/patrocinadores.js";
 
 const app = express();
 app.use(cors());
@@ -24,6 +25,9 @@ app.use("/api/torneos-club", torneosClubRouter);
 
 // Torneo destacado (mostrado en la home)
 app.use("/api/torneo-destacado", torneoDestacadoRouter);
+
+// Patrocinadores del club
+app.use("/api/patrocinadores", patrocinadoresRouter);
 
 // Portal (torneos, partidos, equipos)
 app.use("/api/torneos", torneosRouter);

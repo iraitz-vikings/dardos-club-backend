@@ -1,6 +1,7 @@
 import { Router } from "express";
 import multer from "multer";
 import { v2 as cloudinary } from "cloudinary";
+import jwt from "jsonwebtoken";
 
 const router = Router();
 const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 100 * 1024 * 1024 } });
@@ -17,6 +18,24 @@ function requireAdmin(req, res, next) {
     return res.status(401).json({ error: "No autorizado" });
   }
   next();
+}
+
+// Acepta o bien el token de admin, o bien la sesión de un socio logueado (para
+// que cada uno pueda subir su propia foto de perfil sin usar la contraseña de admin).
+function requireAdminOAuth(req, res, next) {
+  const adminToken = req.headers["x-admin-token"];
+  if (adminToken && adminToken === process.env.ADMIN_TOKEN) return next();
+  const header = req.headers.authorization || "";
+  const token = header.startsWith("Bearer ") ? header.slice(7) : null;
+  if (token) {
+    try {
+      req.usuario = jwt.verify(token, process.env.JWT_SECRET);
+      return next();
+    } catch {
+      // sigue abajo y devuelve 401
+    }
+  }
+  return res.status(401).json({ error: "No autorizado" });
 }
 
 // POST /api/upload - sube una imagen o vídeo a Cloudinary y devuelve su URL (protegido)

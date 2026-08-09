@@ -422,10 +422,14 @@ router.post("/cuadrantes/:cuadranteId/sorteo", requireAdmin, async (req, res) =>
       if (partido.siguientePartidoPerdedorId) {
         await intentarResolverBye(partido.siguientePartidoPerdedorId);
       }
-    } else {
-      await prisma.cuadroPartido.update({
-        where: { id: partido.id },
-        data: { jugador1, jugador2 },
+    } } else {
+        await prisma.cuadroPartido.update({
+          where: { id: partido.id },
+          data: {
+            jugador1,
+            jugador2,
+            resultado: !jugador1 && !jugador2 ? "__BYE_DOBLE__" : undefined,
+        },
       });
     }
   }

@@ -527,6 +527,7 @@ router.put("/partidos/:partidoId", requireAdmin, async (req, res) => {
         where: { id: partido.siguientePartidoPerdedorId },
         data: { [campo]: perdedor },
       });
+      await intentarResolverBye(partido.siguientePartidoPerdedorId);
     }
 
     // Gran final (doble eliminación): si gana el jugador que venía del cuadro de

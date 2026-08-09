@@ -16,7 +16,10 @@ function requireAdmin(req, res, next) {
 const includeCompleto = {
   cuadrantes: {
     orderBy: { creadoEn: "asc" },
-    include: { partidos: { orderBy: [{ rama: "asc" }, { ronda: "asc" }, { posicion: "asc" }] } },
+    include: {
+      partidos: { orderBy: [{ rama: "asc" }, { ronda: "asc" }, { posicion: "asc" }] },
+      participantes: { include: { jugador1: true, jugador2: true }, orderBy: { creadoEn: "asc" } },
+    },
   },
 };
 

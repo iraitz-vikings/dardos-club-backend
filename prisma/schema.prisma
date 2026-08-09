@@ -43,9 +43,12 @@ model Usuario {
 }
 
 model Jugador {
-  id        String  @id @default(uuid())
+  id        String   @id @default(uuid())
   nombre    String
-  usuarioId String? @unique
+  apodo     String?
+  avatarUrl String?
+  bio       String?
+  usuarioId String?  @unique
   usuario   Usuario? @relation(fields: [usuarioId], references: [id])
 
   equipos             EquipoJugador[]

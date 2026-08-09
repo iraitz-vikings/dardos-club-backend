@@ -32,4 +32,10 @@ router.post("/", requireAdmin, async (req, res) => {
   res.status(201).json(jugador);
 });
 
+// DELETE /api/jugadores/:id - borra un jugador (protegido)
+router.delete("/:id", requireAdmin, async (req, res) => {
+  await prisma.jugador.delete({ where: { id: req.params.id } }).catch(() => {});
+  res.status(204).end();
+});
+
 export default router;

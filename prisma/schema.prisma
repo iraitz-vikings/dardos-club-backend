@@ -200,3 +200,12 @@ model TorneoDestacado {
   cartelUrl     String?
   actualizadoEn DateTime @updatedAt
 }
+
+model Patrocinador {
+  id       String @id @default(uuid())
+  nombre   String
+  logoUrl  String
+  url      String?
+  orden    Int    @default(0)
+  creadoEn DateTime @default(now())
+}

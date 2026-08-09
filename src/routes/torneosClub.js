@@ -422,7 +422,7 @@ router.post("/cuadrantes/:cuadranteId/sorteo", requireAdmin, async (req, res) =>
       if (partido.siguientePartidoPerdedorId) {
         await intentarResolverBye(partido.siguientePartidoPerdedorId);
       }
-    } } else {
+    } else {
         await prisma.cuadroPartido.update({
           where: { id: partido.id },
           data: {

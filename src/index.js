@@ -12,6 +12,7 @@ import patrocinadoresRouter from "./routes/patrocinadores.js";
 import authRouter from "./routes/auth.js";
 import mensajeAncladoRouter from "./routes/mensajeAnclado.js";
 import perfilRouter from "./routes/perfil.js";
+import jugadoresRouter from "./routes/jugadores.js";
 
 const app = express();
 app.use(cors());
@@ -44,6 +45,8 @@ app.use("/api/auth", authRouter);
 app.use("/api/mensaje-anclado", mensajeAncladoRouter);
 
 app.use("/api/perfil", perfilRouter);
+
+app.use("/api/jugadores", jugadoresRouter);
 
 app.get("/api/health", (_req, res) => res.json({ ok: true }));
 

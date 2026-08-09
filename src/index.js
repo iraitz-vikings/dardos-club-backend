@@ -9,6 +9,7 @@ import torneoDestacadoRouter from "./routes/torneoDestacado.js";
 import galeriaRouter from "./routes/galeria.js";
 import torneosClubRouter from "./routes/torneosClub.js";
 import patrocinadoresRouter from "./routes/patrocinadores.js";
+import authRouter from "./routes/auth.js";
 
 const app = express();
 app.use(cors());
@@ -34,6 +35,9 @@ app.use("/api/torneos", torneosRouter);
 
 // Subida de imágenes (admin)
 app.use("/api/upload", uploadRouter);
+
+// Autenticación de socios (registro, login, aprobación)
+app.use("/api/auth", authRouter);
 
 app.get("/api/health", (_req, res) => res.json({ ok: true }));
 

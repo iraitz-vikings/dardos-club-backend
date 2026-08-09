@@ -202,6 +202,13 @@ model TorneoDestacado {
   actualizadoEn DateTime @updatedAt
 }
 
+model MensajeAnclado {
+  id          String   @id @default(uuid())
+  texto       String
+  activo      Boolean  @default(true)
+  actualizadoEn DateTime @updatedAt
+}
+
 model Patrocinador {
   id       String @id @default(uuid())
   nombre   String

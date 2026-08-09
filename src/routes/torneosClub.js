@@ -294,6 +294,93 @@ function ordenSemillas(tamano) {
   return orden; // orden[posicion] = número de cabeza de serie que va en esa posición
 }
 
+// POST /api/torneos-club/cuadrantes/:cuadranteId/participantes - añade un
+// participante (individual o pareja ya formada) a un cuadrante, antes del
+// sorteo (protegido).
+router.post("/cuadrantes/:cuadranteId/participantes", requireAdmin, async (req, res) => {
+  const { cuadranteId } = req.params;
+  const { jugador1Id, jugador2Id } = req.body;
+  if (!jugador1Id) return res.status(400).json({ error: "Falta el jugador" });
+
+  const jugador1 = await prisma.jugador.findUnique({ where: { id: jugador1Id } });
+  if (!jugador1) return res.status(404).json({ error: "Jugador no encontrado" });
+  let jugador2 = null;
+  if (jugador2Id) {
+    jugador2 = await prisma.jugador.findUnique({ where: { id: jugador2Id } });
+    if (!jugador2) return res.status(404).json({ error: "El segundo jugador no existe" });
+  }
+
+  const etiqueta = jugador2 ? `${jugador1.nombre} / ${jugador2.nombre}` : jugador1.nombre;
+
+  try {
+    const participante = await prisma.participanteCuadrante.create({
+      data: { cuadranteId, etiqueta, jugador1Id: jugador1.id, jugador2Id: jugador2?.id || null },
+    });
+    res.status(201).json(participante);
+  } catch {
+    res.status(409).json({ error: "Ya hay un participante con esa etiqueta en este cuadrante" });
+  }
+});
+
+// GET /api/torneos-club/cuadrantes/:cuadranteId/participantes - lista los
+// participantes apuntados a un cuadrante, antes del sorteo (protegido)
+router.get("/cuadrantes/:cuadranteId/participantes", requireAdmin, async (req, res) => {
+  const { cuadranteId } = req.params;
+  const participantes = await prisma.participanteCuadrante.findMany({
+    where: { cuadranteId },
+    include: { jugador1: true, jugador2: true },
+    orderBy: { creadoEn: "asc" },
+  });
+  res.json(participantes);
+});
+
+// DELETE /api/torneos-club/participantes/:id - quita un participante antes
+// del sorteo (protegido)
+router.delete("/participantes/:id", requireAdmin, async (req, res) => {
+  await prisma.participanteCuadrante.delete({ where: { id: req.params.id } });
+  res.status(204).end();
+});
+
+// POST /api/torneos-club/cuadrantes/:cuadranteId/sortear-parejas - reparte al
+// azar una lista de jugadores individuales en parejas ("parejas ciegas"),
+// creando un participante por cada pareja resultante (protegido)
+router.post("/cuadrantes/:cuadranteId/sortear-parejas", requireAdmin, async (req, res) => {
+  const { cuadranteId } = req.params;
+  const { jugadorIds } = req.body;
+  const ids = Array.isArray(jugadorIds) ? [...new Set(jugadorIds)] : [];
+
+  if (ids.length < 2) {
+    return res.status(400).json({ error: "Hacen falta al menos 2 jugadores." });
+  }
+  if (ids.length % 2 !== 0) {
+    return res.status(400).json({ error: "El número de jugadores debe ser par para hacer parejas." });
+  }
+
+  const jugadores = await prisma.jugador.findMany({ where: { id: { in: ids } } });
+  if (jugadores.length !== ids.length) {
+    return res.status(404).json({ error: "Algún jugador indicado no existe." });
+  }
+
+  const barajados = [...jugadores];
+  for (let i = barajados.length - 1; i > 0; i--) {
+    const j = Math.floor(Math.random() * (i + 1));
+    [barajados[i], barajados[j]] = [barajados[j], barajados[i]];
+  }
+
+  const creados = [];
+  for (let i = 0; i < barajados.length; i += 2) {
+    const a = barajados[i];
+    const b = barajados[i + 1];
+    const etiqueta = `${a.nombre} / ${b.nombre}`;
+    const participante = await prisma.participanteCuadrante.create({
+      data: { cuadranteId, etiqueta, jugador1Id: a.id, jugador2Id: b.id },
+    });
+    creados.push(participante);
+  }
+
+  res.status(201).json(creados);
+});
+
 // POST /api/torneos-club/cuadrantes/:cuadranteId/sorteo - reparte la lista de
 // participantes en los enfrentamientos de la ronda 1 del cuadro de ganadores
 // (protegido). Las "cabezasDeSerie" (si se indican, en orden del mejor al peor) se
@@ -304,7 +391,14 @@ router.post("/cuadrantes/:cuadranteId/sorteo", requireAdmin, async (req, res) =>
   const { cuadranteId } = req.params;
   const { participantes, cabezasDeSerie } = req.body;
 
-  const nombres = Array.isArray(participantes) ? participantes.map((n) => String(n).trim()).filter(Boolean) : [];
+  let nombres = Array.isArray(participantes) ? participantes.map((n) => String(n).trim()).filter(Boolean) : [];
+
+  // Si no se pasan nombres sueltos, se usan los participantes ya apuntados
+  // (individuales o parejas) a este cuadrante.
+  if (nombres.length === 0) {
+    const apuntados = await prisma.participanteCuadrante.findMany({ where: { cuadranteId } });
+    nombres = apuntados.map((p) => p.etiqueta);
+  }
   const semillas = Array.isArray(cabezasDeSerie) ? cabezasDeSerie.map((n) => String(n).trim()).filter(Boolean) : [];
 
   const cuadrante = await prisma.cuadrante.findUnique({ where: { id: cuadranteId } });

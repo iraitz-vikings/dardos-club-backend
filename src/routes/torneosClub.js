@@ -201,10 +201,11 @@ router.get("/:id", async (req, res) => {
 });
 
 router.post("/", requireAdmin, async (req, res) => {
-  const { nombre, descripcion, fechaInicio, fechaFin, insigniaUrl, visibilidad, numeroMaquinas, tipoEliminacion } = req.body;
+  const { nombre, descripcion, fechaInicio, fechaFin, insigniaUrl, visibilidad, numeroMaquinas, tipoEliminacion, modalidad } = req.body;
   if (!nombre || !fechaInicio || !fechaFin) {
     return res.status(400).json({ error: "Faltan campos obligatorios" });
   }
+  const modalidadesValidas = ["individual", "parejas_hechas", "parejas_ciegas"];
   const torneo = await prisma.torneoClub.create({
     data: {
       nombre,
@@ -215,6 +216,7 @@ router.post("/", requireAdmin, async (req, res) => {
       visibilidad: visibilidad === "publico" ? "publico" : "privado",
       numeroMaquinas: numeroMaquinas ? Number(numeroMaquinas) : null,
       tipoEliminacion: tipoEliminacion === "doble" ? "doble" : "directa",
+      modalidad: modalidadesValidas.includes(modalidad) ? modalidad : "individual",
     },
   });
   res.status(201).json(torneo);

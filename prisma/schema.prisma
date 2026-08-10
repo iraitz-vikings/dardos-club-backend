@@ -146,18 +146,19 @@ model GaleriaItem {
 }
 
 model TorneoClub {
-  id              String      @id @default(uuid())
+  id              String   @id @default(uuid())
   nombre          String
   descripcion     String?
   fechaInicio     DateTime
   fechaFin        DateTime
   insigniaUrl     String?
-  visibilidad     Visibilidad @default(privado)
+  visibilidad     String   @default("privado")
   numeroMaquinas  Int?
-  tipoEliminacion String? // "directa" | "doble"
-  finalizado      Boolean     @default(false)
-  creadoEn        DateTime    @default(now())
-  actualizadoEn   DateTime    @updatedAt
+  tipoEliminacion String   @default("directa")
+  modalidad       String   @default("individual")
+  finalizado      Boolean  @default(false)
+  creadoEn        DateTime @default(now())
+  actualizadoEn   DateTime @updatedAt
 
   cuadrantes Cuadrante[]
 }

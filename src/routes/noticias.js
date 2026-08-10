@@ -39,4 +39,22 @@ router.delete("/:id", requireAdmin, async (req, res) => {
   res.status(204).end();
 });
 
+// PUT /api/noticias/:id - editar una noticia existente (protegido)
+router.put("/:id", requireAdmin, async (req, res) => {
+  const { id } = req.params;
+  const { titulo, contenido, fotos, videos } = req.body;
+  if (!titulo || !contenido) {
+    return res.status(400).json({ error: "Falta título o contenido" });
+  }
+  try {
+    const noticia = await prisma.noticiaEvento.update({
+      where: { id },
+      data: { titulo, contenido, fotos: fotos || [], videos: videos || [] },
+    });
+    res.json(noticia);
+  } catch {
+    res.status(404).json({ error: "Noticia no encontrada" });
+  }
+});
+
 export default router;

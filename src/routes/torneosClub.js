@@ -329,39 +329,37 @@ function ordenSemillas(tamano) {
 // sorteo (protegido).
 router.post("/cuadrantes/:cuadranteId/participantes", requireAdmin, async (req, res) => {
   const { cuadranteId } = req.params;
-  const { jugador1Id, jugador2Id, nombre } = req.body;
+  const { jugador1Id, nombre1, jugador2Id, nombre2, nombre } = req.body;
 
-  if (jugador1Id) {
-    const jugador1 = await prisma.jugador.findUnique({ where: { id: jugador1Id } });
-    if (!jugador1) return res.status(404).json({ error: "Jugador no encontrado" });
-    let jugador2 = null;
-    if (jugador2Id) {
-      jugador2 = await prisma.jugador.findUnique({ where: { id: jugador2Id } });
-      if (!jugador2) return res.status(404).json({ error: "El segundo jugador no existe" });
+  async function resolverLado(id, nombreLibre) {
+    if (id) {
+      const j = await prisma.jugador.findUnique({ where: { id } });
+      if (!j) return { error: true };
+      return { id: j.id, nombre: j.nombre };
     }
-    const etiqueta = jugador2 ? `${jugador1.nombre} / ${jugador2.nombre}` : jugador1.nombre;
-    try {
-      const participante = await prisma.participanteCuadrante.create({
-        data: { cuadranteId, etiqueta, jugador1Id: jugador1.id, jugador2Id: jugador2?.id || null },
-      });
-      return res.status(201).json(participante);
-    } catch {
-      return res.status(409).json({ error: "Ya hay un participante con esa etiqueta en este cuadrante" });
+    if (nombreLibre && nombreLibre.trim()) {
+      return { id: null, nombre: nombreLibre.trim() };
     }
+    return null;
   }
 
-  if (nombre && nombre.trim()) {
-    try {
-      const participante = await prisma.participanteCuadrante.create({
-        data: { cuadranteId, etiqueta: nombre.trim() },
-      });
-      return res.status(201).json(participante);
-    } catch {
-      return res.status(409).json({ error: "Ya hay un participante con esa etiqueta en este cuadrante" });
-    }
-  }
+  const lado1 = await resolverLado(jugador1Id, nombre1 || nombre);
+  if (!lado1) return res.status(400).json({ error: "Falta el primer participante" });
+  if (lado1.error) return res.status(404).json({ error: "Jugador no encontrado" });
 
-  return res.status(400).json({ error: "Falta el jugador o el nombre" });
+  const lado2 = jugador2Id || nombre2 ? await resolverLado(jugador2Id, nombre2) : null;
+  if (lado2?.error) return res.status(404).json({ error: "El segundo jugador no existe" });
+
+  const etiqueta = lado2 ? `${lado1.nombre} / ${lado2.nombre}` : lado1.nombre;
+
+  try {
+    const participante = await prisma.participanteCuadrante.create({
+      data: { cuadranteId, etiqueta, jugador1Id: lado1.id, jugador2Id: lado2?.id || null },
+    });
+    return res.status(201).json(participante);
+  } catch {
+    return res.status(409).json({ error: "Ya hay un participante con esa etiqueta en este cuadrante" });
+  }
 });
 
 // GET /api/torneos-club/cuadrantes/:cuadranteId/participantes - lista los

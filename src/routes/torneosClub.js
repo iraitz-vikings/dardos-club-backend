@@ -551,12 +551,12 @@ router.post("/cuadrantes/:cuadranteId/reiniciar", requireAdmin, async (req, res)
   if (!cuadrante) return res.status(404).json({ error: "Cuadrante no encontrado" });
 
   const ronda1 = await prisma.cuadroPartido.findMany({ where: { cuadranteId, rama: "ganadores", ronda: 1 } });
-  const idsBye = ronda1.filter((p) => p.jugador1 && !p.jugador2).map((p) => p.id);
+  const bye = ronda1.filter((p) => p.jugador1 && !p.jugador2);
 
   // Limpia ganador/resultado/en curso en todo, salvo los "bye" de la ronda 1 (su
   // pase automático se mantiene).
   await prisma.cuadroPartido.updateMany({
-    where: { cuadranteId, id: { notIn: idsBye } },
+    where: { cuadranteId, id: { notIn: bye.map((p) => p.id) } },
     data: { ganador: null, resultado: null, enCurso: false },
   });
   // Vacía los nombres en todo lo que no sea la ronda 1 del cuadro de ganadores
@@ -565,6 +565,21 @@ router.post("/cuadrantes/:cuadranteId/reiniciar", requireAdmin, async (req, res)
     where: { cuadranteId, NOT: { rama: "ganadores", ronda: 1 } },
     data: { jugador1: null, jugador2: null },
   });
+
+  // Los "bye" de la ronda 1 tienen que volver a avanzar hacia la ronda siguiente,
+  // porque el paso anterior también ha vaciado ese nombre allí.
+  for (const partido of bye) {
+    if (partido.siguientePartidoGanadorId) {
+      const campo = partido.siguienteSlotGanador === 2 ? "jugador2" : "jugador1";
+      await prisma.cuadroPartido.update({
+        where: { id: partido.siguientePartidoGanadorId },
+        data: { [campo]: partido.jugador1 },
+      });
+    }
+    if (partido.siguientePartidoPerdedorId) {
+      await intentarResolverBye(partido.siguientePartidoPerdedorId);
+    }
+  }
 
   const cuadranteCompleto = await prisma.cuadrante.findUnique({
     where: { id: cuadranteId },

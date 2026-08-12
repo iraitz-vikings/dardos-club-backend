@@ -262,6 +262,7 @@ model LigaClub {
 
   participantes ParticipanteLiga[]
   partidos      PartidoLiga[]
+  cuadrantes    Cuadrante[]
 }
 
 model ParticipanteLiga {

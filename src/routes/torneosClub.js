@@ -29,7 +29,7 @@ function log2(n) {
   return Math.round(Math.log2(n));
 }
 
-function generarPartidos(tamano, tipoEliminacion) {
+export function generarPartidos(tamano, tipoEliminacion) {
   const k = log2(tamano);
   const partidos = [];
 

@@ -163,19 +163,6 @@ model TorneoClub {
   cuadrantes Cuadrante[]
 }
 
-model Cuadrante {
-  id              String   @id @default(uuid())
-  torneoClubId    String
-  torneoClub      TorneoClub @relation(fields: [torneoClubId], references: [id])
-  nombre          String
-  tamano          Int
-  tipoEliminacion String
-  creadoEn        DateTime @default(now())
-
-  partidos      CuadroPartido[]
-  participantes ParticipanteCuadrante[]
-}
-
 model CuadroPartido {
   id            String    @id @default(uuid())
   cuadranteId   String

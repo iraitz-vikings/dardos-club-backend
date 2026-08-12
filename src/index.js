@@ -13,6 +13,7 @@ import authRouter from "./routes/auth.js";
 import mensajeAncladoRouter from "./routes/mensajeAnclado.js";
 import perfilRouter from "./routes/perfil.js";
 import jugadoresRouter from "./routes/jugadores.js";
+import ligasClubRouter from "./routes/ligasClub.js";
 
 const app = express();
 app.use(cors());
@@ -47,6 +48,8 @@ app.use("/api/mensaje-anclado", mensajeAncladoRouter);
 app.use("/api/perfil", perfilRouter);
 
 app.use("/api/jugadores", jugadoresRouter);
+
+app.use("/api/ligas-club", ligasClubRouter);
 
 app.get("/api/health", (_req, res) => res.json({ ok: true }));
 

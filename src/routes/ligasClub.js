@@ -1,5 +1,6 @@
 import { Router } from "express";
 import { PrismaClient } from "@prisma/client";
+import { generarPartidos } from "./torneosClub.js";
 
 const prisma = new PrismaClient();
 const router = Router();
@@ -15,6 +16,13 @@ function requireAdmin(req, res, next) {
 const includeCompleto = {
   participantes: { include: { jugador1: true, jugador2: true }, orderBy: { creadoEn: "asc" } },
   partidos: { orderBy: [{ jornada: "asc" }, { posicion: "asc" }] },
+  cuadrantes: {
+    orderBy: { creadoEn: "asc" },
+    include: {
+      partidos: { orderBy: [{ rama: "asc" }, { ronda: "asc" }, { posicion: "asc" }] },
+      participantes: { include: { jugador1: true, jugador2: true } },
+    },
+  },
 };
 
 router.get("/", async (_req, res) => {
@@ -284,6 +292,35 @@ router.put("/partidos/:partidoId", requireAdmin, async (req, res) => {
   } catch {
     res.status(404).json({ error: "Enfrentamiento no encontrado" });
   }
+});
+
+// POST /api/ligas-club/:ligaId/cuadrante-final - crea el cuadrante final de una
+// liga (colgado de la liga, no de un torneo). El sorteo en sí se hace después con
+// el mismo endpoint que usan los torneos (/api/torneos-club/cuadrantes/:id/sorteo).
+router.post("/:ligaId/cuadrante-final", requireAdmin, async (req, res) => {
+  const { ligaId } = req.params;
+  const { nombre, tamano, tipoEliminacion } = req.body;
+  const tamanoNum = Number(tamano);
+  const tamanosValidos = [4, 8, 16, 32, 64, 128];
+  if (!tamanosValidos.includes(tamanoNum)) {
+    return res.status(400).json({ error: "Tamaño de cuadrante no válido." });
+  }
+  const liga = await prisma.ligaClub.findUnique({ where: { id: ligaId } });
+  if (!liga) return res.status(404).json({ error: "Liga no encontrada" });
+
+  const tipo = tipoEliminacion === "doble" ? "doble" : "directa";
+  const cuadrante = await prisma.cuadrante.create({
+    data: { ligaId, nombre: nombre || "Cuadrante final", tamano: tamanoNum, tipoEliminacion: tipo },
+  });
+
+  const partidos = generarPartidos(tamanoNum, tipo);
+  await prisma.cuadroPartido.createMany({ data: partidos.map((p) => ({ ...p, cuadranteId: cuadrante.id })) });
+
+  const cuadranteCompleto = await prisma.cuadrante.findUnique({
+    where: { id: cuadrante.id },
+    include: { partidos: { orderBy: [{ rama: "asc" }, { ronda: "asc" }, { posicion: "asc" }] } },
+  });
+  res.status(201).json(cuadranteCompleto);
 });
 
 export default router;

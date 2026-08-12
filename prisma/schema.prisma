@@ -239,3 +239,52 @@ model Cuadrante {
   partidos      CuadroPartido[]
   participantes ParticipanteCuadrante[]
 }
+
+model LigaClub {
+  id                  String   @id @default(uuid())
+  nombre              String
+  descripcion         String?
+  fechaInicio         DateTime
+  fechaFin            DateTime
+  insigniaUrl         String?
+  visibilidad         String   @default("privado")
+  modalidad           String   @default("individual")
+  vueltas             Int      @default(1)
+  numeroParticipantes Int
+  metodoSorteoParejas String?
+  finalizado          Boolean  @default(false)
+  creadoEn            DateTime @default(now())
+  actualizadoEn       DateTime @updatedAt
+
+  participantes ParticipanteLiga[]
+  partidos      PartidoLiga[]
+}
+
+model ParticipanteLiga {
+  id         String   @id @default(uuid())
+  ligaId     String
+  liga       LigaClub @relation(fields: [ligaId], references: [id])
+  etiqueta   String
+  jugador1Id String?
+  jugador1   Jugador? @relation("participanteLigaJugador1", fields: [jugador1Id], references: [id])
+  jugador2Id String?
+  jugador2   Jugador? @relation("participanteLigaJugador2", fields: [jugador2Id], references: [id])
+  creadoEn   DateTime @default(now())
+
+  @@unique([ligaId, etiqueta])
+}
+
+model PartidoLiga {
+  id            String   @id @default(uuid())
+  ligaId        String
+  liga          LigaClub @relation(fields: [ligaId], references: [id])
+  jornada       Int
+  posicion      Int
+  participante1 String
+  participante2 String
+  resultado     String?
+  ganador       String?
+  maquina       String?
+  enCurso       Boolean  @default(false)
+  actualizadoEn DateTime @updatedAt
+}

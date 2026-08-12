@@ -229,14 +229,16 @@ model ParticipanteCuadrante {
 }
 
 model Cuadrante {
-  id                   String   @id @default(uuid())
-  torneoClubId         String
-  torneoClub           TorneoClub @relation(fields: [torneoClubId], references: [id])
-  nombre               String
-  tamano               Int
-  tipoEliminacion      String
-  metodoSorteoParejas  String?
-  creadoEn             DateTime @default(now())
+  id                  String   @id @default(uuid())
+  torneoClubId        String?
+  torneoClub          TorneoClub? @relation(fields: [torneoClubId], references: [id])
+  ligaId              String?
+  liga                LigaClub? @relation(fields: [ligaId], references: [id])
+  nombre              String
+  tamano              Int
+  tipoEliminacion     String
+  metodoSorteoParejas String?
+  creadoEn            DateTime @default(now())
 
   partidos      CuadroPartido[]
   participantes ParticipanteCuadrante[]

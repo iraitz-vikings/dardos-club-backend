@@ -130,26 +130,50 @@ function generarPartidos(tamano, tipoEliminacion) {
   return partidos;
 }
 
-// Si un partido se queda con un único jugador asignado y su rival nunca va a
-// llegar (porque el partido que debía darle el perdedor era, a su vez, un "bye"
-// sin enfrentamiento real), este partido también se resuelve solo como pase
-// directo, y se propaga en cascada si hace falta. Si los DOS partidos que debían
-// alimentar este cruce eran bye, no hay nadie que lo juegue: se marca como
-// resuelto (sin ganador) para no bloquear la cascada hacia partidos posteriores.
+// Si un partido se queda con un único jugador asignado y podemos demostrar que el
+// otro hueco nunca se va a rellenar (porque su origen era, a su vez, un "bye" sin
+// enfrentamiento real), este partido se resuelve solo como pase directo, y se
+// propaga en cascada si hace falta. Si ambos huecos están en ese caso, se marca
+// como resuelto sin ganador para no bloquear partidos posteriores. Si algún hueco
+// todavía puede recibir a alguien (porque el partido que se lo manda aún no se ha
+// jugado), no se toca nada: hay que esperar.
 async function intentarResolverBye(partidoId) {
   const partido = await prisma.cuadroPartido.findUnique({ where: { id: partidoId } });
   if (!partido || partido.ganador || partido.resultado === "__BYE_DOBLE__") return;
 
-  const feeders = await prisma.cuadroPartido.findMany({
-    where: { siguientePartidoPerdedorId: partido.id },
+  const posiblesFuentes = await prisma.cuadroPartido.findMany({
+    where: {
+      cuadranteId: partido.cuadranteId,
+      OR: [
+        { siguientePartidoGanadorId: partido.id },
+        { siguientePartidoPerdedorId: partido.id },
+      ],
+    },
   });
-  if (feeders.length === 0) return;
+  if (posiblesFuentes.length === 0) return;
 
-  const feederResuelto = (f) => !!f.ganador || f.resultado === "__BYE_DOBLE__";
-  const feederPendiente = feeders.some((f) => !feederResuelto(f));
+  const fuentePara = (slot) =>
+    posiblesFuentes.find(
+      (f) =>
+        (f.siguientePartidoGanadorId === partido.id && f.siguienteSlotGanador === slot) ||
+        (f.siguientePartidoPerdedorId === partido.id && f.siguienteSlotPerdedor === slot)
+    );
+
+  const slotPendiente = (slot, valorActual) => {
+    if (valorActual) return false;
+    const fuente = fuentePara(slot);
+    if (!fuente) return false;
+    if (fuente.siguientePartidoGanadorId === partido.id) {
+      return !fuente.ganador;
+    }
+    return !fuente.ganador && fuente.resultado !== "__BYE_DOBLE__";
+  };
+
+  if (slotPendiente(1, partido.jugador1) || slotPendiente(2, partido.jugador2)) return;
+
   const jugadoresPresentes = [partido.jugador1, partido.jugador2].filter(Boolean);
 
-  if (jugadoresPresentes.length === 1 && !feederPendiente) {
+  if (jugadoresPresentes.length === 1) {
     const ganador = jugadoresPresentes[0];
     await prisma.cuadroPartido.update({ where: { id: partido.id }, data: { ganador } });
     if (partido.siguientePartidoGanadorId) {
@@ -160,7 +184,7 @@ async function intentarResolverBye(partidoId) {
       });
       await intentarResolverBye(partido.siguientePartidoGanadorId);
     }
-  } else if (jugadoresPresentes.length === 0 && !feederPendiente) {
+  } else if (jugadoresPresentes.length === 0) {
     await prisma.cuadroPartido.update({
       where: { id: partido.id },
       data: { resultado: "__BYE_DOBLE__" },

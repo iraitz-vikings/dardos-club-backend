@@ -55,6 +55,8 @@ model Jugador {
   equiposCapitaneados EquipoTorneo[] @relation("capitan")
   comoJugador1        ParticipanteCuadrante[] @relation("participanteJugador1")
   comoJugador2        ParticipanteCuadrante[] @relation("participanteJugador2")
+  comoJugador1Liga ParticipanteLiga[] @relation("participanteLigaJugador1")
+  comoJugador2Liga ParticipanteLiga[] @relation("participanteLigaJugador2")
 }
 
 model Plataforma {

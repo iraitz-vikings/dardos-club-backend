@@ -229,9 +229,9 @@ model ParticipanteCuadrante {
   id          String    @id @default(uuid())
   cuadranteId String
   cuadrante   Cuadrante @relation(fields: [cuadranteId], references: [id])
-  etiqueta    String    // texto exacto que se usa en jugador1/jugador2 del cuadro
-  jugador1Id  String
-  jugador1    Jugador   @relation("participanteJugador1", fields: [jugador1Id], references: [id])
+  etiqueta    String
+  jugador1Id  String?
+  jugador1    Jugador?  @relation("participanteJugador1", fields: [jugador1Id], references: [id])
   jugador2Id  String?
   jugador2    Jugador?  @relation("participanteJugador2", fields: [jugador2Id], references: [id])
   creadoEn    DateTime  @default(now())

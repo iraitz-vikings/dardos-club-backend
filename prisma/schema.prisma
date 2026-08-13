@@ -304,3 +304,21 @@ model Anuncio {
   autor            Usuario  @relation(fields: [autorId], references: [id])
   fechaPublicacion DateTime @default(now())
 }
+model FotoGaleriaPrivada {
+  id          String   @id @default(uuid())
+  url         String
+  descripcion String?
+  autorId     String
+  autor       Usuario  @relation(fields: [autorId], references: [id])
+  fechaSubida DateTime @default(now())
+}
+
+model Trofeo {
+  id          String   @id @default(uuid())
+  titulo      String
+  anio        Int
+  ganador     String
+  imagenUrl   String?
+  descripcion String?
+  creadoEn    DateTime @default(now())
+}

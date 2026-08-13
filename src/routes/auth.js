@@ -117,6 +117,42 @@ router.post("/:id/aprobar", requireAdmin, async (req, res) => {
   res.json({ id: usuario.id, nombre: usuario.nombre, rol: usuario.rol, aprobado: usuario.aprobado });
 });
 
+// POST /api/auth/:id/resetear-password - el admin genera una contraseña
+// provisional para un socio (por ejemplo, si la ha olvidado)
+router.post("/:id/resetear-password", requireAdmin, async (req, res) => {
+  const provisional = Math.random().toString(36).slice(-8);
+  const passwordHash = await bcrypt.hash(provisional, 10);
+  const usuario = await prisma.usuario.update({
+    where: { id: req.params.id },
+    data: { passwordHash, debeCambiarPassword: true },
+  });
+  res.json({ email: usuario.email, passwordProvisional: provisional });
+});
+
+// PUT /api/auth/cambiar-password - el propio socio cambia su contraseña
+// (obligatorio tras un reset del admin, o voluntario desde su perfil)
+router.put("/cambiar-password", requireAuth, async (req, res) => {
+  const { passwordActual, passwordNueva } = req.body;
+  if (!passwordActual || !passwordNueva) {
+    return res.status(400).json({ error: "Faltan datos" });
+  }
+  if (passwordNueva.length < 6) {
+    return res.status(400).json({ error: "La contraseña nueva debe tener al menos 6 caracteres" });
+  }
+  const usuario = await prisma.usuario.findUnique({ where: { id: req.usuario.sub } });
+  if (!usuario) return res.status(404).json({ error: "Usuario no encontrado" });
+  const passwordOk = await bcrypt.compare(passwordActual, usuario.passwordHash);
+  if (!passwordOk) {
+    return res.status(401).json({ error: "La contraseña actual no es correcta" });
+  }
+  const passwordHash = await bcrypt.hash(passwordNueva, 10);
+  await prisma.usuario.update({
+    where: { id: usuario.id },
+    data: { passwordHash, debeCambiarPassword: false },
+  });
+  res.json({ mensaje: "Contraseña actualizada" });
+});
+
 // DELETE /api/auth/:id - rechaza/borra una cuenta pendiente, o elimina un socio (admin)
 router.delete("/:id", requireAdmin, async (req, res) => {
   await prisma.usuario.delete({ where: { id: req.params.id } });

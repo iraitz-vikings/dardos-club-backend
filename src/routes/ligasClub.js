@@ -46,6 +46,16 @@ router.get("/privados", requireAuth, async (_req, res) => {
   res.json(ligas);
 });
 
+// GET /api/ligas-club/activos - ligas aún no finalizadas, para "Competiciones"
+router.get("/activos", requireAuth, async (_req, res) => {
+  const ligas = await prisma.ligaClub.findMany({
+    where: { finalizado: false },
+    orderBy: { fechaInicio: "desc" },
+    select: { id: true, nombre: true, fechaInicio: true, fechaFin: true, modalidad: true },
+  });
+  res.json(ligas);
+});
+
 router.get("/todos", requireAdmin, async (_req, res) => {
   const ligas = await prisma.ligaClub.findMany({ orderBy: { fechaInicio: "desc" }, include: includeCompleto });
   res.json(ligas);

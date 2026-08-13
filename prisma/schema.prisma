@@ -303,6 +303,12 @@ model PartidoLiga {
   ganador       String?
   maquina       String?
   enCurso       Boolean  @default(false)
+
+  fechaCalendario      DateTime?
+  maquinaCalendarioId  String?
+  maquinaCalendario    Maquina? @relation(fields: [maquinaCalendarioId], references: [id])
+  confirmadoCalendario Boolean  @default(false)
+
   actualizadoEn DateTime @updatedAt
 }
 

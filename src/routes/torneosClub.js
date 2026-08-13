@@ -1,6 +1,7 @@
 import { Router } from "express";
 import { PrismaClient } from "@prisma/client";
 import { randomUUID } from "crypto";
+import { requireAuth } from "./auth.js";
 
 const prisma = new PrismaClient();
 const router = Router();
@@ -202,6 +203,17 @@ router.get("/", async (_req, res) => {
     where: { visibilidad: "publico" },
     orderBy: { fechaInicio: "desc" },
     include: includeCompleto,
+  });
+  res.json(torneos);
+});
+
+// GET /api/torneos-club/privados - torneos privados ya finalizados, para el
+// histórico dentro del portal de socios (requiere sesión de socio, no admin)
+router.get("/privados", requireAuth, async (_req, res) => {
+  const torneos = await prisma.torneoClub.findMany({
+    where: { visibilidad: "privado", finalizado: true },
+    orderBy: { fechaInicio: "desc" },
+    select: { id: true, nombre: true, fechaInicio: true, fechaFin: true },
   });
   res.json(torneos);
 });

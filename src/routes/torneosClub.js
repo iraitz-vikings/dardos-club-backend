@@ -555,8 +555,8 @@ router.post("/cuadrantes/:cuadranteId/sorteo", requireAdmin, async (req, res) =>
     });
   }
   const semillasValidas = semillas.filter((s) => nombres.includes(s));
-  if (semillasValidas.length > numPartidosR1) {
-    return res.status(400).json({ error: "Hay más cabezas de serie que enfrentamientos en la ronda 1." });
+  if (semillasValidas.length > cuadrante.tamano) {
+    return res.status(400).json({ error: "Hay más cabezas de serie que huecos en el cuadrante." });
   }
 
   const noSembrados = nombres.filter((n) => !semillasValidas.includes(n));

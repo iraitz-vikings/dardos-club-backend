@@ -87,7 +87,13 @@ router.post("/login", async (req, res) => {
   const token = firmarToken(usuario);
   res.json({
     token,
-    usuario: { id: usuario.id, nombre: usuario.nombre, email: usuario.email, rol: usuario.rol },
+    usuario: {
+      id: usuario.id,
+      nombre: usuario.nombre,
+      email: usuario.email,
+      rol: usuario.rol,
+      debeCambiarPassword: usuario.debeCambiarPassword,
+    },
   });
 });
 

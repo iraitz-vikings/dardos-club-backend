@@ -17,6 +17,7 @@ import ligasClubRouter from "./routes/ligasClub.js";
 import anunciosRouter from "./routes/anuncios.js";
 import galeriaPrivadaRouter from "./routes/galeriaPrivada.js";
 import trofeosRouter from "./routes/trofeos.js";
+import equiposClubRouter from "./routes/equiposClub.js";
 
 const app = express();
 app.use(cors());
@@ -59,6 +60,8 @@ app.use("/api/anuncios", anunciosRouter);
 app.use("/api/galeria-privada", galeriaPrivadaRouter);
 
 app.use("/api/trofeos", trofeosRouter);
+
+app.use("/api/equipos-club", equiposClubRouter);
 
 app.get("/api/health", (_req, res) => res.json({ ok: true }));
 

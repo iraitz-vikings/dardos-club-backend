@@ -6,9 +6,13 @@ const prisma = new PrismaClient();
 const router = Router();
 
 function inicioDeSemana(fechaBase) {
-  const d = fechaBase ? new Date(fechaBase) : new Date();
+  // Si nos llega una fecha ya calculada desde el navegador, la respetamos tal
+  // cual (ya viene ajustada al lunes en la hora local del socio) — si no,
+  // calculamos el lunes de esta semana en el servidor como último recurso.
+  if (fechaBase) return new Date(fechaBase);
+  const d = new Date();
   d.setHours(0, 0, 0, 0);
-  const offset = (d.getDay() + 6) % 7; // lunes = 0
+  const offset = (d.getDay() + 6) % 7;
   d.setDate(d.getDate() - offset);
   return d;
 }

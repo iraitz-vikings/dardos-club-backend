@@ -109,16 +109,18 @@ model EquipoJugador {
 }
 
 model Partido {
-  id                  String              @id @default(uuid())
+  id                  String   @id @default(uuid())
   equipoTorneoId      String
-  equipoTorneo        EquipoTorneo        @relation(fields: [equipoTorneoId], references: [id])
+  equipoTorneo        EquipoTorneo @relation(fields: [equipoTorneoId], references: [id])
   fecha               DateTime
   rival               String?
   resultado           String?
-  fijado              Boolean             @default(false)
+  fijado              Boolean  @default(false)
   notaCapitan         String?
+  maquinaId           String?
+  maquina             Maquina? @relation(fields: [maquinaId], references: [id])
   origenActualizacion OrigenActualizacion @default(manual)
-  ultimaActualizacion DateTime            @updatedAt
+  ultimaActualizacion DateTime @updatedAt
 
   notificaciones Notificacion[]
 }
@@ -347,4 +349,12 @@ model MiembroEquipoClub {
   creadoEn  DateTime   @default(now())
 
   @@unique([equipoId, jugadorId])
+}
+
+model Maquina {
+  id       String    @id @default(uuid())
+  nombre   String    @unique
+  creadoEn DateTime  @default(now())
+
+  partidos Partido[]
 }

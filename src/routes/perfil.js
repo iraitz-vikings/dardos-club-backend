@@ -20,6 +20,10 @@ async function obtenerOCrearJugador(usuarioId) {
 router.get("/", requireAuth, async (req, res) => {
   const jugador = await obtenerOCrearJugador(req.usuario.sub);
   const usuario = await prisma.usuario.findUnique({ where: { id: req.usuario.sub } });
+  const idsFabricantes = await prisma.jugadorFabricanteId.findMany({
+    where: { jugadorId: jugador.id },
+    include: { fabricante: true },
+  });
   res.json({
     id: jugador.id,
     nombre: jugador.nombre,
@@ -28,6 +32,12 @@ router.get("/", requireAuth, async (req, res) => {
     bio: jugador.bio,
     email: usuario.email,
     rol: usuario.rol,
+    idsFabricantes: idsFabricantes.map((i) => ({
+      fabricanteId: i.fabricanteId,
+      nombreFabricante: i.fabricante.nombre,
+      urlPerfilPlantilla: i.fabricante.urlPerfilPlantilla,
+      idExterno: i.idExterno,
+    })),
   });
 });
 
@@ -90,7 +100,7 @@ router.get("/historial", requireAuth, async (req, res) => {
 
 // PUT /api/perfil - el socio edita su propio perfil
 router.put("/", requireAuth, async (req, res) => {
-  const { apodo, avatarUrl, bio } = req.body;
+  const { apodo, avatarUrl, bio, idsFabricantes } = req.body;
   const jugador = await obtenerOCrearJugador(req.usuario.sub);
   const actualizado = await prisma.jugador.update({
     where: { id: jugador.id },
@@ -100,6 +110,32 @@ router.put("/", requireAuth, async (req, res) => {
       bio: bio !== undefined ? bio || null : undefined,
     },
   });
+
+  // idsFabricantes: array de { fabricanteId, idExterno }. Un idExterno vacío
+  // borra el ID guardado para ese fabricante; si no, se crea/actualiza.
+  if (Array.isArray(idsFabricantes)) {
+    for (const item of idsFabricantes) {
+      if (!item?.fabricanteId) continue;
+      const idExterno = (item.idExterno || "").trim();
+      if (!idExterno) {
+        await prisma.jugadorFabricanteId
+          .delete({ where: { jugadorId_fabricanteId: { jugadorId: jugador.id, fabricanteId: item.fabricanteId } } })
+          .catch(() => {});
+        continue;
+      }
+      // .catch: si el fabricante fue borrado por un admin entre que el
+      // frontend cargó la lista y el socio guardó, ignoramos ese ID en vez
+      // de romper el resto del guardado por una violación de FK.
+      await prisma.jugadorFabricanteId
+        .upsert({
+          where: { jugadorId_fabricanteId: { jugadorId: jugador.id, fabricanteId: item.fabricanteId } },
+          update: { idExterno },
+          create: { jugadorId: jugador.id, fabricanteId: item.fabricanteId, idExterno },
+        })
+        .catch(() => {});
+    }
+  }
+
   res.json(actualizado);
 });
 

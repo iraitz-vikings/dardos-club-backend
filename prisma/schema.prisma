@@ -62,6 +62,7 @@ model Jugador {
   comoJugador2Liga ParticipanteLiga[] @relation("participanteLigaJugador2")
   equiposClub             MiembroEquipoClub[]
   equiposCapitaneadosClub EquipoClub[]        @relation("capitanEquipoClub")
+  idsFabricantes          JugadorFabricanteId[]
 }
 
 model Plataforma {
@@ -373,4 +374,28 @@ model Maquina {
   partidos       Partido[]
   cuadroPartidos CuadroPartido[]
   partidosLiga   PartidoLiga[]
+}
+
+// Fabricante de dianas/máquinas electrónicas (ej: DARTSLIVE, Granboard...) en
+// cuya web cada jugador tiene su propio ID de jugador y sus medias/estadísticas.
+model Fabricante {
+  id                 String   @id @default(uuid())
+  nombre             String   @unique
+  urlPerfilPlantilla String?  // plantilla de URL con "{id}" como marcador, ej: https://.../jugador/{id}
+  creadoEn           DateTime @default(now())
+
+  idsJugadores JugadorFabricanteId[]
+}
+
+// El ID que un jugador concreto tiene dado de alta en la web de un fabricante.
+model JugadorFabricanteId {
+  id           String     @id @default(uuid())
+  jugadorId    String
+  jugador      Jugador    @relation(fields: [jugadorId], references: [id], onDelete: Cascade)
+  fabricanteId String
+  fabricante   Fabricante @relation(fields: [fabricanteId], references: [id], onDelete: Cascade)
+  idExterno    String
+  actualizadoEn DateTime  @updatedAt
+
+  @@unique([jugadorId, fabricanteId])
 }

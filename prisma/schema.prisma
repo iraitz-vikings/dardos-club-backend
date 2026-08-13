@@ -357,5 +357,7 @@ model Maquina {
   nombre   String    @unique
   creadoEn DateTime  @default(now())
 
-  partidos Partido[]
+  partidos       Partido[]
+  cuadroPartidos CuadroPartido[]
+  partidosLiga   PartidoLiga[]
 }

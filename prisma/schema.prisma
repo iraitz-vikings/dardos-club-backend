@@ -59,6 +59,8 @@ model Jugador {
   comoJugador2        ParticipanteCuadrante[] @relation("participanteJugador2")
   comoJugador1Liga ParticipanteLiga[] @relation("participanteLigaJugador1")
   comoJugador2Liga ParticipanteLiga[] @relation("participanteLigaJugador2")
+  equiposClub             MiembroEquipoClub[]
+  equiposCapitaneadosClub EquipoClub[]        @relation("capitanEquipoClub")
 }
 
 model Plataforma {
@@ -322,4 +324,27 @@ model Trofeo {
   imagenUrl   String?
   descripcion String?
   creadoEn    DateTime @default(now())
+}
+
+model EquipoClub {
+  id          String   @id @default(uuid())
+  nombre      String
+  descripcion String?
+  escudoUrl   String?
+  capitanId   String?
+  capitan     Jugador? @relation("capitanEquipoClub", fields: [capitanId], references: [id])
+  creadoEn    DateTime @default(now())
+
+  miembros MiembroEquipoClub[]
+}
+
+model MiembroEquipoClub {
+  id        String     @id @default(uuid())
+  equipoId  String
+  equipo    EquipoClub @relation(fields: [equipoId], references: [id])
+  jugadorId String
+  jugador   Jugador    @relation(fields: [jugadorId], references: [id])
+  creadoEn  DateTime   @default(now())
+
+  @@unique([equipoId, jugadorId])
 }

@@ -19,6 +19,7 @@ import galeriaPrivadaRouter from "./routes/galeriaPrivada.js";
 import trofeosRouter from "./routes/trofeos.js";
 import equiposClubRouter from "./routes/equiposClub.js";
 import maquinasRouter from "./routes/maquinas.js";
+import fabricantesRouter from "./routes/fabricantes.js";
 import competicionesExternasRouter from "./routes/competicionesExternas.js";
 import calendarioRouter from "./routes/calendario.js";
 
@@ -67,6 +68,8 @@ app.use("/api/trofeos", trofeosRouter);
 app.use("/api/equipos-club", equiposClubRouter);
 
 app.use("/api/maquinas", maquinasRouter);
+
+app.use("/api/fabricantes", fabricantesRouter);
 
 app.use("/api/competiciones-externas", competicionesExternasRouter);
 

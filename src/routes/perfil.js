@@ -31,6 +31,63 @@ router.get("/", requireAuth, async (req, res) => {
   });
 });
 
+// GET /api/perfil/historial - los torneos y ligas del club en los que ha
+// participado el socio logueado, con sus enfrentamientos y resultados
+router.get("/historial", requireAuth, async (req, res) => {
+  const jugador = await prisma.jugador.findUnique({ where: { usuarioId: req.usuario.sub } });
+  if (!jugador) return res.json({ torneos: [], ligas: [] });
+
+  const participacionesTorneos = await prisma.participanteCuadrante.findMany({
+    where: { OR: [{ jugador1Id: jugador.id }, { jugador2Id: jugador.id }] },
+    include: { cuadrante: { include: { torneoClub: true, liga: true } } },
+  });
+
+  const historialTorneos = [];
+  for (const p of participacionesTorneos) {
+    const partidos = await prisma.cuadroPartido.findMany({
+      where: { cuadranteId: p.cuadranteId, OR: [{ jugador1: p.etiqueta }, { jugador2: p.etiqueta }] },
+      orderBy: [{ rama: "asc" }, { ronda: "asc" }],
+    });
+    historialTorneos.push({
+      nombre: p.cuadrante.torneoClub?.nombre || (p.cuadrante.liga ? `${p.cuadrante.liga.nombre} (cuadrante final)` : "Torneo"),
+      cuadrante: p.cuadrante.nombre,
+      etiqueta: p.etiqueta,
+      partidos: partidos.map((partido) => ({
+        rama: partido.rama,
+        ronda: partido.ronda,
+        rival: partido.jugador1 === p.etiqueta ? partido.jugador2 : partido.jugador1,
+        resultado: partido.resultado,
+        ganado: partido.ganador ? partido.ganador === p.etiqueta : null,
+      })),
+    });
+  }
+
+  const participacionesLigas = await prisma.participanteLiga.findMany({
+    where: { OR: [{ jugador1Id: jugador.id }, { jugador2Id: jugador.id }] },
+    include: { liga: true },
+  });
+
+  const historialLigas = [];
+  for (const p of participacionesLigas) {
+    const partidos = await prisma.partidoLiga.findMany({
+      where: { ligaId: p.ligaId, OR: [{ participante1: p.etiqueta }, { participante2: p.etiqueta }] },
+      orderBy: { jornada: "asc" },
+    });
+    historialLigas.push({
+      nombre: p.liga.nombre,
+      etiqueta: p.etiqueta,
+      partidos: partidos.map((partido) => ({
+        jornada: partido.jornada,
+        rival: partido.participante1 === p.etiqueta ? partido.participante2 : partido.participante1,
+        resultado: partido.resultado,
+        ganado: partido.ganador ? partido.ganador === p.etiqueta : null,
+      })),
+    });
+  }
+
+  res.json({ torneos: historialTorneos, ligas: historialLigas });
+});
+
 // PUT /api/perfil - el socio edita su propio perfil
 router.put("/", requireAuth, async (req, res) => {
   const { apodo, avatarUrl, bio } = req.body;

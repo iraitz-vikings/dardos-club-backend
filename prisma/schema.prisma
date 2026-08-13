@@ -173,25 +173,30 @@ model TorneoClub {
 }
 
 model CuadroPartido {
-  id            String    @id @default(uuid())
-  cuadranteId   String
-  cuadrante     Cuadrante @relation(fields: [cuadranteId], references: [id])
-  rama          String // "ganadores" | "perdedores" | "final"
-  ronda         Int
-  posicion      Int
-  maquina       String?
-  jugador1      String?
-  jugador2      String?
-  resultado     String?
-  ganador       String?
-  enCurso       Boolean   @default(false)
+  id       String    @id @default(uuid())
+  cuadranteId String
+  cuadrante   Cuadrante @relation(fields: [cuadranteId], references: [id])
+  rama     String
+  ronda    Int
+  posicion Int
+  maquina  String?
+  jugador1 String?
+  jugador2 String?
+  resultado String?
+  ganador  String?
+  enCurso  Boolean @default(false)
 
-  siguientePartidoGanadorId  String?
-  siguienteSlotGanador       Int?
+  siguientePartidoGanadorId String?
+  siguienteSlotGanador Int?
   siguientePartidoPerdedorId String?
-  siguienteSlotPerdedor      Int?
+  siguienteSlotPerdedor Int?
 
-  actualizadoEn DateTime  @updatedAt
+  fechaCalendario      DateTime?
+  maquinaCalendarioId  String?
+  maquinaCalendario    Maquina? @relation(fields: [maquinaCalendarioId], references: [id])
+  confirmadoCalendario Boolean  @default(false)
+
+  actualizadoEn DateTime @updatedAt
 }
 
 model TorneoDestacado {

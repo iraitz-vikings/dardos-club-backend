@@ -293,3 +293,13 @@ model PartidoLiga {
   enCurso       Boolean  @default(false)
   actualizadoEn DateTime @updatedAt
 }
+
+model Anuncio {
+  id               String   @id @default(uuid())
+  titulo           String
+  contenido        String
+  fijado           Boolean  @default(false)
+  autorId          String
+  autor            Usuario  @relation(fields: [autorId], references: [id])
+  fechaPublicacion DateTime @default(now())
+}

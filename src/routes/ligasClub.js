@@ -1,6 +1,7 @@
 import { Router } from "express";
 import { PrismaClient } from "@prisma/client";
 import { generarPartidos } from "./torneosClub.js";
+import { requireAuth } from "./auth.js";
 
 const prisma = new PrismaClient();
 const router = Router();
@@ -30,6 +31,17 @@ router.get("/", async (_req, res) => {
     where: { visibilidad: "publico" },
     orderBy: { fechaInicio: "desc" },
     include: includeCompleto,
+  });
+  res.json(ligas);
+});
+
+// GET /api/ligas-club/privados - ligas privadas ya finalizadas, para el
+// histórico dentro del portal de socios
+router.get("/privados", requireAuth, async (_req, res) => {
+  const ligas = await prisma.ligaClub.findMany({
+    where: { visibilidad: "privado", finalizado: true },
+    orderBy: { fechaInicio: "desc" },
+    select: { id: true, nombre: true, fechaInicio: true, fechaFin: true },
   });
   res.json(ligas);
 });

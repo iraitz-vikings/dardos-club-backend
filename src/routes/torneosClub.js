@@ -218,6 +218,17 @@ router.get("/privados", requireAuth, async (_req, res) => {
   res.json(torneos);
 });
 
+// GET /api/torneos-club/activos - torneos aún no finalizados, para "Competiciones"
+// en el portal de socios (públicos o privados, cualquier socio logueado los ve)
+router.get("/activos", requireAuth, async (_req, res) => {
+  const torneos = await prisma.torneoClub.findMany({
+    where: { finalizado: false },
+    orderBy: { fechaInicio: "desc" },
+    select: { id: true, nombre: true, fechaInicio: true, fechaFin: true, modalidad: true },
+  });
+  res.json(torneos);
+});
+
 router.get("/todos", requireAdmin, async (_req, res) => {
   const torneos = await prisma.torneoClub.findMany({
     orderBy: { fechaInicio: "desc" },

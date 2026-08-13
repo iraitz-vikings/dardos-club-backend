@@ -29,13 +29,14 @@ enum Visibilidad {
 }
 
 model Usuario {
-  id           String   @id @default(uuid())
-  nombre       String
-  email        String   @unique
-  passwordHash String
-  rol          Rol      @default(jugador)
-  aprobado     Boolean  @default(false)
-  creadoEn     DateTime @default(now())
+  id                        String   @id @default(uuid())
+  nombre                    String
+  email                     String   @unique
+  passwordHash              String
+  rol                       Rol      @default(jugador)
+  aprobado                  Boolean  @default(false)
+  debeCambiarPassword       Boolean  @default(false)
+  creadoEn                  DateTime @default(now())
 
   jugador                   Jugador?
   noticias                  NoticiaEvento[]

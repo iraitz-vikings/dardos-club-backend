@@ -32,6 +32,16 @@ router.post("/", requireAdmin, async (req, res) => {
   res.status(201).json(jugador);
 });
 
+// GET /api/jugadores/directorio - lista pública para socios logueados (sin datos
+// sensibles como el email)
+router.get("/directorio", requireAuth, async (_req, res) => {
+  const jugadores = await prisma.jugador.findMany({
+    orderBy: { nombre: "asc" },
+    select: { id: true, nombre: true, apodo: true, avatarUrl: true, bio: true, usuarioId: true },
+  });
+  res.json(jugadores);
+});
+
 // DELETE /api/jugadores/:id - borra un jugador (protegido)
 router.delete("/:id", requireAdmin, async (req, res) => {
   await prisma.jugador.delete({ where: { id: req.params.id } }).catch(() => {});

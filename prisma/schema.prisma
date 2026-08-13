@@ -165,7 +165,8 @@ model TorneoClub {
   numeroMaquinas  Int?
   tipoEliminacion String   @default("directa")
   modalidad       String   @default("individual")
-  finalizado      Boolean  @default(false)
+  afectaCalendario Boolean  @default(true)
+  finalizado       Boolean  @default(false)
   creadoEn        DateTime @default(now())
   actualizadoEn   DateTime @updatedAt
 
@@ -268,7 +269,8 @@ model LigaClub {
   vueltas             Int      @default(1)
   numeroParticipantes Int
   metodoSorteoParejas String?
-  finalizado          Boolean  @default(false)
+  afectaCalendario Boolean  @default(true)
+  finalizado       Boolean  @default(false)
   creadoEn            DateTime @default(now())
   actualizadoEn       DateTime @updatedAt
 

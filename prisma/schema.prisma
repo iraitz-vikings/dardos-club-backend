@@ -39,6 +39,7 @@ model Usuario {
 
   jugador                   Jugador?
   noticias                  NoticiaEvento[]
+  anuncios                  Anuncio[]
   notificacionesDisparadas  Notificacion[]
 }
 

@@ -68,7 +68,7 @@ router.get("/:id", async (req, res) => {
 });
 
 router.post("/", requireAdmin, async (req, res) => {
-  const { nombre, descripcion, fechaInicio, fechaFin, insigniaUrl, visibilidad, modalidad, vueltas, numeroParticipantes, metodoSorteoParejas } = req.body;
+  const { nombre, descripcion, fechaInicio, fechaFin, insigniaUrl, visibilidad, modalidad, vueltas, numeroParticipantes, metodoSorteoParejas, afectaCalendario } = req.body;
   if (!nombre || !fechaInicio || !fechaFin || !numeroParticipantes) {
     return res.status(400).json({ error: "Faltan campos obligatorios" });
   }
@@ -86,6 +86,7 @@ router.post("/", requireAdmin, async (req, res) => {
       vueltas: Number(vueltas) === 2 ? 2 : 1,
       numeroParticipantes: Number(numeroParticipantes),
       metodoSorteoParejas: metodosValidos.includes(metodoSorteoParejas) ? metodoSorteoParejas : null,
+      afectaCalendario: afectaCalendario !== undefined ? !!afectaCalendario : true,
     },
   });
   res.status(201).json(liga);
@@ -295,6 +296,27 @@ router.post("/:ligaId/generar-calendario", requireAdmin, async (req, res) => {
 
   const ligaCompleta = await prisma.ligaClub.findUnique({ where: { id: ligaId }, include: includeCompleto });
   res.json(ligaCompleta);
+});
+
+// PUT /api/ligas-club/partidos/:partidoId/calendario - programa un partido de
+// liga en el calendario general, con fecha y máquina
+router.put("/partidos/:partidoId/calendario", requireAdmin, async (req, res) => {
+  const { partidoId } = req.params;
+  const { fecha, maquinaId, confirmado } = req.body;
+  try {
+    const partido = await prisma.partidoLiga.update({
+      where: { id: partidoId },
+      data: {
+        fechaCalendario: fecha !== undefined ? (fecha ? new Date(fecha) : null) : undefined,
+        maquinaCalendarioId: maquinaId !== undefined ? (maquinaId || null) : undefined,
+        confirmadoCalendario: confirmado !== undefined ? !!confirmado : undefined,
+      },
+      include: { maquinaCalendario: true },
+    });
+    res.json(partido);
+  } catch {
+    res.status(404).json({ error: "Enfrentamiento no encontrado" });
+  }
 });
 
 router.put("/partidos/:partidoId", requireAdmin, async (req, res) => {

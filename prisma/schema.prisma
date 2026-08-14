@@ -382,6 +382,7 @@ model Fabricante {
   id                 String   @id @default(uuid())
   nombre             String   @unique
   urlPerfilPlantilla String?  // plantilla de URL con "{id}" como marcador, ej: https://.../jugador/{id}
+  logoUrl            String?  // logo del fabricante (Cloudinary), para mostrarlo junto a las medias
   creadoEn           DateTime @default(now())
 
   idsJugadores JugadorFabricanteId[]

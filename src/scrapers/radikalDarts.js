@@ -67,12 +67,23 @@ import { chromium } from "playwright";
 //      distinguen por el contenedor: la de la barra lateral cuelga de
 //      "#left", la del cuerpo no.
 //
-// Login: NO hace falta. Comprobado con una petición sin cookies de sesión a
-// una página de Clasificación real: el HTML devuelto ya incluye la tabla
-// completa (Alias, MPR, etc.), así que es pública. El scraper no inicia
-// sesión.
+// Login: SÍ hace falta — corregido tras comprobar con peticiones sin cookies
+// de sesión que tanto la ficha de jugador (competiciones3.php) como la
+// "Clasificación Individual" de una Liga (competiciones4.php) devuelven
+// 401 sin sesión iniciada. Solo la tabla general de Alias/MPR de un
+// Torneo/Campeonato (competiciones2.php, el valor concreto de ESA
+// competición, no la media real) es pública. Para leer la media real de
+// cualquier jugador hace falta iniciar sesión con una cuenta de Radikal
+// Darts antes de navegar: el formulario de login vive en la home
+// (https://esp.radikalplayers.com/), con campos input[name="dni"] (el
+// "Radikal ID", no un DNI de verdad) e input[name="clave"] (contraseña).
+// Las credenciales se leen de las variables de entorno RADIKAL_ID y
+// RADIKAL_PASSWORD (a configurar en Railway); si no están puestas, o el
+// login falla, se devuelve un error explicando qué falta en vez de intentar
+// scrapear sin sesión (que fallaría igualmente en el paso de la ficha).
 
 const COMPETICIONES_URL = "https://esp.radikalplayers.com/competiciones.php";
+const HOME_URL = "https://esp.radikalplayers.com/";
 const MAX_PAGINAS_CLASIFICACION = 15;
 
 const CONTEXT_OPTIONS = {
@@ -81,6 +92,39 @@ const CONTEXT_OPTIONS = {
   viewport: { width: 1366, height: 900 },
   locale: "es-ES",
 };
+
+// Inicia sesión en Radikal Darts con las credenciales de RADIKAL_ID /
+// RADIKAL_PASSWORD (variables de entorno). Devuelve true si el login se
+// pudo confirmar (aparece "Cerrar sesión" en la página), false si faltan
+// credenciales o el login no se pudo confirmar.
+async function iniciarSesionRadikal(page) {
+  const radikalId = (process.env.RADIKAL_ID || "").trim();
+  const radikalPassword = process.env.RADIKAL_PASSWORD || "";
+  if (!radikalId || !radikalPassword) return false;
+
+  await page.goto(HOME_URL, { waitUntil: "domcontentloaded", timeout: 30000 });
+  await page.waitForLoadState("networkidle", { timeout: 15000 }).catch(() => {});
+  await page
+    .getByText("Acepto", { exact: true })
+    .first()
+    .click({ timeout: 3000 })
+    .catch(() => {});
+
+  const campoId = page.locator('input[name="dni"]');
+  const campoClave = page.locator('input[name="clave"]');
+  if ((await campoId.count()) === 0 || (await campoClave.count()) === 0) return false;
+
+  await campoId.fill(radikalId);
+  await campoClave.fill(radikalPassword);
+  await page.locator('input[name="bot_entrar"]').click();
+  await page.waitForLoadState("networkidle", { timeout: 15000 }).catch(() => {});
+
+  return page
+    .getByText("Cerrar sesión", { exact: false })
+    .first()
+    .isVisible({ timeout: 5000 })
+    .catch(() => false);
+}
 
 // El autocompletado antepone el tipo de competición al nombre (ej. "LIGA: La
 // Nucia Level-2"); lo quitamos para poder comparar solo el nombre que
@@ -253,6 +297,20 @@ export async function actualizarMediasRadikal(registros) {
   try {
     const context = await browser.newContext(CONTEXT_OPTIONS);
     const page = await context.newPage();
+
+    // La ficha de jugador (y, en Ligas, la Clasificación Individual) exigen
+    // sesión iniciada: sin login no tiene sentido intentar nada más.
+    const logueado = await iniciarSesionRadikal(page);
+    if (!logueado) {
+      const radikalIdConfigurado = !!(process.env.RADIKAL_ID || "").trim();
+      const radikalPasswordConfigurado = !!process.env.RADIKAL_PASSWORD;
+      const error =
+        radikalIdConfigurado && radikalPasswordConfigurado
+          ? "No se pudo iniciar sesión en Radikal Darts con las credenciales configuradas (RADIKAL_ID / RADIKAL_PASSWORD). Revisa que sigan siendo correctas en Railway."
+          : "Radikal Darts exige tener sesión iniciada para leer la media real de un jugador. Falta configurar las variables de entorno RADIKAL_ID y RADIKAL_PASSWORD (una cuenta de Radikal Darts) en el servidor.";
+      for (const { id } of conTorneo) resultados.push({ id, ok: false, error });
+      return resultados;
+    }
 
     for (const { id, idExterno, notaBusqueda } of conTorneo) {
       try {

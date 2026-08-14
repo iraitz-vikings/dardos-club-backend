@@ -123,7 +123,14 @@ async function irAClasificacionDeCompeticion(page, notaBusqueda) {
   const buscador = page.locator("#competicion_a_buscar");
   await buscador.waitFor({ state: "visible", timeout: 10000 });
   await buscador.click();
-  await buscador.fill(notaBusqueda.trim());
+  // OJO: el autocompletado (jQuery UI) engancha su búsqueda al evento
+  // keydown/keyup de cada tecla, no al valor final del campo. buscador.fill()
+  // escribe el valor de golpe sin disparar esos eventos, así que el
+  // autocompletado nunca se entera y ".ac_results" se queda vacío (probado
+  // en producción: con fill() siempre daba "no se encontró ninguna
+  // competición" aunque el nombre fuera correcto). Por eso usamos
+  // pressSequentially, que simula pulsaciones de teclado reales una a una.
+  await buscador.pressSequentially(notaBusqueda.trim(), { delay: 80 });
 
   // El autocompletado (jQuery UI) tarda un poco en llamar al servidor tras
   // escribir; esperamos a que aparezca al menos un resultado.

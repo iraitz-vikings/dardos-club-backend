@@ -105,7 +105,17 @@ export async function actualizarMediasConnection(registros) {
           );
         }
         await buscador.fill(idExterno);
-        await page.locator(`input[placeholder="${BUSCADOR_PLACEHOLDER}"] + button`).click();
+        // Pulsar Enter dispara la búsqueda en la mayoría de estos buscadores
+        // y es más robusto que depender de la posición exacta del botón de
+        // búsqueda en el DOM (que cambió de sitio al pasar por la pestaña
+        // "Buscar" en vez de ir directos por URL). El clic al botón de al
+        // lado se mantiene como intento adicional, silencioso si no existe o
+        // si Enter ya disparó la búsqueda.
+        await buscador.press("Enter").catch(() => {});
+        await page
+          .locator(`input[placeholder="${BUSCADOR_PLACEHOLDER}"] + button`)
+          .click({ timeout: 5000 })
+          .catch(() => {});
         await page.waitForTimeout(700);
 
         const texto = await page.locator("body").innerText();

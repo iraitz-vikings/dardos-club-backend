@@ -9,6 +9,16 @@ import { chromium } from "playwright";
 
 const MAIN_URL = "https://play.phoenixdarts.com/main.do";
 
+// Cabecera de navegador "normal": sin esto, algunos sitios sirven una
+// versión distinta de la página (o directamente la bloquean) a un Chromium
+// headless por defecto, lo que hacía fallar la búsqueda del enlace de login.
+const CONTEXT_OPTIONS = {
+  userAgent:
+    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
+  viewport: { width: 1366, height: 900 },
+  locale: "es-ES",
+};
+
 function parsearResultado(texto, alias) {
   const lineas = texto
     .split("\n")
@@ -42,9 +52,17 @@ export async function actualizarMediasPhoenix(registros) {
   const browser = await chromium.launch({ headless: true });
   const resultados = [];
   try {
-    const page = await browser.newPage();
-    await page.goto(MAIN_URL, { waitUntil: "networkidle" });
-    await page.getByRole("link", { name: "LOG-IN" }).first().click();
+    const context = await browser.newContext(CONTEXT_OPTIONS);
+    const page = await context.newPage();
+    // "domcontentloaded" en vez de "networkidle": esta web mantiene
+    // conexiones de fondo abiertas y "networkidle" nunca llega a cumplirse,
+    // lo que antes hacía que la propia carga de la página agotara el tiempo
+    // de espera. Se espera la carga de red por separado, sin bloquear.
+    await page.goto(MAIN_URL, { waitUntil: "domcontentloaded", timeout: 30000 });
+    await page.waitForLoadState("networkidle", { timeout: 15000 }).catch(() => {});
+    const enlaceLogin = page.getByRole("link", { name: "LOG-IN" }).first();
+    await enlaceLogin.waitFor({ state: "visible", timeout: 30000 });
+    await enlaceLogin.click();
     await page.waitForURL(/account\.phoenixdarts\.com/, { timeout: 20000 });
     await page.getByPlaceholder("Introducir cuenta (Correo electrónico / Número de tarjeta / ID)").fill(email);
     await page.getByPlaceholder("Introducir contraseña").fill(password);
@@ -55,7 +73,8 @@ export async function actualizarMediasPhoenix(registros) {
     for (const { id, idExterno } of registros) {
       try {
         const url = `https://play.phoenixdarts.com/selectPlayerList.do?searchKey=${encodeURIComponent(idExterno)}&unifiedFg=1`;
-        await page.goto(url, { waitUntil: "networkidle" });
+        await page.goto(url, { waitUntil: "domcontentloaded", timeout: 30000 });
+        await page.waitForLoadState("networkidle", { timeout: 10000 }).catch(() => {});
         const texto = await page.locator("body").innerText();
         const encontrado = parsearResultado(texto, idExterno);
         if (!encontrado) {

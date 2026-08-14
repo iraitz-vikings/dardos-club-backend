@@ -10,6 +10,14 @@ const LOGIN_URL = "https://connectionplayer.com/#/login";
 const COMUNIDAD_URL = "https://connectionplayer.com/#/community";
 const BUSCADOR_PLACEHOLDER = "Buscar por alias...";
 
+// Cabecera de navegador "normal", igual que en phoenixDarts.js.
+const CONTEXT_OPTIONS = {
+  userAgent:
+    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
+  viewport: { width: 1366, height: 900 },
+  locale: "es-ES",
+};
+
 // Busca, dentro del texto plano de la página de resultados, el bloque que
 // corresponde exactamente al alias buscado (nombre en su propia línea) y
 // extrae el MPR/PPD que aparecen justo después.
@@ -46,8 +54,10 @@ export async function actualizarMediasConnection(registros) {
   const browser = await chromium.launch({ headless: true });
   const resultados = [];
   try {
-    const page = await browser.newPage();
-    await page.goto(LOGIN_URL, { waitUntil: "networkidle" });
+    const context = await browser.newContext(CONTEXT_OPTIONS);
+    const page = await context.newPage();
+    await page.goto(LOGIN_URL, { waitUntil: "domcontentloaded", timeout: 30000 });
+    await page.waitForLoadState("networkidle", { timeout: 15000 }).catch(() => {});
     await page.getByPlaceholder("Dirección de correo").fill(email);
     await page.getByPlaceholder("Contraseña").fill(password);
     await page.getByRole("button", { name: "Iniciar Sesión" }).click();
@@ -57,7 +67,8 @@ export async function actualizarMediasConnection(registros) {
 
     for (const { id, idExterno } of registros) {
       try {
-        await page.goto(COMUNIDAD_URL, { waitUntil: "networkidle" });
+        await page.goto(COMUNIDAD_URL, { waitUntil: "domcontentloaded", timeout: 30000 });
+        await page.waitForLoadState("networkidle", { timeout: 10000 }).catch(() => {});
         const buscador = page.getByPlaceholder(BUSCADOR_PLACEHOLDER);
         await buscador.fill(idExterno);
         await page.locator(`input[placeholder="${BUSCADOR_PLACEHOLDER}"] + button`).click();

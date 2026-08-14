@@ -20,13 +20,21 @@ import { chromium } from "playwright";
 //
 // Aun así, una sesión de navegador headless completamente sin cookies recibe
 // esta web en INGLÉS por defecto (a pesar de fijar locale "es-ES" en el
-// contexto, que en teoría debería bastar) — y en inglés, esta URL de
-// resultados de búsqueda muestra la portada genérica de la web en vez de la
-// lista de resultados. Para forzar español sin necesidad de loguearse, se
-// visita primero la página de login en español (sin rellenar el formulario):
-// esa visita dejar fijada una cookie de idioma que luego se respeta en el
-// resto del dominio phoenixdarts.com durante la misma sesión de navegador.
-const LOGIN_ES_URL = "https://account.phoenixdarts.com/es/login";
+// contexto, que en teoría debería bastar) — probablemente porque el idioma
+// por defecto lo decide el servidor según la IP de origen (los servidores de
+// Railway están en EEUU), no la cabecera Accept-Language. Y en ese estado
+// "inglés", la URL de resultados de búsqueda ni siquiera muestra una versión
+// traducida: directamente sirve la portada genérica de la web en vez de la
+// lista de resultados.
+//
+// La propia web tiene un selector de idioma (bandera/texto "País/Idioma")
+// cuyo enlace a español invoca literalmente `changeLocale('es_ES')`, una
+// función JS global definida en el dominio play.phoenixdarts.com (la función
+// fija el idioma, casi seguro vía cookie, independientemente de la IP de
+// origen). Para forzar español de forma fiable sin necesidad de loguearse,
+// se visita primero la portada de play.phoenixdarts.com y se invoca esa
+// misma función directamente antes de hacer ninguna búsqueda.
+const HOME_URL = "https://play.phoenixdarts.com/main.do";
 const SEARCH_BASE_URL = "https://play.phoenixdarts.com/selectPlayerList.do";
 
 // Cabecera de navegador "normal": sin esto, algunos sitios sirven una
@@ -70,9 +78,16 @@ export async function actualizarMediasPhoenix(registros) {
     const context = await browser.newContext(CONTEXT_OPTIONS);
     const page = await context.newPage();
 
-    // Visita "muda" para fijar el idioma español (ver comentario arriba).
-    // Nunca se rellena ni se envía el formulario de login.
-    await page.goto(LOGIN_ES_URL, { waitUntil: "domcontentloaded", timeout: 30000 }).catch(() => {});
+    // Fijar idioma español usando el propio mecanismo de la web (ver
+    // comentario arriba) antes de hacer ninguna búsqueda.
+    await page.goto(HOME_URL, { waitUntil: "domcontentloaded", timeout: 30000 }).catch(() => {});
+    await page.waitForLoadState("networkidle", { timeout: 15000 }).catch(() => {});
+    await page.evaluate(() => {
+      if (typeof changeLocale === "function") changeLocale("es_ES");
+    }).catch(() => {});
+    // changeLocale normalmente recarga o navega la página tras fijar la
+    // cookie de idioma: esperar a que esa navegación termine antes de seguir.
+    await page.waitForLoadState("domcontentloaded", { timeout: 15000 }).catch(() => {});
     await page.waitForLoadState("networkidle", { timeout: 15000 }).catch(() => {});
 
     for (const { id, idExterno } of registros) {

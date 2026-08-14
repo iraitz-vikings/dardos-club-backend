@@ -7,14 +7,17 @@ import { chromium } from "playwright";
 // socio debe guardar como "alias" es su nombre (o parte distintiva de él)
 // tal como aparece en su cuenta de Phoenix Darts.
 
-// Página de login directamente en español. Antes navegábamos a la portada
-// (play.phoenixdarts.com/main.do) y pulsábamos el enlace "LOG-IN" de la
-// cabecera, pero un navegador headless sin cookies recibe la web en INGLÉS
-// por defecto (el enlace se llama "Login", no "LOG-IN", y el resto de la
-// web también cambia de idioma), aunque se indique locale "es-ES" en el
-// contexto. El idioma real depende de un prefijo en la URL, así que vamos
-// directos a la versión en español.
-const LOGIN_URL = "https://account.phoenixdarts.com/es/login";
+// IMPORTANTE: esta página de resultados es PÚBLICA. No hace falta iniciar
+// sesión para consultarla (verificado navegando directamente, sin cookies ni
+// login, y viendo el Rating/PPD/MPR reales de un jugador). De hecho, iniciar
+// sesión es CONTRAPRODUCENTE: si la búsqueda se hace con una sesión ya
+// logueada, y el nombre buscado coincide con el del propio usuario logueado,
+// Phoenix Darts redirige automáticamente a "MI PÁGINA" (el panel personal del
+// usuario logueado) en vez de mostrar la lista de resultados de búsqueda, así
+// que el scraping fallaba precisamente para el propio jugador cuya cuenta se
+// usaba para loguear. Por eso aquí NO se hace login en ningún momento: se
+// navega siempre como visitante anónimo.
+const SEARCH_BASE_URL = "https://play.phoenixdarts.com/selectPlayerList.do";
 
 // Cabecera de navegador "normal": sin esto, algunos sitios sirven una
 // versión distinta de la página (o directamente la bloquean) a un Chromium
@@ -49,11 +52,6 @@ function parsearResultado(texto, alias) {
 
 // registros: [{ id, idExterno }]. Devuelve [{ id, ok, mpr?, ppd?, error? }].
 export async function actualizarMediasPhoenix(registros) {
-  const email = process.env.PHOENIX_DARTS_EMAIL;
-  const password = process.env.PHOENIX_DARTS_PASSWORD;
-  if (!email || !password) {
-    throw new Error("Faltan las variables de entorno PHOENIX_DARTS_EMAIL / PHOENIX_DARTS_PASSWORD");
-  }
   if (registros.length === 0) return [];
 
   const browser = await chromium.launch({ headless: true });
@@ -61,40 +59,10 @@ export async function actualizarMediasPhoenix(registros) {
   try {
     const context = await browser.newContext(CONTEXT_OPTIONS);
     const page = await context.newPage();
-    // "domcontentloaded" en vez de "networkidle": esta web mantiene
-    // conexiones de fondo abiertas y "networkidle" nunca llega a cumplirse,
-    // lo que antes hacía que la propia carga de la página agotara el tiempo
-    // de espera. Se espera la carga de red por separado, sin bloquear.
-    await page.goto(LOGIN_URL, { waitUntil: "domcontentloaded", timeout: 30000 });
-    await page.waitForLoadState("networkidle", { timeout: 15000 }).catch(() => {});
-
-    const campoCuenta = page.getByPlaceholder("Introducir cuenta (Correo electrónico / Número de tarjeta / ID)");
-    try {
-      await campoCuenta.waitFor({ state: "visible", timeout: 30000 });
-    } catch (err) {
-      // Mismo diagnóstico que antes: si el formulario esperado no aparece
-      // (idioma distinto, aviso de cookies, redirección a "ya tienes sesión
-      // guardada", etc.) lo vemos aquí sin tener que mirar logs de Railway.
-      const urlActual = page.url();
-      const titulo = await page.title().catch(() => "?");
-      const texto = await page
-        .locator("body")
-        .innerText()
-        .then((t) => t.slice(0, 300).replace(/\s+/g, " ").trim())
-        .catch(() => "(no se pudo leer el texto)");
-      throw new Error(
-        `No se encontró el formulario de login tras 30s. url=${urlActual} titulo="${titulo}" texto="${texto}"`
-      );
-    }
-    await campoCuenta.fill(email);
-    await page.getByPlaceholder("Introducir contraseña").fill(password);
-    await page.getByRole("button", { name: "Iniciar sesión" }).click();
-    await page.waitForURL(/phoenixdarts\.com\/(main\.do)?$|play\.phoenixdarts\.com/, { timeout: 20000 }).catch(() => {});
-    await page.waitForTimeout(1000);
 
     for (const { id, idExterno } of registros) {
       try {
-        const url = `https://play.phoenixdarts.com/selectPlayerList.do?searchKey=${encodeURIComponent(idExterno)}&unifiedFg=1`;
+        const url = `${SEARCH_BASE_URL}?searchKey=${encodeURIComponent(idExterno)}&unifiedFg=1`;
         await page.goto(url, { waitUntil: "domcontentloaded", timeout: 30000 });
         await page.waitForLoadState("networkidle", { timeout: 10000 }).catch(() => {});
         // La lista de resultados se rellena por JS después de la carga

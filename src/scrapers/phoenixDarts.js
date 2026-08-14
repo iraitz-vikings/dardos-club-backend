@@ -61,7 +61,24 @@ export async function actualizarMediasPhoenix(registros) {
     await page.goto(MAIN_URL, { waitUntil: "domcontentloaded", timeout: 30000 });
     await page.waitForLoadState("networkidle", { timeout: 15000 }).catch(() => {});
     const enlaceLogin = page.getByRole("link", { name: "LOG-IN" }).first();
-    await enlaceLogin.waitFor({ state: "visible", timeout: 30000 });
+    try {
+      await enlaceLogin.waitFor({ state: "visible", timeout: 30000 });
+    } catch (err) {
+      // Diagnóstico: si el enlace no aparece, es útil ver qué ha recibido
+      // realmente el navegador headless (¿bloqueo/geo-detección? ¿aviso de
+      // cookies tapando la página? ¿redirección inesperada?) sin tener que
+      // bucear en los logs de Railway.
+      const urlActual = page.url();
+      const titulo = await page.title().catch(() => "?");
+      const texto = await page
+        .locator("body")
+        .innerText()
+        .then((t) => t.slice(0, 300).replace(/\s+/g, " ").trim())
+        .catch(() => "(no se pudo leer el texto)");
+      throw new Error(
+        `No se encontró el enlace LOG-IN tras 30s. url=${urlActual} titulo="${titulo}" texto="${texto}"`
+      );
+    }
     await enlaceLogin.click();
     await page.waitForURL(/account\.phoenixdarts\.com/, { timeout: 20000 });
     await page.getByPlaceholder("Introducir cuenta (Correo electrónico / Número de tarjeta / ID)").fill(email);

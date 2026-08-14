@@ -397,5 +397,12 @@ model JugadorFabricanteId {
   idExterno    String
   actualizadoEn DateTime  @updatedAt
 
+  // Media/estadísticas obtenidas automáticamente de la web del fabricante
+  // (ver src/scrapers). Nulas hasta la primera actualización correcta.
+  mpr                Float?
+  ppd                Float?
+  statsActualizadoEn DateTime?
+  statsError         String?
+
   @@unique([jugadorId, fabricanteId])
 }

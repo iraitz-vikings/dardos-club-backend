@@ -17,6 +17,16 @@ import { chromium } from "playwright";
 // que el scraping fallaba precisamente para el propio jugador cuya cuenta se
 // usaba para loguear. Por eso aquí NO se hace login en ningún momento: se
 // navega siempre como visitante anónimo.
+//
+// Aun así, una sesión de navegador headless completamente sin cookies recibe
+// esta web en INGLÉS por defecto (a pesar de fijar locale "es-ES" en el
+// contexto, que en teoría debería bastar) — y en inglés, esta URL de
+// resultados de búsqueda muestra la portada genérica de la web en vez de la
+// lista de resultados. Para forzar español sin necesidad de loguearse, se
+// visita primero la página de login en español (sin rellenar el formulario):
+// esa visita dejar fijada una cookie de idioma que luego se respeta en el
+// resto del dominio phoenixdarts.com durante la misma sesión de navegador.
+const LOGIN_ES_URL = "https://account.phoenixdarts.com/es/login";
 const SEARCH_BASE_URL = "https://play.phoenixdarts.com/selectPlayerList.do";
 
 // Cabecera de navegador "normal": sin esto, algunos sitios sirven una
@@ -59,6 +69,11 @@ export async function actualizarMediasPhoenix(registros) {
   try {
     const context = await browser.newContext(CONTEXT_OPTIONS);
     const page = await context.newPage();
+
+    // Visita "muda" para fijar el idioma español (ver comentario arriba).
+    // Nunca se rellena ni se envía el formulario de login.
+    await page.goto(LOGIN_ES_URL, { waitUntil: "domcontentloaded", timeout: 30000 }).catch(() => {});
+    await page.waitForLoadState("networkidle", { timeout: 15000 }).catch(() => {});
 
     for (const { id, idExterno } of registros) {
       try {

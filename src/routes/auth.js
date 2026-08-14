@@ -159,14 +159,36 @@ router.delete("/:id", requireAdmin, async (req, res) => {
   res.status(204).end();
 });
 
-// GET /api/auth/socios - lista completa de socios aprobados, para gestionar roles (admin)
+// GET /api/auth/socios - lista completa de socios aprobados, para gestionar roles
+// (admin). Incluye los IDs de fabricante que cada socio tenga guardados en su
+// perfil, visibles solo aquí (nunca en el directorio público de jugadores).
 router.get("/socios", requireAdmin, async (_req, res) => {
   const socios = await prisma.usuario.findMany({
     where: { aprobado: true },
     orderBy: { nombre: "asc" },
-    select: { id: true, nombre: true, email: true, rol: true, creadoEn: true },
+    select: {
+      id: true,
+      nombre: true,
+      email: true,
+      rol: true,
+      creadoEn: true,
+      jugador: {
+        select: {
+          idsFabricantes: {
+            select: { idExterno: true, fabricante: { select: { nombre: true } } },
+          },
+        },
+      },
+    },
   });
-  res.json(socios);
+  const conIdsFabricantes = socios.map(({ jugador, ...s }) => ({
+    ...s,
+    idsFabricantes: (jugador?.idsFabricantes || []).map((i) => ({
+      nombreFabricante: i.fabricante.nombre,
+      idExterno: i.idExterno,
+    })),
+  }));
+  res.json(conIdsFabricantes);
 });
 
 // PATCH /api/auth/:id/rol - cambia el rol de un socio ya aprobado (admin)

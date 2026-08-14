@@ -34,13 +34,43 @@ router.post("/", requireAdmin, async (req, res) => {
 });
 
 // GET /api/jugadores/directorio - lista pública para socios logueados (sin datos
-// sensibles como el email)
+// sensibles como el email). Incluye las medias (MPR/PPD) de fabricante de cada
+// jugador para poder mostrarlas al hacer clic en su perfil; se omite
+// deliberadamente `statsError` (puede llevar un volcado largo del texto de
+// diagnóstico de la web del fabricante, pensado para depurar el scraper, no
+// para enseñarlo a otros socios).
 router.get("/directorio", requireAuth, async (_req, res) => {
   const jugadores = await prisma.jugador.findMany({
     orderBy: { nombre: "asc" },
-    select: { id: true, nombre: true, apodo: true, avatarUrl: true, bio: true, usuarioId: true },
+    select: {
+      id: true,
+      nombre: true,
+      apodo: true,
+      avatarUrl: true,
+      bio: true,
+      usuarioId: true,
+      idsFabricantes: {
+        select: {
+          idExterno: true,
+          mpr: true,
+          ppd: true,
+          fabricante: { select: { id: true, nombre: true, urlPerfilPlantilla: true } },
+        },
+      },
+    },
   });
-  res.json(jugadores);
+  const resultado = jugadores.map((j) => ({
+    ...j,
+    idsFabricantes: j.idsFabricantes.map((i) => ({
+      fabricanteId: i.fabricante.id,
+      nombreFabricante: i.fabricante.nombre,
+      urlPerfilPlantilla: i.fabricante.urlPerfilPlantilla,
+      idExterno: i.idExterno,
+      mpr: i.mpr,
+      ppd: i.ppd,
+    })),
+  }));
+  res.json(resultado);
 });
 
 // DELETE /api/jugadores/:id - borra un jugador (protegido)

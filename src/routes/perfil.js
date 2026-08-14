@@ -36,6 +36,7 @@ router.get("/", requireAuth, async (req, res) => {
       fabricanteId: i.fabricanteId,
       nombreFabricante: i.fabricante.nombre,
       urlPerfilPlantilla: i.fabricante.urlPerfilPlantilla,
+      logoUrl: i.fabricante.logoUrl,
       idExterno: i.idExterno,
       mpr: i.mpr,
       ppd: i.ppd,

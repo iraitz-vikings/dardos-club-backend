@@ -185,7 +185,7 @@ router.get("/socios", requireAdmin, async (_req, res) => {
               ppdPresencial: true,
               statsActualizadoEn: true,
               statsError: true,
-              fabricante: { select: { nombre: true } },
+              fabricante: { select: { nombre: true, logoUrl: true } },
             },
           },
         },
@@ -196,6 +196,7 @@ router.get("/socios", requireAdmin, async (_req, res) => {
     ...s,
     idsFabricantes: (jugador?.idsFabricantes || []).map((i) => ({
       nombreFabricante: i.fabricante.nombre,
+      logoUrl: i.fabricante.logoUrl,
       idExterno: i.idExterno,
       mpr: i.mpr,
       ppd: i.ppd,

@@ -22,11 +22,15 @@ router.get("/", async (_req, res) => {
 
 // POST /api/fabricantes - da de alta un fabricante nuevo (admin)
 router.post("/", requireAdmin, async (req, res) => {
-  const { nombre, urlPerfilPlantilla } = req.body;
+  const { nombre, urlPerfilPlantilla, logoUrl } = req.body;
   if (!nombre || !nombre.trim()) return res.status(400).json({ error: "Falta el nombre" });
   try {
     const fabricante = await prisma.fabricante.create({
-      data: { nombre: nombre.trim(), urlPerfilPlantilla: urlPerfilPlantilla?.trim() || null },
+      data: {
+        nombre: nombre.trim(),
+        urlPerfilPlantilla: urlPerfilPlantilla?.trim() || null,
+        logoUrl: logoUrl?.trim() || null,
+      },
     });
     res.status(201).json(fabricante);
   } catch {
@@ -34,14 +38,18 @@ router.post("/", requireAdmin, async (req, res) => {
   }
 });
 
-// PATCH /api/fabricantes/:id - edita la URL de perfil de un fabricante ya
-// existente (admin). No toca los alias que los jugadores tengan guardados.
+// PATCH /api/fabricantes/:id - edita la URL de perfil y/o el logo de un
+// fabricante ya existente (admin). No toca los alias que los jugadores
+// tengan guardados.
 router.patch("/:id", requireAdmin, async (req, res) => {
-  const { urlPerfilPlantilla } = req.body;
+  const { urlPerfilPlantilla, logoUrl } = req.body;
   try {
     const fabricante = await prisma.fabricante.update({
       where: { id: req.params.id },
-      data: { urlPerfilPlantilla: urlPerfilPlantilla?.trim() || null },
+      data: {
+        ...(urlPerfilPlantilla !== undefined ? { urlPerfilPlantilla: urlPerfilPlantilla?.trim() || null } : {}),
+        ...(logoUrl !== undefined ? { logoUrl: logoUrl?.trim() || null } : {}),
+      },
     });
     res.json(fabricante);
   } catch {

@@ -34,8 +34,23 @@ import { chromium } from "playwright";
 // origen). Para forzar español de forma fiable sin necesidad de loguearse,
 // se visita primero la portada de play.phoenixdarts.com y se invoca esa
 // misma función directamente antes de hacer ninguna búsqueda.
+//
+// SEGUNDO FILTRO INDEPENDIENTE (encontrado después de arreglar el idioma):
+// la página de resultados tiene además un filtro "Local" (país/región,
+// <select id="searchNation">, con un desplegable de provincias que aparece
+// debajo al elegir un país) que también se rellena por defecto según la IP
+// de origen — en Railway (EEUU) queda en "USA", y como ninguno de nuestros
+// socios juega en EEUU la búsqueda siempre devolvía "Lista de jugadores
+// (0)" aunque el idioma y el nombre buscado fueran correctos. Verificado
+// directamente contra la web: forzando `searchNation=USA` en la URL se
+// reproduce el mismo 0 resultados que en Railway; forzando
+// `searchNation=ES` la búsqueda SÍ encuentra al jugador. A diferencia del
+// idioma, este filtro si se puede fijar como simple parámetro en la URL de
+// búsqueda (es un <form method="get">), sin necesidad de invocar ninguna
+// función JS ni esperar una navegación adicional.
 const HOME_URL = "https://play.phoenixdarts.com/main.do";
 const SEARCH_BASE_URL = "https://play.phoenixdarts.com/selectPlayerList.do";
+const SEARCH_NATION = "ES";
 
 // Cabecera de navegador "normal": sin esto, algunos sitios sirven una
 // versión distinta de la página (o directamente la bloquean) a un Chromium
@@ -101,7 +116,7 @@ export async function actualizarMediasPhoenix(registros) {
 
     for (const { id, idExterno } of registros) {
       try {
-        const url = `${SEARCH_BASE_URL}?searchKey=${encodeURIComponent(idExterno)}&unifiedFg=1`;
+        const url = `${SEARCH_BASE_URL}?searchKey=${encodeURIComponent(idExterno)}&unifiedFg=1&searchNation=${SEARCH_NATION}`;
         try {
           await page.goto(url, { waitUntil: "domcontentloaded", timeout: 30000 });
         } catch (navErr) {

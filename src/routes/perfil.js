@@ -38,6 +38,7 @@ router.get("/", requireAuth, async (req, res) => {
       urlPerfilPlantilla: i.fabricante.urlPerfilPlantilla,
       logoUrl: i.fabricante.logoUrl,
       idExterno: i.idExterno,
+      notaBusqueda: i.notaBusqueda,
       mpr: i.mpr,
       ppd: i.ppd,
       mprVirtual: i.mprVirtual,
@@ -120,8 +121,11 @@ router.put("/", requireAuth, async (req, res) => {
     },
   });
 
-  // idsFabricantes: array de { fabricanteId, idExterno }. Un idExterno vacío
-  // borra el ID guardado para ese fabricante; si no, se crea/actualiza.
+  // idsFabricantes: array de { fabricanteId, idExterno, notaBusqueda }. Un
+  // idExterno vacío borra el ID guardado para ese fabricante; si no, se
+  // crea/actualiza. notaBusqueda es opcional (hoy solo la usa Radikal
+  // Darts, ver comentario en schema.prisma) y se guarda tal cual, incluso
+  // vacía, para poder borrarla si el socio la quita.
   if (Array.isArray(idsFabricantes)) {
     for (const item of idsFabricantes) {
       if (!item?.fabricanteId) continue;
@@ -132,14 +136,15 @@ router.put("/", requireAuth, async (req, res) => {
           .catch(() => {});
         continue;
       }
+      const notaBusqueda = (item.notaBusqueda || "").trim() || null;
       // .catch: si el fabricante fue borrado por un admin entre que el
       // frontend cargó la lista y el socio guardó, ignoramos ese ID en vez
       // de romper el resto del guardado por una violación de FK.
       await prisma.jugadorFabricanteId
         .upsert({
           where: { jugadorId_fabricanteId: { jugadorId: jugador.id, fabricanteId: item.fabricanteId } },
-          update: { idExterno },
-          create: { jugadorId: jugador.id, fabricanteId: item.fabricanteId, idExterno },
+          update: { idExterno, notaBusqueda },
+          create: { jugadorId: jugador.id, fabricanteId: item.fabricanteId, idExterno, notaBusqueda },
         })
         .catch(() => {});
     }

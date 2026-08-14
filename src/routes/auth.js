@@ -177,6 +177,7 @@ router.get("/socios", requireAdmin, async (_req, res) => {
           idsFabricantes: {
             select: {
               idExterno: true,
+              notaBusqueda: true,
               mpr: true,
               ppd: true,
               mprVirtual: true,
@@ -198,6 +199,7 @@ router.get("/socios", requireAdmin, async (_req, res) => {
       nombreFabricante: i.fabricante.nombre,
       logoUrl: i.fabricante.logoUrl,
       idExterno: i.idExterno,
+      notaBusqueda: i.notaBusqueda,
       mpr: i.mpr,
       ppd: i.ppd,
       mprVirtual: i.mprVirtual,

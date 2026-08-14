@@ -1,20 +1,19 @@
 import { PrismaClient } from "@prisma/client";
 import { actualizarMediasConnection } from "./connectionDarts.js";
 import { actualizarMediasPhoenix } from "./phoenixDarts.js";
+import { actualizarMediasRadikal } from "./radikalDarts.js";
 
 const prisma = new PrismaClient();
 
-// Campos de media que puede rellenar un scraper. Phoenix solo devuelve
-// mpr/ppd (una única media); Connection devuelve las 4 variantes Virtual/
-// Presencial. Solo se escriben en la base de datos los campos que el
+// Campos de media que puede rellenar un scraper. Phoenix y Radikal solo
+// devuelven mpr/ppd (una única media); Connection devuelve las 4 variantes
+// Virtual/Presencial. Solo se escriben en la base de datos los campos que el
 // resultado del scraper realmente trae (ver más abajo), para no pisar con
 // null los campos que ese fabricante en concreto nunca rellena.
 const CAMPOS_STATS = ["mpr", "ppd", "mprVirtual", "ppdVirtual", "mprPresencial", "ppdPresencial"];
 
-// Solo estos dos fabricantes tienen scraper automático hecho: Bullshooter es
-// público (se enlaza directamente desde el perfil, sin scraping, por
-// respeto a su robots.txt) y Radikal Darts no tiene ninguna forma de
-// consultar a un jugador cualquiera por su ID, ni pública ni logueado.
+// Bullshooter es público (se enlaza directamente desde el perfil, sin
+// scraping, por respeto a su robots.txt), así que no tiene scraper aquí.
 //
 // "clave" se busca dentro del nombre del fabricante sin distinguir
 // mayúsculas/minúsculas (ej. "Connection", "Connection Darts", "connection"
@@ -23,6 +22,7 @@ const CAMPOS_STATS = ["mpr", "ppd", "mprVirtual", "ppdVirtual", "mprPresencial",
 const SCRAPERS = [
   { etiqueta: "Connection", clave: "connection", scraper: actualizarMediasConnection },
   { etiqueta: "Phoenix", clave: "phoenix", scraper: actualizarMediasPhoenix },
+  { etiqueta: "Radikal", clave: "radikal", scraper: actualizarMediasRadikal },
 ];
 
 // Recorre los fabricantes con scraper, y para cada uno actualiza el
@@ -43,7 +43,7 @@ export async function actualizarTodasLasMedias() {
 
     const registros = await prisma.jugadorFabricanteId.findMany({
       where: { fabricanteId: fabricante.id },
-      select: { id: true, idExterno: true },
+      select: { id: true, idExterno: true, notaBusqueda: true },
     });
 
     if (registros.length === 0) {

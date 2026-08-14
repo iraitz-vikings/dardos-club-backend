@@ -1,6 +1,9 @@
 import express from "express";
 import cors from "cors";
+import cron from "node-cron";
 import "dotenv/config";
+
+import { actualizarTodasLasMedias } from "./scrapers/actualizarMedias.js";
 
 import noticiasRouter from "./routes/noticias.js";
 import torneosRouter from "./routes/torneos.js";
@@ -76,6 +79,17 @@ app.use("/api/competiciones-externas", competicionesExternasRouter);
 app.use("/api/calendario", calendarioRouter);
 
 app.get("/api/health", (_req, res) => res.json({ ok: true }));
+
+// Cada noche a las 04:00 se refrescan las medias de Connection Darts y
+// Phoenix Darts guardadas en los perfiles de los socios (ver
+// src/scrapers/actualizarMedias.js). También se puede lanzar a mano desde
+// el admin con el botón "Actualizar medias".
+cron.schedule("0 4 * * *", () => {
+  console.log("Actualizando medias de fabricantes (cron nocturno)...");
+  actualizarTodasLasMedias()
+    .then((resumen) => console.log("Medias actualizadas:", resumen))
+    .catch((err) => console.error("Error actualizando medias:", err));
+});
 
 const PORT = process.env.PORT || 3000;
 app.listen(PORT, () => console.log(`API escuchando en puerto ${PORT}`));

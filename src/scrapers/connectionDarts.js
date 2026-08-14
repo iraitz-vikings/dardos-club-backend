@@ -64,12 +64,35 @@ export async function actualizarMediasConnection(registros) {
     // Tras loguear, la app redirige fuera de /login (a /dashboard u otra
     // sección). Si no lo hace en 20s asumimos que el login ha fallado.
     await page.waitForFunction(() => !location.hash.includes("/login"), null, { timeout: 20000 });
+    // Dar un margen extra a la SPA para terminar de asentar la sesión (token,
+    // estado de usuario, etc.) antes de navegar a otra sección: navegar
+    // demasiado rápido tras el cambio de hash podía interrumpir ese proceso
+    // y hacer que la app nos devolviera a /login al pedir "Comunidad".
+    await page.waitForLoadState("networkidle", { timeout: 10000 }).catch(() => {});
+    await page.waitForTimeout(1500);
 
     for (const { id, idExterno } of registros) {
       try {
         await page.goto(COMUNIDAD_URL, { waitUntil: "domcontentloaded", timeout: 30000 });
         await page.waitForLoadState("networkidle", { timeout: 10000 }).catch(() => {});
         const buscador = page.getByPlaceholder(BUSCADOR_PLACEHOLDER);
+        try {
+          await buscador.waitFor({ state: "visible", timeout: 15000 });
+        } catch (err) {
+          // Diagnóstico: mismo patrón que en Phoenix. Si el buscador no
+          // aparece, lo más probable es que la app nos haya devuelto a
+          // /login (sesión no reconocida) u otra pantalla inesperada.
+          const hashActual = await page.evaluate(() => location.hash).catch(() => "?");
+          const titulo = await page.title().catch(() => "?");
+          const texto = await page
+            .locator("body")
+            .innerText()
+            .then((t) => t.slice(0, 300).replace(/\s+/g, " ").trim())
+            .catch(() => "(no se pudo leer el texto)");
+          throw new Error(
+            `No se encontró el buscador de Comunidad tras 15s. hash=${hashActual} titulo="${titulo}" texto="${texto}"`
+          );
+        }
         await buscador.fill(idExterno);
         await page.locator(`input[placeholder="${BUSCADOR_PLACEHOLDER}"] + button`).click();
         await page.waitForTimeout(700);

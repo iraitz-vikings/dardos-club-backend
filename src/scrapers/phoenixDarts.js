@@ -97,10 +97,25 @@ export async function actualizarMediasPhoenix(registros) {
         const url = `https://play.phoenixdarts.com/selectPlayerList.do?searchKey=${encodeURIComponent(idExterno)}&unifiedFg=1`;
         await page.goto(url, { waitUntil: "domcontentloaded", timeout: 30000 });
         await page.waitForLoadState("networkidle", { timeout: 10000 }).catch(() => {});
+        // La lista de resultados se rellena por JS después de la carga
+        // inicial (llamadas de fondo); esperar a que aparezca su cabecera
+        // antes de leer el texto, para no leer la página a medio cargar.
+        await page
+          .getByText("Lista de jugadores", { exact: false })
+          .waitFor({ state: "visible", timeout: 10000 })
+          .catch(() => {});
         const texto = await page.locator("body").innerText();
         const encontrado = parsearResultado(texto, idExterno);
         if (!encontrado) {
-          resultados.push({ id, ok: false, error: "Nombre no encontrado en Phoenix Darts" });
+          // Diagnóstico: si no encontramos coincidencia, guardar un trozo del
+          // texto real recibido para poder ver, sin mirar logs de Railway, si
+          // el nombre aparece con otro formato, si la lista salió vacía, etc.
+          const snippet = texto.replace(/\s+/g, " ").trim().slice(0, 600);
+          resultados.push({
+            id,
+            ok: false,
+            error: `Nombre no encontrado en Phoenix Darts. texto="${snippet}"`,
+          });
           continue;
         }
         resultados.push({ id, ok: true, mpr: encontrado.mpr, ppd: encontrado.ppd });

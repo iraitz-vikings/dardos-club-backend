@@ -4,6 +4,13 @@ import { actualizarMediasPhoenix } from "./phoenixDarts.js";
 
 const prisma = new PrismaClient();
 
+// Campos de media que puede rellenar un scraper. Phoenix solo devuelve
+// mpr/ppd (una única media); Connection devuelve las 4 variantes Virtual/
+// Presencial. Solo se escriben en la base de datos los campos que el
+// resultado del scraper realmente trae (ver más abajo), para no pisar con
+// null los campos que ese fabricante en concreto nunca rellena.
+const CAMPOS_STATS = ["mpr", "ppd", "mprVirtual", "ppdVirtual", "mprPresencial", "ppdPresencial"];
+
 // Solo estos dos fabricantes tienen scraper automático hecho: Bullshooter es
 // público (se enlaza directamente desde el perfil, sin scraping, por
 // respeto a su robots.txt) y Radikal Darts no tiene ninguna forma de
@@ -55,9 +62,13 @@ export async function actualizarTodasLasMedias() {
         // resultados ya obtenidos de este fabricante.
         if (r.ok) {
           try {
+            const datosStats = {};
+            for (const campo of CAMPOS_STATS) {
+              if (campo in r) datosStats[campo] = r[campo] ?? null;
+            }
             await prisma.jugadorFabricanteId.update({
               where: { id: r.id },
-              data: { mpr: r.mpr ?? null, ppd: r.ppd ?? null, statsActualizadoEn: new Date(), statsError: null },
+              data: { ...datosStats, statsActualizadoEn: new Date(), statsError: null },
             });
             actualizados++;
           } catch {

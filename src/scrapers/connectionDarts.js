@@ -75,6 +75,17 @@ export async function actualizarMediasConnection(registros) {
       try {
         await page.goto(COMUNIDAD_URL, { waitUntil: "domcontentloaded", timeout: 30000 });
         await page.waitForLoadState("networkidle", { timeout: 10000 }).catch(() => {});
+        // "Comunidad" abre por defecto en la pestaña "Social Feed" (posts,
+        // recomendaciones...); el buscador de jugadores por alias está en la
+        // pestaña "Buscar" de la barra inferior, hay que pulsarla primero.
+        const pestanaBuscar = page
+          .getByRole("button", { name: "Buscar", exact: true })
+          .or(page.getByRole("link", { name: "Buscar", exact: true }))
+          .or(page.getByText("Buscar", { exact: true }));
+        await pestanaBuscar
+          .first()
+          .click({ timeout: 10000 })
+          .catch(() => {});
         const buscador = page.getByPlaceholder(BUSCADOR_PLACEHOLDER);
         try {
           await buscador.waitFor({ state: "visible", timeout: 15000 });

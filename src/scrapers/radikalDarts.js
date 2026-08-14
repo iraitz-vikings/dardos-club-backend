@@ -77,8 +77,8 @@ import { chromium } from "playwright";
 // Darts antes de navegar: el formulario de login vive en la home
 // (https://esp.radikalplayers.com/), con campos input[name="dni"] (el
 // "Radikal ID", no un DNI de verdad) e input[name="clave"] (contraseña).
-// Las credenciales se leen de las variables de entorno RADIKAL_ID y
-// RADIKAL_PASSWORD (a configurar en Railway); si no están puestas, o el
+// Las credenciales se leen de las variables de entorno RADIKAL_DARTS_ID y
+// RADIKAL_DARTS_PASSWORD (a configurar en Railway); si no están puestas, o el
 // login falla, se devuelve un error explicando qué falta en vez de intentar
 // scrapear sin sesión (que fallaría igualmente en el paso de la ficha).
 
@@ -93,13 +93,13 @@ const CONTEXT_OPTIONS = {
   locale: "es-ES",
 };
 
-// Inicia sesión en Radikal Darts con las credenciales de RADIKAL_ID /
-// RADIKAL_PASSWORD (variables de entorno). Devuelve true si el login se
+// Inicia sesión en Radikal Darts con las credenciales de RADIKAL_DARTS_ID /
+// RADIKAL_DARTS_PASSWORD (variables de entorno). Devuelve true si el login se
 // pudo confirmar (aparece "Cerrar sesión" en la página), false si faltan
 // credenciales o el login no se pudo confirmar.
 async function iniciarSesionRadikal(page) {
-  const radikalId = (process.env.RADIKAL_ID || "").trim();
-  const radikalPassword = process.env.RADIKAL_PASSWORD || "";
+  const radikalId = (process.env.RADIKAL_DARTS_ID || "").trim();
+  const radikalPassword = process.env.RADIKAL_DARTS_PASSWORD || "";
   if (!radikalId || !radikalPassword) return false;
 
   await page.goto(HOME_URL, { waitUntil: "domcontentloaded", timeout: 30000 });
@@ -302,12 +302,12 @@ export async function actualizarMediasRadikal(registros) {
     // sesión iniciada: sin login no tiene sentido intentar nada más.
     const logueado = await iniciarSesionRadikal(page);
     if (!logueado) {
-      const radikalIdConfigurado = !!(process.env.RADIKAL_ID || "").trim();
-      const radikalPasswordConfigurado = !!process.env.RADIKAL_PASSWORD;
+      const radikalIdConfigurado = !!(process.env.RADIKAL_DARTS_ID || "").trim();
+      const radikalPasswordConfigurado = !!process.env.RADIKAL_DARTS_PASSWORD;
       const error =
         radikalIdConfigurado && radikalPasswordConfigurado
-          ? "No se pudo iniciar sesión en Radikal Darts con las credenciales configuradas (RADIKAL_ID / RADIKAL_PASSWORD). Revisa que sigan siendo correctas en Railway."
-          : "Radikal Darts exige tener sesión iniciada para leer la media real de un jugador. Falta configurar las variables de entorno RADIKAL_ID y RADIKAL_PASSWORD (una cuenta de Radikal Darts) en el servidor.";
+          ? "No se pudo iniciar sesión en Radikal Darts con las credenciales configuradas (RADIKAL_DARTS_ID / RADIKAL_DARTS_PASSWORD). Revisa que sigan siendo correctas en Railway."
+          : "Radikal Darts exige tener sesión iniciada para leer la media real de un jugador. Falta configurar las variables de entorno RADIKAL_DARTS_ID y RADIKAL_DARTS_PASSWORD (una cuenta de Radikal Darts) en el servidor.";
       for (const { id } of conTorneo) resultados.push({ id, ok: false, error });
       return resultados;
     }

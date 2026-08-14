@@ -1,5 +1,6 @@
 import { Router } from "express";
 import { PrismaClient } from "@prisma/client";
+import { actualizarTodasLasMedias } from "../scrapers/actualizarMedias.js";
 
 const prisma = new PrismaClient();
 const router = Router();
@@ -33,11 +34,40 @@ router.post("/", requireAdmin, async (req, res) => {
   }
 });
 
+// PATCH /api/fabricantes/:id - edita la URL de perfil de un fabricante ya
+// existente (admin). No toca los alias que los jugadores tengan guardados.
+router.patch("/:id", requireAdmin, async (req, res) => {
+  const { urlPerfilPlantilla } = req.body;
+  try {
+    const fabricante = await prisma.fabricante.update({
+      where: { id: req.params.id },
+      data: { urlPerfilPlantilla: urlPerfilPlantilla?.trim() || null },
+    });
+    res.json(fabricante);
+  } catch {
+    res.status(404).json({ error: "Fabricante no encontrado" });
+  }
+});
+
 // DELETE /api/fabricantes/:id - borra un fabricante (admin). Al borrarlo se
 // borran también los IDs que los jugadores tuvieran guardados para él.
 router.delete("/:id", requireAdmin, async (req, res) => {
   await prisma.fabricante.delete({ where: { id: req.params.id } }).catch(() => {});
   res.status(204).end();
+});
+
+// POST /api/fabricantes/actualizar-medias - lanza a mano la consulta de
+// medias/estadísticas en las webs de los fabricantes que tienen scraper
+// (Connection Darts y Phoenix Darts; ver src/scrapers). También se ejecuta
+// sola cada noche (ver el cron en index.js). Puede tardar bastante si hay
+// muchos socios, porque consulta jugador a jugador.
+router.post("/actualizar-medias", requireAdmin, async (_req, res) => {
+  try {
+    const resumen = await actualizarTodasLasMedias();
+    res.json(resumen);
+  } catch (err) {
+    res.status(500).json({ error: err.message || "No se pudo actualizar las medias" });
+  }
 });
 
 export default router;

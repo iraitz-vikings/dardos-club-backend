@@ -175,7 +175,14 @@ router.get("/socios", requireAdmin, async (_req, res) => {
       jugador: {
         select: {
           idsFabricantes: {
-            select: { idExterno: true, fabricante: { select: { nombre: true } } },
+            select: {
+              idExterno: true,
+              mpr: true,
+              ppd: true,
+              statsActualizadoEn: true,
+              statsError: true,
+              fabricante: { select: { nombre: true } },
+            },
           },
         },
       },
@@ -186,6 +193,10 @@ router.get("/socios", requireAdmin, async (_req, res) => {
     idsFabricantes: (jugador?.idsFabricantes || []).map((i) => ({
       nombreFabricante: i.fabricante.nombre,
       idExterno: i.idExterno,
+      mpr: i.mpr,
+      ppd: i.ppd,
+      statsActualizadoEn: i.statsActualizadoEn,
+      statsError: i.statsError,
     })),
   }));
   res.json(conIdsFabricantes);

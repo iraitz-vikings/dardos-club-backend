@@ -37,6 +37,10 @@ router.get("/", requireAuth, async (req, res) => {
       nombreFabricante: i.fabricante.nombre,
       urlPerfilPlantilla: i.fabricante.urlPerfilPlantilla,
       idExterno: i.idExterno,
+      mpr: i.mpr,
+      ppd: i.ppd,
+      statsActualizadoEn: i.statsActualizadoEn,
+      statsError: i.statsError,
     })),
   });
 });

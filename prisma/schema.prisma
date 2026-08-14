@@ -398,12 +398,22 @@ model JugadorFabricanteId {
   idExterno    String
   actualizadoEn DateTime  @updatedAt
 
+  // Pista de búsqueda opcional, más allá del alias, para fabricantes cuyo
+  // scraper la necesita para poder localizar al jugador. Hoy solo la usa
+  // Radikal Darts: no existe ningún buscador general de jugadores en su web,
+  // pero cada competición/torneo sí tiene una página de clasificación
+  // pública con el alias y la media de cada participante — aquí se guarda el
+  // nombre de un torneo en el que el jugador haya participado, para que el
+  // scraper sepa en qué clasificación buscarlo.
+  notaBusqueda String?
+
   // Media/estadísticas obtenidas automáticamente de la web del fabricante
   // (ver src/scrapers). Nulas hasta la primera actualización correcta.
-  // mpr/ppd: media única (así la da Phoenix Darts). mpr/ppd Virtual y
-  // Presencial: Connection Darts distingue esas dos medias por separado; se
-  // guardan en columnas aparte en vez de reutilizar mpr/ppd para no mezclar
-  // ambos significados en un mismo par de campos.
+  // mpr/ppd: media única (así la da Phoenix Darts, y también Radikal Darts
+  // por torneo). mpr/ppd Virtual y Presencial: Connection Darts distingue
+  // esas dos medias por separado; se guardan en columnas aparte en vez de
+  // reutilizar mpr/ppd para no mezclar ambos significados en un mismo par de
+  // campos.
   mpr                Float?
   ppd                Float?
   mprVirtual         Float?

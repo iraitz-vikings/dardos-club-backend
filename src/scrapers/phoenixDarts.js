@@ -7,7 +7,14 @@ import { chromium } from "playwright";
 // socio debe guardar como "alias" es su nombre (o parte distintiva de él)
 // tal como aparece en su cuenta de Phoenix Darts.
 
-const MAIN_URL = "https://play.phoenixdarts.com/main.do";
+// Página de login directamente en español. Antes navegábamos a la portada
+// (play.phoenixdarts.com/main.do) y pulsábamos el enlace "LOG-IN" de la
+// cabecera, pero un navegador headless sin cookies recibe la web en INGLÉS
+// por defecto (el enlace se llama "Login", no "LOG-IN", y el resto de la
+// web también cambia de idioma), aunque se indique locale "es-ES" en el
+// contexto. El idioma real depende de un prefijo en la URL, así que vamos
+// directos a la versión en español.
+const LOGIN_URL = "https://account.phoenixdarts.com/es/login";
 
 // Cabecera de navegador "normal": sin esto, algunos sitios sirven una
 // versión distinta de la página (o directamente la bloquean) a un Chromium
@@ -58,16 +65,16 @@ export async function actualizarMediasPhoenix(registros) {
     // conexiones de fondo abiertas y "networkidle" nunca llega a cumplirse,
     // lo que antes hacía que la propia carga de la página agotara el tiempo
     // de espera. Se espera la carga de red por separado, sin bloquear.
-    await page.goto(MAIN_URL, { waitUntil: "domcontentloaded", timeout: 30000 });
+    await page.goto(LOGIN_URL, { waitUntil: "domcontentloaded", timeout: 30000 });
     await page.waitForLoadState("networkidle", { timeout: 15000 }).catch(() => {});
-    const enlaceLogin = page.getByRole("link", { name: "LOG-IN" }).first();
+
+    const campoCuenta = page.getByPlaceholder("Introducir cuenta (Correo electrónico / Número de tarjeta / ID)");
     try {
-      await enlaceLogin.waitFor({ state: "visible", timeout: 30000 });
+      await campoCuenta.waitFor({ state: "visible", timeout: 30000 });
     } catch (err) {
-      // Diagnóstico: si el enlace no aparece, es útil ver qué ha recibido
-      // realmente el navegador headless (¿bloqueo/geo-detección? ¿aviso de
-      // cookies tapando la página? ¿redirección inesperada?) sin tener que
-      // bucear en los logs de Railway.
+      // Mismo diagnóstico que antes: si el formulario esperado no aparece
+      // (idioma distinto, aviso de cookies, redirección a "ya tienes sesión
+      // guardada", etc.) lo vemos aquí sin tener que mirar logs de Railway.
       const urlActual = page.url();
       const titulo = await page.title().catch(() => "?");
       const texto = await page
@@ -76,12 +83,10 @@ export async function actualizarMediasPhoenix(registros) {
         .then((t) => t.slice(0, 300).replace(/\s+/g, " ").trim())
         .catch(() => "(no se pudo leer el texto)");
       throw new Error(
-        `No se encontró el enlace LOG-IN tras 30s. url=${urlActual} titulo="${titulo}" texto="${texto}"`
+        `No se encontró el formulario de login tras 30s. url=${urlActual} titulo="${titulo}" texto="${texto}"`
       );
     }
-    await enlaceLogin.click();
-    await page.waitForURL(/account\.phoenixdarts\.com/, { timeout: 20000 });
-    await page.getByPlaceholder("Introducir cuenta (Correo electrónico / Número de tarjeta / ID)").fill(email);
+    await campoCuenta.fill(email);
     await page.getByPlaceholder("Introducir contraseña").fill(password);
     await page.getByRole("button", { name: "Iniciar sesión" }).click();
     await page.waitForURL(/phoenixdarts\.com\/(main\.do)?$|play\.phoenixdarts\.com/, { timeout: 20000 }).catch(() => {});

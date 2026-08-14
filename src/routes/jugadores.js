@@ -54,6 +54,10 @@ router.get("/directorio", requireAuth, async (_req, res) => {
           idExterno: true,
           mpr: true,
           ppd: true,
+          mprVirtual: true,
+          ppdVirtual: true,
+          mprPresencial: true,
+          ppdPresencial: true,
           fabricante: { select: { id: true, nombre: true, urlPerfilPlantilla: true } },
         },
       },
@@ -68,6 +72,10 @@ router.get("/directorio", requireAuth, async (_req, res) => {
       idExterno: i.idExterno,
       mpr: i.mpr,
       ppd: i.ppd,
+      mprVirtual: i.mprVirtual,
+      ppdVirtual: i.ppdVirtual,
+      mprPresencial: i.mprPresencial,
+      ppdPresencial: i.ppdPresencial,
     })),
   }));
   res.json(resultado);

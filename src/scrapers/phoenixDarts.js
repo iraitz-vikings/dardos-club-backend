@@ -98,19 +98,28 @@ export async function actualizarMediasPhoenix(registros) {
         await page.goto(url, { waitUntil: "domcontentloaded", timeout: 30000 });
         await page.waitForLoadState("networkidle", { timeout: 10000 }).catch(() => {});
         // La lista de resultados se rellena por JS después de la carga
-        // inicial (llamadas de fondo); esperar a que aparezca su cabecera
-        // antes de leer el texto, para no leer la página a medio cargar.
+        // inicial (llamadas de fondo, probablemente AJAX): esperar primero a
+        // la cabecera "Lista de jugadores" y LUEGO, por separado, a que el
+        // propio nombre buscado aparezca en la página — la cabecera puede
+        // salir antes de que la fila del jugador termine de renderizarse.
         await page
           .getByText("Lista de jugadores", { exact: false })
           .waitFor({ state: "visible", timeout: 10000 })
+          .catch(() => {});
+        await page
+          .getByText(idExterno, { exact: false })
+          .first()
+          .waitFor({ state: "visible", timeout: 8000 })
           .catch(() => {});
         const texto = await page.locator("body").innerText();
         const encontrado = parsearResultado(texto, idExterno);
         if (!encontrado) {
           // Diagnóstico: si no encontramos coincidencia, guardar un trozo del
-          // texto real recibido para poder ver, sin mirar logs de Railway, si
-          // el nombre aparece con otro formato, si la lista salió vacía, etc.
-          const snippet = texto.replace(/\s+/g, " ").trim().slice(0, 600);
+          // texto real recibido (más largo que antes, para llegar a la
+          // sección "Lista de jugadores" que sale bastante abajo en la
+          // página) para ver, sin mirar logs de Railway, si el nombre
+          // aparece con otro formato, si la lista salió vacía, etc.
+          const snippet = texto.replace(/\s+/g, " ").trim().slice(0, 1800);
           resultados.push({
             id,
             ok: false,

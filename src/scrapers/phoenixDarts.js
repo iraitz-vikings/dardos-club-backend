@@ -79,21 +79,39 @@ export async function actualizarMediasPhoenix(registros) {
     const page = await context.newPage();
 
     // Fijar idioma español usando el propio mecanismo de la web (ver
-    // comentario arriba) antes de hacer ninguna búsqueda.
+    // comentario arriba) antes de hacer ninguna búsqueda. changeLocale()
+    // dispara su propia navegación (recarga/redirección) para aplicar el
+    // cambio: hay que esperar ESA navegación con waitForNavigation en vez de
+    // solo waitForLoadState, porque si el siguiente page.goto() (la primera
+    // búsqueda) se lanza mientras esa navegación interna sigue en curso, el
+    // navegador la aborta con net::ERR_ABORTED.
     await page.goto(HOME_URL, { waitUntil: "domcontentloaded", timeout: 30000 }).catch(() => {});
     await page.waitForLoadState("networkidle", { timeout: 15000 }).catch(() => {});
-    await page.evaluate(() => {
-      if (typeof changeLocale === "function") changeLocale("es_ES");
-    }).catch(() => {});
-    // changeLocale normalmente recarga o navega la página tras fijar la
-    // cookie de idioma: esperar a que esa navegación termine antes de seguir.
-    await page.waitForLoadState("domcontentloaded", { timeout: 15000 }).catch(() => {});
+    await Promise.all([
+      page.waitForNavigation({ waitUntil: "domcontentloaded", timeout: 15000 }).catch(() => {}),
+      page
+        .evaluate(() => {
+          if (typeof changeLocale === "function") changeLocale("es_ES");
+        })
+        .catch(() => {}),
+    ]);
     await page.waitForLoadState("networkidle", { timeout: 15000 }).catch(() => {});
+    // Margen extra por si la navegación anterior todavía está asentándose.
+    await page.waitForTimeout(1000);
 
     for (const { id, idExterno } of registros) {
       try {
         const url = `${SEARCH_BASE_URL}?searchKey=${encodeURIComponent(idExterno)}&unifiedFg=1`;
-        await page.goto(url, { waitUntil: "domcontentloaded", timeout: 30000 });
+        try {
+          await page.goto(url, { waitUntil: "domcontentloaded", timeout: 30000 });
+        } catch (navErr) {
+          // Reintento único: si la navegación fue abortada (p.ej. por otra
+          // navegación aún en curso en la página), esperar un momento y
+          // volver a intentarlo antes de darlo por fallido.
+          if (!/ERR_ABORTED/i.test(navErr.message || "")) throw navErr;
+          await page.waitForTimeout(1500);
+          await page.goto(url, { waitUntil: "domcontentloaded", timeout: 30000 });
+        }
         await page.waitForLoadState("networkidle", { timeout: 10000 }).catch(() => {});
         // La lista de resultados se rellena por JS después de la carga
         // inicial (llamadas de fondo, probablemente AJAX): esperar primero a

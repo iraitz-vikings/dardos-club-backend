@@ -399,8 +399,16 @@ model JugadorFabricanteId {
 
   // Media/estadísticas obtenidas automáticamente de la web del fabricante
   // (ver src/scrapers). Nulas hasta la primera actualización correcta.
+  // mpr/ppd: media única (así la da Phoenix Darts). mpr/ppd Virtual y
+  // Presencial: Connection Darts distingue esas dos medias por separado; se
+  // guardan en columnas aparte en vez de reutilizar mpr/ppd para no mezclar
+  // ambos significados en un mismo par de campos.
   mpr                Float?
   ppd                Float?
+  mprVirtual         Float?
+  ppdVirtual         Float?
+  mprPresencial      Float?
+  ppdPresencial      Float?
   statsActualizadoEn DateTime?
   statsError         String?
 

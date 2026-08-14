@@ -3,22 +3,31 @@ import { chromium } from "playwright";
 // Scraper de Radikal Darts (radikalplayers.com). A diferencia de Connection
 // y Phoenix, aquí NO existe ningún buscador general de jugadores por alias:
 // confirmado que no hay forma (pública ni logueada) de consultar a un
-// jugador cualquiera. Lo que SÍ existe es una página de "Clasificación"
-// pública por CADA competición, con una tabla de Alias + media de todos sus
-// participantes — pero el formato de esa tabla depende del TIPO de
-// competición, comprobado navegando de verdad la web:
-//   - CAMPEONATO / TORNEO: "Clasificación General" ya es individual, con
-//     columnas Alias + (PPD o MPR, según el juego) directamente.
-//   - LIGA: "Clasificación General" es por EQUIPOS (columnas Equipo/PJ/PG/…,
-//     sin Alias). Hay un botón "Clasificación Individual" que sí lista Alias,
-//     pero su columna de media es "HCP" (hándicap de liga), NO PPD ni MPR.
-//     Es decir: una Liga nunca puede rellenar el PPD/MPR del socio, por
-//     mucho que se la busque bien. Si el socio indica una Liga, el scraper
-//     lo detecta y devuelve un error explicándolo (ver más abajo), en vez de
-//     fallar en silencio o guardar un HCP como si fuera un PPD/MPR.
+// jugador cualquiera directamente. Lo que SÍ existe es una página de
+// "Clasificación" pública por CADA competición, con una tabla de Alias de
+// todos sus participantes — y esa tabla enlaza el Alias de cada uno a su
+// FICHA DE JUGADOR real (competiciones3.php), que es la que tiene su
+// PPD/MPR de verdad.
+//
+// OJO — corregido tras una prueba real de Iraitz con capturas de pantalla:
+// el valor de MPR/PPD que aparece EN LA PROPIA TABLA de clasificación (o el
+// "HCP" que muestra la Clasificación Individual de una Liga) es una cifra
+// concreta de ESA competición, no la media real del jugador. La media real
+// (la que también se ve en su ficha, sección "Usuario") solo se obtiene
+// entrando en la ficha del jugador hacienda click en su Alias. Por eso el
+// scraper NO lee ninguna columna de la tabla de clasificación aparte de
+// Alias: la usa solo para encontrar el enlace a la ficha del jugador, y lee
+// el PPD/MPR de esa ficha.
+//
+// Esto además simplifica el caso Liga: antes se pensaba que una Liga nunca
+// podía dar PPD/MPR (su Clasificación Individual solo muestra HCP) y se
+// rechazaba con un error. Eso era un malentendido — el Alias de esa misma
+// tabla SÍ enlaza a la ficha real del jugador con su PPD/MPR, exactamente
+// igual que en un Torneo o Campeonato. Así que ya no se distingue por tipo
+// de competición.
 //
 // Por eso, para Radikal, el socio guarda además de su alias una
-// "notaBusqueda": el nombre de un torneo/campeonato en el que haya
+// "notaBusqueda": el nombre de un torneo/liga/campeonato en el que haya
 // participado (tal como aparece en radikalplayers.com, ej. "EL-033 Julio").
 // El scraper:
 //   1. Escribe ese nombre en el campo de búsqueda de competiciones.php
@@ -32,20 +41,31 @@ import { chromium } from "playwright";
 //      general de todas las competiciones (por país/provincia/tipo/fecha),
 //      no busca por nombre; y además es un <input type="button"> cuyo texto
 //      vive en el atributo value, así que ni siquiera lo encontraría un
-//      getByText.
+//      getByText. El autocompletado además engancha su búsqueda al evento de
+//      teclado de cada pulsación, no al valor final del campo: hay que
+//      escribir con pressSequentially (fill() no lo dispara).
 //   2. Hace click en el resultado del autocompletado que coincida
 //      (preferentemente exacto, ignorando el prefijo "LIGA:"/etc.; si no,
 //      el primero de la lista), lo que navega directamente a la página de
 //      Clasificación de esa competición.
-//   3. Busca, entre las tablas de esa página, la que tenga columnas Alias +
-//      (PPD o MPR). Si la que se ve por defecto no la tiene (caso Liga, con
-//      la tabla de equipos) pero existe un botón "Clasificación Individual",
-//      lo pulsa y lo vuelve a intentar. Si aun así no aparece una columna de
-//      PPD/MPR (Liga con solo HCP), se informa al socio con un error claro.
-//   4. Recorre la tabla (y sus páginas siguientes, si está paginada)
-//      buscando la fila cuyo Alias coincide con el del jugador, y guarda el
-//      valor en el campo correspondiente (mpr/ppd, reutilizando los mismos
-//      campos que usa Phoenix Darts para su media única).
+//   3. Busca, entre las tablas de esa página, la que tenga una columna
+//      Alias. Si la que se ve por defecto no la tiene (caso Liga: la
+//      "Clasificación General" por defecto es de EQUIPOS, sin Alias) pero
+//      existe un botón "Clasificación Individual", lo pulsa y lo vuelve a
+//      intentar.
+//   4. Recorre esa tabla (y sus páginas siguientes, si está paginada)
+//      buscando la fila cuyo Alias coincide con el del jugador, y hace click
+//      en el enlace de ese Alias — lo que navega a su ficha de jugador
+//      (competiciones3.php).
+//   5. En esa ficha, lee su tarjeta "Usuario" (con su PPD y su MPR reales,
+//      cada uno con 3 posibles categorías "aa"/"ae"/"bb" según modalidad de
+//      juego — se coge la primera con valor distinto de 0, o "aa" si todas
+//      son 0). OJO: esa misma tarjeta con clase ".puntajes" aparece DOS
+//      veces en la página — una en la barra lateral izquierda (el propio
+//      usuario logueado del club, irrelevante) y otra en el cuerpo central
+//      (el jugador cuya ficha se está viendo, la que interesa). Se
+//      distinguen por el contenedor: la de la barra lateral cuelga de
+//      "#left", la del cuerpo no.
 //
 // Login: NO hace falta. Comprobado con una petición sin cookies de sesión a
 // una página de Clasificación real: el HTML devuelto ya incluye la tabla
@@ -69,43 +89,22 @@ function quitarPrefijoTipo(texto) {
   return texto.replace(/^(LIGA|TORNEO|CAMPEONATO)\s*:\s*/i, "").trim();
 }
 
-// Recorre TODAS las tablas de la página actual buscando la que tenga
-// columnas Alias + (PPD o MPR) en su cabecera (primera fila). Devuelve el
-// locator de esa tabla y los índices de columna, o null si ninguna tabla de
-// esta página es la individual-con-media (típicamente porque es la
-// clasificación por Equipos de una Liga).
-async function detectarTablaConMedia(page) {
+// Busca, entre TODAS las tablas de la página actual, la que tenga una
+// columna "Alias" en su cabecera (primera fila). Devuelve el locator de esa
+// tabla y el índice de esa columna, o null si ninguna tabla de esta página
+// tiene Alias (típicamente porque es la clasificación por Equipos de una
+// Liga, antes de pulsar "Clasificación Individual").
+async function localizarTablaConAlias(page) {
   const tablas = await page.locator("table").all();
   for (const tabla of tablas) {
     const cabeceras = await tabla.locator("tr").first().locator("th, td").allTextContents().catch(() => []);
     const idxAlias = cabeceras.findIndex((c) => /alias/i.test(c));
-    const idxPpd = cabeceras.findIndex((c) => /^ppd$/i.test(c.trim()));
-    const idxMpr = cabeceras.findIndex((c) => /^mpr$/i.test(c.trim()));
-    if (idxAlias !== -1 && (idxPpd !== -1 || idxMpr !== -1)) {
-      return { tabla, idxAlias, idxPpd, idxMpr };
-    }
+    if (idxAlias !== -1) return { tabla, idxAlias };
   }
   return null;
 }
 
-// Busca, dentro de una tabla ya localizada (ver detectarTablaConMedia), la
-// fila cuyo Alias coincide (sin distinguir mayúsculas/minúsculas) con el
-// alias buscado. Devuelve { mpr, ppd } o null si no está en esta página.
-async function buscarEnTabla(tabla, aliasBuscado, idxAlias, idxPpd, idxMpr) {
-  const filas = await tabla.locator("tr").all();
-  for (const fila of filas) {
-    const celdas = await fila.locator("td").allTextContents();
-    if (celdas.length <= idxAlias) continue;
-    if (celdas[idxAlias].trim().toUpperCase() !== aliasBuscado.trim().toUpperCase()) continue;
-    const valorTexto = idxPpd !== -1 ? celdas[idxPpd] : celdas[idxMpr];
-    const valor = parseFloat((valorTexto || "").replace(",", ".").trim());
-    if (Number.isNaN(valor)) continue;
-    return idxPpd !== -1 ? { ppd: valor, mpr: null } : { ppd: null, mpr: valor };
-  }
-  return null;
-}
-
-// Busca el nombre de torneo/campeonato en el autocompletado de
+// Busca el nombre de torneo/liga/campeonato en el autocompletado de
 // competiciones.php y navega a su página de Clasificación. Lanza si no
 // encuentra ningún resultado.
 async function irAClasificacionDeCompeticion(page, notaBusqueda) {
@@ -123,13 +122,9 @@ async function irAClasificacionDeCompeticion(page, notaBusqueda) {
   const buscador = page.locator("#competicion_a_buscar");
   await buscador.waitFor({ state: "visible", timeout: 10000 });
   await buscador.click();
-  // OJO: el autocompletado (jQuery UI) engancha su búsqueda al evento
-  // keydown/keyup de cada tecla, no al valor final del campo. buscador.fill()
-  // escribe el valor de golpe sin disparar esos eventos, así que el
-  // autocompletado nunca se entera y ".ac_results" se queda vacío (probado
-  // en producción: con fill() siempre daba "no se encontró ninguna
-  // competición" aunque el nombre fuera correcto). Por eso usamos
-  // pressSequentially, que simula pulsaciones de teclado reales una a una.
+  // pressSequentially simula pulsaciones de teclado reales una a una, para
+  // que el autocompletado (que engancha su búsqueda al evento de teclado,
+  // no al valor final del campo) se entere de que hemos escrito algo.
   await buscador.pressSequentially(notaBusqueda.trim(), { delay: 80 });
 
   // El autocompletado (jQuery UI) tarda un poco en llamar al servidor tras
@@ -149,6 +144,93 @@ async function irAClasificacionDeCompeticion(page, notaBusqueda) {
 
   await resultados.nth(indiceElegido).click();
   await page.waitForLoadState("networkidle", { timeout: 15000 }).catch(() => {});
+}
+
+// Busca aliasBuscado en la(s) tabla(s) de Alias de la página actual
+// (paginando y probando "Clasificación Individual" si hace falta) y, si lo
+// encuentra, hace click en su enlace para entrar en su ficha de jugador.
+// Devuelve { encontrado: true } tras navegar a la ficha, o
+// { encontrado: false, motivo } si no se pudo.
+async function buscarYAbrirFichaJugador(page, aliasBuscado) {
+  let localizada = await localizarTablaConAlias(page);
+  if (!localizada) {
+    // Puede ser una Liga: la "Clasificación General" por defecto es de
+    // equipos, sin columna Alias. Si existe el botón "Clasificación
+    // Individual", lo pulsamos y lo volvemos a intentar.
+    const botonIndividual = page.getByText("Clasificación Individual", { exact: true }).first();
+    if (await botonIndividual.isVisible({ timeout: 3000 }).catch(() => false)) {
+      await botonIndividual.click();
+      await page.waitForLoadState("networkidle", { timeout: 15000 }).catch(() => {});
+      localizada = await localizarTablaConAlias(page);
+    }
+  }
+  if (!localizada) return { encontrado: false, motivo: "sin-tabla-alias" };
+
+  for (let pagina = 0; pagina < MAX_PAGINAS_CLASIFICACION; pagina++) {
+    const { tabla, idxAlias } = localizada;
+    const filas = await tabla.locator("tr").all();
+    for (const fila of filas) {
+      const celdas = await fila.locator("td").allTextContents();
+      if (celdas.length <= idxAlias) continue;
+      if (celdas[idxAlias].trim().toUpperCase() !== aliasBuscado.trim().toUpperCase()) continue;
+
+      const enlace = fila.locator("td").nth(idxAlias).locator("a").first();
+      if ((await enlace.count()) === 0) return { encontrado: false, motivo: "alias-sin-enlace" };
+
+      await enlace.click();
+      await page.waitForLoadState("networkidle", { timeout: 15000 }).catch(() => {});
+      return { encontrado: true };
+    }
+
+    // Paginación: buscar un enlace/botón "Siguiente" o de número de página
+    // que todavía no esté deshabilitado. Si no hay más páginas, se acaba la
+    // búsqueda aquí.
+    const siguiente = page.getByText(/^Siguiente|^»|^>$/i).first();
+    const visible = await siguiente.isVisible().catch(() => false);
+    if (!visible) break;
+    const disabled = await siguiente.evaluate((el) => el.closest("[disabled], .disabled") !== null).catch(() => false);
+    if (disabled) break;
+    await siguiente.click().catch(() => {});
+    await page.waitForTimeout(800);
+    const tablaActualizada = await localizarTablaConAlias(page);
+    if (tablaActualizada) localizada = tablaActualizada;
+  }
+  return { encontrado: false, motivo: "alias-no-en-clasificacion" };
+}
+
+// Lee, en la ficha de jugador ya cargada (tras buscarYAbrirFichaJugador), su
+// PPD y su MPR reales de la tarjeta "Usuario" del cuerpo central (NO la de
+// la barra lateral, que es la del usuario logueado del club). Cada media
+// puede venir en 3 categorías (aa/ae/bb, según modalidad); se coge la
+// primera con valor distinto de 0, o la primera de todas si están a 0.
+async function leerMediaDeFichaJugador(page) {
+  return page.evaluate(() => {
+    const candidatas = Array.from(document.querySelectorAll(".puntajes"));
+    const tarjeta = candidatas.find((el) => !el.closest("#left"));
+    if (!tarjeta) return null;
+
+    const leerValores = (selectorLista) =>
+      Array.from(tarjeta.querySelectorAll(selectorLista))
+        .map((li) => li.textContent.trim())
+        .filter((texto) => /^[\d.,]+\s*\(/.test(texto)); // descarta el <li> de cabecera ("PPD"/"mpr")
+
+    const primerValorUtil = (textos) => {
+      const valores = textos
+        .map((t) => {
+          const m = t.match(/^([\d.,]+)/);
+          return m ? parseFloat(m[1].replace(",", ".")) : null;
+        })
+        .filter((v) => v !== null && !Number.isNaN(v));
+      if (valores.length === 0) return null;
+      const noNulo = valores.find((v) => v > 0);
+      return noNulo !== undefined ? noNulo : valores[0];
+    };
+
+    return {
+      ppd: primerValorUtil(leerValores("ul.ppd li")),
+      mpr: primerValorUtil(leerValores("ul.mpr li")),
+    };
+  });
 }
 
 // registros: [{ id, idExterno, notaBusqueda }]. Devuelve [{ id, ok, mpr?, ppd?, error? }].
@@ -176,59 +258,30 @@ export async function actualizarMediasRadikal(registros) {
       try {
         await irAClasificacionDeCompeticion(page, notaBusqueda);
 
-        let encontradaTabla = await detectarTablaConMedia(page);
-        if (!encontradaTabla) {
-          // Puede ser una Liga: la "Clasificación General" por defecto es de
-          // equipos. Si existe el botón "Clasificación Individual", lo
-          // pulsamos y lo volvemos a intentar.
-          const botonIndividual = page.getByText("Clasificación Individual", { exact: true }).first();
-          if (await botonIndividual.isVisible({ timeout: 3000 }).catch(() => false)) {
-            await botonIndividual.click();
-            await page.waitForLoadState("networkidle", { timeout: 15000 }).catch(() => {});
-            encontradaTabla = await detectarTablaConMedia(page);
+        const resultado = await buscarYAbrirFichaJugador(page, idExterno);
+        if (!resultado.encontrado) {
+          let error;
+          if (resultado.motivo === "sin-tabla-alias") {
+            error = `Se encontró "${notaBusqueda}" pero no se pudo localizar ninguna tabla de clasificación con columna de Alias.`;
+          } else if (resultado.motivo === "alias-sin-enlace") {
+            error = `Se encontró tu alias "${idExterno}" en la clasificación de "${notaBusqueda}" pero no tiene enlace a tu ficha de jugador.`;
+          } else {
+            error = `Se encontró el torneo "${notaBusqueda}" pero tu alias "${idExterno}" no aparece en su clasificación.`;
           }
-        }
-
-        if (!encontradaTabla) {
-          resultados.push({
-            id,
-            ok: false,
-            error: `Se encontró "${notaBusqueda}" pero su clasificación no tiene una columna de PPD/MPR (probablemente es una Liga, que solo da un HCP de hándicap, no una media). Prueba a indicar un torneo o campeonato en el que hayas participado en su lugar.`,
-          });
+          resultados.push({ id, ok: false, error });
           continue;
         }
 
-        let { tabla, idxAlias, idxPpd, idxMpr } = encontradaTabla;
-        let encontrado = null;
-        for (let pagina = 0; pagina < MAX_PAGINAS_CLASIFICACION; pagina++) {
-          encontrado = await buscarEnTabla(tabla, idExterno, idxAlias, idxPpd, idxMpr);
-          if (encontrado) break;
-
-          // Paginación: buscar un enlace/botón "Siguiente" o de número de
-          // página que todavía no esté deshabilitado. Si no hay más
-          // páginas, se acaba la búsqueda aquí.
-          const siguiente = page.getByText(/^Siguiente|^»|^>$/i).first();
-          const visible = await siguiente.isVisible().catch(() => false);
-          if (!visible) break;
-          const disabled = await siguiente.evaluate((el) => el.closest("[disabled], .disabled") !== null).catch(() => false);
-          if (disabled) break;
-          await siguiente.click().catch(() => {});
-          await page.waitForTimeout(800);
-          // Tras paginar, el DOM de la tabla puede haberse regenerado: la
-          // volvemos a localizar para no operar sobre nodos obsoletos.
-          const tablaActualizada = await detectarTablaConMedia(page);
-          if (tablaActualizada) ({ tabla, idxAlias, idxPpd, idxMpr } = tablaActualizada);
-        }
-
-        if (!encontrado) {
+        const media = await leerMediaDeFichaJugador(page);
+        if (!media || (media.ppd == null && media.mpr == null)) {
           resultados.push({
             id,
             ok: false,
-            error: `Se encontró el torneo "${notaBusqueda}" pero tu alias "${idExterno}" no aparece en su clasificación.`,
+            error: `Se encontró tu ficha de jugador en "${notaBusqueda}" pero no se pudo leer tu PPD/MPR (puede que Radikal Darts haya cambiado el formato de la página).`,
           });
           continue;
         }
-        resultados.push({ id, ok: true, mpr: encontrado.mpr, ppd: encontrado.ppd });
+        resultados.push({ id, ok: true, ppd: media.ppd, mpr: media.mpr });
       } catch (err) {
         resultados.push({ id, ok: false, error: err.message || "Error consultando Radikal Darts" });
       }

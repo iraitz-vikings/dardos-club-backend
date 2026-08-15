@@ -121,11 +121,22 @@ router.put("/", requireAuth, async (req, res) => {
     },
   });
 
-  // idsFabricantes: array de { fabricanteId, idExterno, notaBusqueda }. Un
-  // idExterno vacío borra el ID guardado para ese fabricante; si no, se
-  // crea/actualiza. notaBusqueda es opcional (hoy solo la usa Radikal
-  // Darts, ver comentario en schema.prisma) y se guarda tal cual, incluso
-  // vacía, para poder borrarla si el socio la quita.
+  // idsFabricantes: array de { fabricanteId, idExterno, notaBusqueda, mpr?,
+  // ppd? }. Un idExterno vacío borra el ID guardado para ese fabricante; si
+  // no, se crea/actualiza. notaBusqueda es opcional (hoy solo la usa
+  // Radikal Darts, ver comentario en schema.prisma) y se guarda tal cual,
+  // incluso vacía, para poder borrarla si el socio la quita.
+  //
+  // mpr/ppd son opcionales y solo se tocan si el frontend los manda de
+  // verdad (item.mpr/item.ppd !== undefined): hoy es una entrada manual que
+  // solo expone el formulario de Radikal Darts (ver SocioPerfil.jsx),
+  // porque su scraper automático no puede iniciar sesión (bloqueado por la
+  // propia web de Radikal). Si no se mandan, no se pisan los valores que ya
+  // hubiera puesto el scraper automático de otro fabricante (Connection,
+  // Phoenix). Al guardar un valor manual se marca como si fuese una
+  // actualización automática correcta (statsActualizadoEn a ahora,
+  // statsError a null) para que desaparezca cualquier error de scraping
+  // anterior en cuanto el socio pone su media a mano.
   if (Array.isArray(idsFabricantes)) {
     for (const item of idsFabricantes) {
       if (!item?.fabricanteId) continue;
@@ -137,14 +148,29 @@ router.put("/", requireAuth, async (req, res) => {
         continue;
       }
       const notaBusqueda = (item.notaBusqueda || "").trim() || null;
+
+      const datosManuales = {};
+      if (item.mpr !== undefined) {
+        const mpr = item.mpr === null || item.mpr === "" ? null : Number(item.mpr);
+        datosManuales.mpr = Number.isFinite(mpr) ? mpr : null;
+      }
+      if (item.ppd !== undefined) {
+        const ppd = item.ppd === null || item.ppd === "" ? null : Number(item.ppd);
+        datosManuales.ppd = Number.isFinite(ppd) ? ppd : null;
+      }
+      if (Object.keys(datosManuales).length > 0) {
+        datosManuales.statsActualizadoEn = new Date();
+        datosManuales.statsError = null;
+      }
+
       // .catch: si el fabricante fue borrado por un admin entre que el
       // frontend cargó la lista y el socio guardó, ignoramos ese ID en vez
       // de romper el resto del guardado por una violación de FK.
       await prisma.jugadorFabricanteId
         .upsert({
           where: { jugadorId_fabricanteId: { jugadorId: jugador.id, fabricanteId: item.fabricanteId } },
-          update: { idExterno, notaBusqueda },
-          create: { jugadorId: jugador.id, fabricanteId: item.fabricanteId, idExterno, notaBusqueda },
+          update: { idExterno, notaBusqueda, ...datosManuales },
+          create: { jugadorId: jugador.id, fabricanteId: item.fabricanteId, idExterno, notaBusqueda, ...datosManuales },
         })
         .catch(() => {});
     }

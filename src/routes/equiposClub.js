@@ -18,7 +18,12 @@ const includeCompleto = {
   miembros: { include: { jugador: true }, orderBy: { creadoEn: "asc" } },
   inscripciones: {
     include: {
-      torneo: { include: { plataforma: true, clasificacion: { orderBy: { posicion: "asc" } } } },
+      // "equipoTorneoId: null" filtra a la tabla compartida por todo el
+      // torneo/liga (Radikal). Sin este filtro se mezclarían aquí también
+      // las filas de clasificación de CADA equipo del club (Phoenix), que
+      // ya se muestran por separado abajo (clasificacion, en esta misma
+      // inscripción).
+      torneo: { include: { plataforma: true, clasificacion: { where: { equipoTorneoId: null }, orderBy: { posicion: "asc" } } } },
       capitan: true,
       jugadores: { include: { jugador: true } },
       partidos: { include: { maquina: true }, orderBy: { fecha: "asc" } },

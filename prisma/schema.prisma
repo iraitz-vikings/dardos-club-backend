@@ -116,17 +116,28 @@ model ClasificacionEquipo {
   @@unique([torneoId, nombreEquipo])
 }
 
+// La inscripción de un EquipoClub (el equipo del club, con su plantilla) en
+// una competición externa (Torneo). No hay equipos "sueltos": todo equipo
+// que compite fuera es, ante todo, un EquipoClub — esto solo guarda en qué
+// competición concreta participa y sus partidos de esa competición.
+// equipoClubId es opcional solo por compatibilidad con filas antiguas
+// creadas antes de este cambio (que tenían el nombre del equipo suelto, sin
+// enlazar a ningún EquipoClub).
 model EquipoTorneo {
   id              String   @id @default(uuid())
   torneoId        String
   torneo          Torneo   @relation(fields: [torneoId], references: [id])
-  nombreEquipo    String?
+  equipoClubId    String?
+  equipoClub      EquipoClub? @relation(fields: [equipoClubId], references: [id])
+  nombreEquipo    String?  // solo se usa si no hay equipoClub (filas antiguas); si hay equipoClub, se muestra su nombre
   idExternoEquipo String?
   capitanId       String?
   capitan         Jugador? @relation("capitan", fields: [capitanId], references: [id])
 
   jugadores EquipoJugador[]
   partidos  Partido[]
+
+  @@unique([torneoId, equipoClubId])
 }
 
 model EquipoJugador {
@@ -382,6 +393,7 @@ model EquipoClub {
   creadoEn    DateTime @default(now())
 
   miembros MiembroEquipoClub[]
+  inscripciones EquipoTorneo[]
 }
 
 model MiembroEquipoClub {

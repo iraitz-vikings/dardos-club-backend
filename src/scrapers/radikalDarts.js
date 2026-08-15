@@ -94,13 +94,17 @@ const CONTEXT_OPTIONS = {
 };
 
 // Inicia sesión en Radikal Darts con las credenciales de RADIKAL_DARTS_ID /
-// RADIKAL_DARTS_PASSWORD (variables de entorno). Devuelve true si el login se
-// pudo confirmar (aparece "Cerrar sesión" en la página), false si faltan
-// credenciales o el login no se pudo confirmar.
+// RADIKAL_DARTS_PASSWORD (variables de entorno). Devuelve
+// { ok: boolean, diagnostico: string } — diagnostico explica, cuando ok es
+// false, en qué paso concreto falló (sin credenciales, sin formulario,
+// mensaje de error de la propia web, o no se pudo confirmar tras enviar),
+// para poder mostrar un error útil sin tener que repetir pruebas manuales.
 async function iniciarSesionRadikal(page) {
   const radikalId = (process.env.RADIKAL_DARTS_ID || "").trim();
   const radikalPassword = process.env.RADIKAL_DARTS_PASSWORD || "";
-  if (!radikalId || !radikalPassword) return false;
+  if (!radikalId || !radikalPassword) {
+    return { ok: false, diagnostico: "faltan-credenciales" };
+  }
 
   await page.goto(HOME_URL, { waitUntil: "domcontentloaded", timeout: 30000 });
   await page.waitForLoadState("networkidle", { timeout: 15000 }).catch(() => {});
@@ -110,20 +114,48 @@ async function iniciarSesionRadikal(page) {
     .click({ timeout: 3000 })
     .catch(() => {});
 
-  const campoId = page.locator('input[name="dni"]');
-  const campoClave = page.locator('input[name="clave"]');
-  if ((await campoId.count()) === 0 || (await campoClave.count()) === 0) return false;
+  const campoId = page.locator('input[name="dni"]').first();
+  const campoClave = page.locator('input[name="clave"]').first();
+  if ((await campoId.count()) === 0 || (await campoClave.count()) === 0) {
+    return { ok: false, diagnostico: "no se encontró el formulario de login (input dni/clave) en la home de Radikal Darts" };
+  }
 
   await campoId.fill(radikalId);
   await campoClave.fill(radikalPassword);
-  await page.locator('input[name="bot_entrar"]').click();
+  await page.locator('input[name="bot_entrar"]').first().click();
   await page.waitForLoadState("networkidle", { timeout: 15000 }).catch(() => {});
 
-  return page
+  const logueado = await page
     .getByText("Cerrar sesión", { exact: false })
     .first()
     .isVisible({ timeout: 5000 })
     .catch(() => false);
+  if (logueado) return { ok: true, diagnostico: "" };
+
+  // No se confirmó el login: buscamos algún mensaje de error visible en la
+  // página (sin imprimir nunca el HTML/URL completos, por si llevan datos
+  // de sesión) para saber si la web rechazó las credenciales o si el
+  // formulario seguía ahí sin más explicación.
+  const mensajeError = await page
+    .evaluate(() => {
+      const candidatos = Array.from(document.querySelectorAll("body *"))
+        .filter((el) => el.children.length === 0)
+        .map((el) => (el.textContent || "").trim())
+        .filter((t) => t.length > 0 && t.length < 200)
+        .filter((t) => /incorrect|inv[aá]lid|no coincide|error|no existe|bloquead/i.test(t));
+      return candidatos[0] || null;
+    })
+    .catch(() => null);
+
+  const formularioSigueAhi = (await page.locator('input[name="dni"]').count().catch(() => 0)) > 0;
+
+  const diagnostico = mensajeError
+    ? `la web respondió: "${mensajeError}"`
+    : formularioSigueAhi
+      ? "tras enviar el formulario, seguía en la página de login sin mensaje de error visible (revisa que RADIKAL_DARTS_ID sea el \"Radikal ID\" y no el email)"
+      : "se envió el formulario pero no se pudo confirmar el login (no aparece \"Cerrar sesión\" ni un mensaje de error reconocible)";
+
+  return { ok: false, diagnostico };
 }
 
 // El autocompletado antepone el tipo de competición al nombre (ej. "LIGA: La
@@ -300,14 +332,12 @@ export async function actualizarMediasRadikal(registros) {
 
     // La ficha de jugador (y, en Ligas, la Clasificación Individual) exigen
     // sesión iniciada: sin login no tiene sentido intentar nada más.
-    const logueado = await iniciarSesionRadikal(page);
+    const { ok: logueado, diagnostico } = await iniciarSesionRadikal(page);
     if (!logueado) {
-      const radikalIdConfigurado = !!(process.env.RADIKAL_DARTS_ID || "").trim();
-      const radikalPasswordConfigurado = !!process.env.RADIKAL_DARTS_PASSWORD;
       const error =
-        radikalIdConfigurado && radikalPasswordConfigurado
-          ? "No se pudo iniciar sesión en Radikal Darts con las credenciales configuradas (RADIKAL_DARTS_ID / RADIKAL_DARTS_PASSWORD). Revisa que sigan siendo correctas en Railway."
-          : "Radikal Darts exige tener sesión iniciada para leer la media real de un jugador. Falta configurar las variables de entorno RADIKAL_DARTS_ID y RADIKAL_DARTS_PASSWORD (una cuenta de Radikal Darts) en el servidor.";
+        diagnostico === "faltan-credenciales"
+          ? "Radikal Darts exige tener sesión iniciada para leer la media real de un jugador. Falta configurar las variables de entorno RADIKAL_DARTS_ID y RADIKAL_DARTS_PASSWORD (una cuenta de Radikal Darts) en el servidor."
+          : `No se pudo iniciar sesión en Radikal Darts con las credenciales configuradas (RADIKAL_DARTS_ID / RADIKAL_DARTS_PASSWORD): ${diagnostico}.`;
       for (const { id } of conTorneo) resultados.push({ id, ok: false, error });
       return resultados;
     }

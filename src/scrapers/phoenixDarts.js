@@ -83,6 +83,34 @@ function parsearResultado(texto, alias) {
   return { ppd, mpr };
 }
 
+// Fijar idioma español usando el propio mecanismo de la web (ver comentario
+// arriba) antes de hacer ninguna búsqueda — hace falta tanto para la
+// búsqueda de jugadores como para la de equipos: confirmado en vivo el
+// 2026-08-15 que, sin este paso, selectTeamList.do también devuelve "Team
+// List (0)" (0 resultados) para un nombre de equipo real y exacto (se
+// reprodujo con "VDC Ragnarok", que SÍ aparece en cuanto se fija el idioma
+// a español primero). changeLocale() dispara su propia navegación
+// (recarga/redirección) para aplicar el cambio: hay que esperar ESA
+// navegación con waitForNavigation en vez de solo waitForLoadState, porque
+// si el siguiente page.goto() (la primera búsqueda) se lanza mientras esa
+// navegación interna sigue en curso, el navegador la aborta con
+// net::ERR_ABORTED.
+async function fijarIdiomaEspanol(page) {
+  await page.goto(HOME_URL, { waitUntil: "domcontentloaded", timeout: 30000 }).catch(() => {});
+  await page.waitForLoadState("networkidle", { timeout: 15000 }).catch(() => {});
+  await Promise.all([
+    page.waitForNavigation({ waitUntil: "domcontentloaded", timeout: 15000 }).catch(() => {}),
+    page
+      .evaluate(() => {
+        if (typeof changeLocale === "function") changeLocale("es_ES");
+      })
+      .catch(() => {}),
+  ]);
+  await page.waitForLoadState("networkidle", { timeout: 15000 }).catch(() => {});
+  // Margen extra por si la navegación anterior todavía está asentándose.
+  await page.waitForTimeout(1000);
+}
+
 // registros: [{ id, idExterno }]. Devuelve [{ id, ok, mpr?, ppd?, error? }].
 export async function actualizarMediasPhoenix(registros) {
   if (registros.length === 0) return [];
@@ -93,26 +121,7 @@ export async function actualizarMediasPhoenix(registros) {
     const context = await browser.newContext(CONTEXT_OPTIONS);
     const page = await context.newPage();
 
-    // Fijar idioma español usando el propio mecanismo de la web (ver
-    // comentario arriba) antes de hacer ninguna búsqueda. changeLocale()
-    // dispara su propia navegación (recarga/redirección) para aplicar el
-    // cambio: hay que esperar ESA navegación con waitForNavigation en vez de
-    // solo waitForLoadState, porque si el siguiente page.goto() (la primera
-    // búsqueda) se lanza mientras esa navegación interna sigue en curso, el
-    // navegador la aborta con net::ERR_ABORTED.
-    await page.goto(HOME_URL, { waitUntil: "domcontentloaded", timeout: 30000 }).catch(() => {});
-    await page.waitForLoadState("networkidle", { timeout: 15000 }).catch(() => {});
-    await Promise.all([
-      page.waitForNavigation({ waitUntil: "domcontentloaded", timeout: 15000 }).catch(() => {}),
-      page
-        .evaluate(() => {
-          if (typeof changeLocale === "function") changeLocale("es_ES");
-        })
-        .catch(() => {}),
-    ]);
-    await page.waitForLoadState("networkidle", { timeout: 15000 }).catch(() => {});
-    // Margen extra por si la navegación anterior todavía está asentándose.
-    await page.waitForTimeout(1000);
+    await fijarIdiomaEspanol(page);
 
     for (const { id, idExterno } of registros) {
       try {
@@ -177,6 +186,16 @@ export async function actualizarMediasPhoenix(registros) {
 // - En Phoenix no existe una búsqueda pública directa "por nombre de
 //   competición". La búsqueda parte del EQUIPO: selectTeamList.do con
 //   ?searchKey=<nombre>&unifiedFg=1&searchNation=ES.
+// - IMPORTANTE (fallo real detectado el 2026-08-15 con el equipo "VDC
+//   Ragnarok"): esta búsqueda de equipos también necesita el arreglo de
+//   idioma español (fijarIdiomaEspanol, ver más arriba) ANTES de buscar.
+//   Verificado en vivo: exactamente la misma URL de búsqueda, con el mismo
+//   nombre de equipo exacto, devuelve "Team List (0)" en inglés (el idioma
+//   por defecto sin cookies) y "Lista de equipos (1)" con el equipo
+//   encontrado en cuanto se fija el idioma a español primero. Por eso
+//   fijarIdiomaEspanol(page) se llama al principio de
+//   extraerClasificacionEquiposPhoenix, igual que ya se hacía en
+//   actualizarMediasPhoenix.
 // - Un mismo Torneo/Liga de Phoenix puede tener VARIOS equipos del club
 //   compitiendo a la vez (caso real detectado el 2026-08-15: la "Summer
 //   Cup" tiene 5 equipos del club inscritos), y cada uno puede estar en un
@@ -354,6 +373,8 @@ export async function extraerClasificacionEquiposPhoenix(equiposTorneo) {
   try {
     const context = await browser.newContext(CONTEXT_OPTIONS);
     const page = await context.newPage();
+
+    await fijarIdiomaEspanol(page);
 
     for (const { id, idExterno, nombre } of conNombre) {
       try {

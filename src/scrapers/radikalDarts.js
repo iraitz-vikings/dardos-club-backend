@@ -497,3 +497,118 @@ export async function actualizarMediasRadikal(registros) {
   }
   return resultados;
 }
+
+// ---------------------------------------------------------------------------
+// Clasificación de equipos (Ligas) — a diferencia de la media individual de
+// arriba, esta tabla SÍ es pública: confirmado navegando sin sesión iniciada
+// a la Clasificación de una Liga real (ej. "13 Vegas 2026") y viendo la
+// tabla completa de equipos. Por eso esta función NO llama a
+// iniciarSesionRadikal en absoluto.
+//
+// Reutiliza irAClasificacionDeCompeticion tal cual: busca el nombre exacto
+// de la competición en el autocompletado y navega a su Clasificación. Para
+// una Liga, la vista que carga por defecto ("Clasificación General") ya ES
+// la de equipos — lo contrario de buscarYAbrirFichaJugador, que si se
+// encuentra con esta misma vista de equipos pulsa "Clasificación
+// Individual" para saltar a la de jugadores. Aquí no se pulsa nada: se lee
+// tal cual.
+// ---------------------------------------------------------------------------
+
+// Lee la tabla `table.tablaClasifica` de la página ya cargada (columnas
+// típicas: Pos, Puntos, Equipo, Local, PJ, PG, PP, PE, JG, JP — confirmado
+// en vivo el 2026-08-15). Es tolerante a que falten columnas (algunas
+// competiciones pueden no tener todas), pero exige al menos Pos y Equipo.
+// Devuelve un array de filas, o null si no encuentra una tabla reconocible.
+async function leerTablaClasificacionEquipos(page) {
+  const tabla = page.locator("table.tablaClasifica").first();
+  if ((await tabla.count().catch(() => 0)) === 0) return null;
+
+  const filas = await tabla.locator("tr").all();
+  if (filas.length === 0) return null;
+
+  const cabecera = (await filas[0].locator("th, td").allTextContents()).map((c) => c.trim().toUpperCase());
+  const idxDe = (nombre) => cabecera.findIndex((c) => c === nombre);
+  const idxPos = idxDe("POS");
+  const idxEquipo = idxDe("EQUIPO");
+  if (idxPos === -1 || idxEquipo === -1) return null;
+
+  const idxPuntos = idxDe("PUNTOS");
+  const idxPJ = idxDe("PJ");
+  const idxPG = idxDe("PG");
+  const idxPP = idxDe("PP");
+  const idxPE = idxDe("PE");
+  const idxJG = idxDe("JG");
+  const idxJP = idxDe("JP");
+
+  const numero = (texto, entero) => {
+    if (texto == null) return null;
+    const limpio = texto.trim().replace(",", ".");
+    if (limpio === "") return null;
+    const n = parseFloat(limpio);
+    if (Number.isNaN(n)) return null;
+    return entero ? Math.trunc(n) : n;
+  };
+
+  const filasEquipo = [];
+  for (const fila of filas.slice(1)) {
+    const celdas = await fila.locator("td").allTextContents();
+    if (celdas.length <= idxEquipo) continue; // fila de leyenda (colspan) u otra cosa que no es una fila de equipo
+    const nombreEquipo = celdas[idxEquipo]?.trim();
+    if (!nombreEquipo) continue;
+    filasEquipo.push({
+      posicion: numero(celdas[idxPos], true) ?? filasEquipo.length + 1,
+      nombreEquipo,
+      puntos: idxPuntos !== -1 ? numero(celdas[idxPuntos]) : null,
+      partidosJugados: idxPJ !== -1 ? numero(celdas[idxPJ], true) : null,
+      partidosGanados: idxPG !== -1 ? numero(celdas[idxPG], true) : null,
+      partidosPerdidos: idxPP !== -1 ? numero(celdas[idxPP], true) : null,
+      partidosEmpatados: idxPE !== -1 ? numero(celdas[idxPE], true) : null,
+      juegosGanados: idxJG !== -1 ? numero(celdas[idxJG], true) : null,
+      juegosPerdidos: idxJP !== -1 ? numero(celdas[idxJP], true) : null,
+    });
+  }
+  return filasEquipo.length > 0 ? filasEquipo : null;
+}
+
+// torneos: [{ id, idExterno }] — idExterno es el nombre EXACTO de la
+// competición en radikalplayers.com (mismo formato que notaBusqueda para
+// jugadores, ej. "13 Vegas 2026"; se guarda en Torneo.idExterno). Devuelve
+// [{ torneoId, ok, filas?, error? }].
+export async function extraerClasificacionEquiposRadikal(torneos) {
+  const conNombre = torneos.filter((t) => (t.idExterno || "").trim());
+  const resultados = torneos
+    .filter((t) => !(t.idExterno || "").trim())
+    .map((t) => ({
+      torneoId: t.id,
+      ok: false,
+      error: "Falta indicar el nombre exacto de la competición en Radikal Darts (campo \"Id externo\" del torneo).",
+    }));
+  if (conNombre.length === 0) return resultados;
+
+  const browser = await chromium.launch({ headless: true });
+  try {
+    const context = await browser.newContext(CONTEXT_OPTIONS);
+    const page = await context.newPage();
+
+    for (const { id, idExterno } of conNombre) {
+      try {
+        await irAClasificacionDeCompeticion(page, idExterno);
+        const filas = await leerTablaClasificacionEquipos(page);
+        if (!filas) {
+          resultados.push({
+            torneoId: id,
+            ok: false,
+            error: `Se encontró "${idExterno}" pero no se pudo leer su tabla de clasificación de equipos (puede que no sea una Liga, o que Radikal Darts haya cambiado el formato de la página).`,
+          });
+          continue;
+        }
+        resultados.push({ torneoId: id, ok: true, filas });
+      } catch (err) {
+        resultados.push({ torneoId: id, ok: false, error: err.message || "Error consultando Radikal Darts" });
+      }
+    }
+  } finally {
+    await browser.close();
+  }
+  return resultados;
+}

@@ -2,6 +2,7 @@ import { Router } from "express";
 import { PrismaClient } from "@prisma/client";
 import jwt from "jsonwebtoken";
 import { requireAuth } from "./auth.js";
+import { extraerClasificacionEquiposRadikal } from "../scrapers/radikalDarts.js";
 
 const prisma = new PrismaClient();
 const router = Router();
@@ -44,6 +45,7 @@ const includeTorneo = {
       partidos: { include: { maquina: true }, orderBy: { fecha: "asc" } },
     },
   },
+  clasificacion: { orderBy: { posicion: "asc" } },
 };
 
 // ---------- Plataformas (fabricantes) ----------
@@ -76,14 +78,87 @@ router.get("/torneos/admin", requireAdmin, async (_req, res) => {
   res.json(torneos);
 });
 router.post("/torneos", requireAdmin, async (req, res) => {
-  const { nombre, nivel, temporada, plataformaId } = req.body;
+  const { nombre, nivel, temporada, plataformaId, idExterno } = req.body;
   if (!nombre || !plataformaId) return res.status(400).json({ error: "Falta el nombre o la plataforma" });
   const torneo = await prisma.torneo.create({
-    data: { nombre, nivel: nivel || null, temporada: temporada || null, plataformaId, origen: "manual" },
+    data: {
+      nombre,
+      nivel: nivel || null,
+      temporada: temporada || null,
+      plataformaId,
+      idExterno: idExterno || null,
+      origen: "manual",
+    },
     include: includeTorneo,
   });
   res.status(201).json(torneo);
 });
+router.put("/torneos/:id", requireAdmin, async (req, res) => {
+  const { id } = req.params;
+  const { nombre, nivel, temporada, idExterno } = req.body;
+  try {
+    const torneo = await prisma.torneo.update({
+      where: { id },
+      data: {
+        nombre: nombre !== undefined ? nombre : undefined,
+        nivel: nivel !== undefined ? nivel || null : undefined,
+        temporada: temporada !== undefined ? temporada || null : undefined,
+        idExterno: idExterno !== undefined ? idExterno || null : undefined,
+      },
+      include: includeTorneo,
+    });
+    res.json(torneo);
+  } catch {
+    res.status(404).json({ error: "Torneo no encontrado" });
+  }
+});
+
+// Extrae (scraping) la clasificación de equipos de este torneo desde la
+// plataforma externa y la guarda, sustituyendo la anterior. Por ahora solo
+// implementado para Radikal Darts (la única de las tres cuya tabla de
+// clasificación de equipos es pública, sin necesitar login) — para
+// cualquier otra plataforma devuelve un error explicando que aún no está
+// soportado, en vez de fallar en silencio.
+router.post("/torneos/:id/actualizar-clasificacion", requireAdmin, async (req, res) => {
+  const { id } = req.params;
+  const torneo = await prisma.torneo.findUnique({ where: { id }, include: { plataforma: true } });
+  if (!torneo) return res.status(404).json({ error: "Torneo no encontrado" });
+
+  const nombrePlataforma = (torneo.plataforma?.nombre || "").toLowerCase();
+  if (!nombrePlataforma.includes("radikal")) {
+    return res.status(400).json({
+      error: `La extracción de clasificación de equipos todavía no está implementada para "${torneo.plataforma?.nombre || "esta plataforma"}" (solo Radikal Darts por ahora).`,
+    });
+  }
+
+  const [resultado] = await extraerClasificacionEquiposRadikal([{ id: torneo.id, idExterno: torneo.idExterno }]);
+  if (!resultado.ok) {
+    return res.status(422).json({ error: resultado.error });
+  }
+
+  await prisma.$transaction([
+    prisma.clasificacionEquipo.deleteMany({ where: { torneoId: id } }),
+    prisma.clasificacionEquipo.createMany({
+      data: resultado.filas.map((f) => ({
+        torneoId: id,
+        posicion: f.posicion,
+        nombreEquipo: f.nombreEquipo,
+        puntos: f.puntos,
+        partidosJugados: f.partidosJugados,
+        partidosGanados: f.partidosGanados,
+        partidosPerdidos: f.partidosPerdidos,
+        partidosEmpatados: f.partidosEmpatados,
+        juegosGanados: f.juegosGanados,
+        juegosPerdidos: f.juegosPerdidos,
+        origenActualizacion: "scraper",
+      })),
+    }),
+  ]);
+
+  const actualizado = await prisma.torneo.findUnique({ where: { id }, include: includeTorneo });
+  res.json(actualizado);
+});
+
 router.delete("/torneos/:id", requireAdmin, async (req, res) => {
   const { id } = req.params;
   const equipos = await prisma.equipoTorneo.findMany({ where: { torneoId: id }, select: { id: true } });

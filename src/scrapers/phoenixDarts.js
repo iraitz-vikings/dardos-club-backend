@@ -168,3 +168,210 @@ export async function actualizarMediasPhoenix(registros) {
   }
   return resultados;
 }
+
+// ---------------------------------------------------------------------------
+// Clasificación de equipos (Ligas) — también pública, sin login, pero con
+// una estructura de búsqueda muy distinta a la de Radikal. Confirmado en
+// vivo el 2026-08-15:
+//
+// - En Phoenix no existe una búsqueda pública directa "por nombre de
+//   competición". La búsqueda parte del EQUIPO: selectTeamList.do con
+//   ?searchKey=<nombre>&unifiedFg=1&searchNation=ES. Por eso aquí
+//   `idExterno` (guardado en Torneo.idExterno, igual que para Radikal) es
+//   el nombre EXACTO del EQUIPO tal como está registrado en Phoenix Darts
+//   (ej. "VDC Gentlemen"), no el de la liga.
+// - Cada equipo encontrado, al expandir su ficha (click en
+//   `p.box_list_toggle`, que dispara una carga AJAX), muestra un bloque
+//   `div.competition` por cada competición en la que participa, con su
+//   título (`div.infos p.c_name`) y la rejilla de Grupos de esa
+//   competición (`div.divisions a`) — el Grupo propio del equipo se
+//   distingue porque su `<span>` interior tiene la clase
+//   `tab_division_on` en vez de `tab_division`. De ese enlace
+//   (`goCpttnDvDetail(cpttnId, searchDivision, 'ML', ...)`) se sacan los
+//   dos IDs internos que hacen falta para la clasificación.
+// - Si el equipo compite en más de una competición a la vez, se desambigua
+//   comparando el título de cada `div.competition` con el nombre que
+//   nosotros le hemos puesto al Torneo (coincidencia de subcadena, sin
+//   mayúsculas ni acentos) — de ahí que esta función necesite también el
+//   nombre del Torneo, no solo su idExterno.
+// - La clasificación en sí (pública, sin login) está en
+//   selectTeamRankingListML.do?cpttnId=<>&searchDivision=<> (no hace falta
+//   el tercer parámetro searchStage que añade la web sola: sin él se sigue
+//   viendo la etapa/jornada actual). Tabla `div.ranking_form
+//   table.tb_style01`, columnas por fila (siempre en este orden, con o sin
+//   cabeceras en español según el idioma del navegador, por eso se lee por
+//   posición y no por texto de cabecera): Rank, Team Name, Rating, PPD,
+//   MPR, Total point, Match W/L/D/WinRate%, Set W/L/D/WinRate%, Penalty
+//   point. Encaja con las columnas que ya usa Radikal en
+//   ClasificacionEquipo (puntos = Total point, partidosGanados/... = Match
+//   W/L/D, juegosGanados/juegosPerdidos = Set W/L) — no hizo falta añadir
+//   columnas nuevas al modelo.
+// ---------------------------------------------------------------------------
+
+const SEARCH_TEAM_URL = "https://play.phoenixdarts.com/selectTeamList.do";
+const RANKING_ML_URL = "https://play.phoenixdarts.com/selectTeamRankingListML.do";
+
+function quitarAcentos(texto) {
+  return (texto || "")
+    .toLowerCase()
+    .normalize("NFD")
+    .replace(/[̀-ͯ]/g, "")
+    .trim();
+}
+
+// Busca el equipo por nombre exacto (España), expande su ficha para ver
+// "Participated Competitions" y devuelve { cpttnId, searchDivision } del
+// Grupo en el que compite ese equipo dentro de la competición cuyo título
+// mejor coincide con nombreTorneo. Devuelve null si no se encuentra el
+// equipo, o si participa en varias competiciones y ninguna coincide.
+async function localizarGrupoDelEquipoPhoenix(page, nombreEquipo, nombreTorneo) {
+  const url = `${SEARCH_TEAM_URL}?searchKey=${encodeURIComponent(nombreEquipo)}&unifiedFg=1&searchNation=ES`;
+  await page.goto(url, { waitUntil: "domcontentloaded", timeout: 30000 });
+  await page.waitForLoadState("networkidle", { timeout: 15000 }).catch(() => {});
+
+  const filas = page.locator("li.each");
+  const totalFilas = await filas.count().catch(() => 0);
+  if (totalFilas === 0) return null;
+
+  const nombreTorneoNorm = quitarAcentos(nombreTorneo);
+  const candidatos = []; // { cpttnId, searchDivision, titulo }
+
+  for (let i = 0; i < totalFilas; i++) {
+    const fila = filas.nth(i);
+    const toggle = fila.locator("p.box_list_toggle").first();
+    if ((await toggle.count().catch(() => 0)) === 0) continue;
+    await toggle.click();
+    // El panel de competiciones se rellena por AJAX tras el click.
+    const bloques = fila.locator("div.competition");
+    await bloques
+      .first()
+      .waitFor({ state: "visible", timeout: 8000 })
+      .catch(() => {});
+    const totalBloques = await bloques.count().catch(() => 0);
+    for (let j = 0; j < totalBloques; j++) {
+      const bloque = bloques.nth(j);
+      const titulo = ((await bloque.locator("div.infos p.c_name").first().textContent().catch(() => "")) || "").trim();
+      const enlaceGrupoPropio = bloque.locator("div.divisions a:has(span.tab_division_on)").first();
+      if ((await enlaceGrupoPropio.count().catch(() => 0)) === 0) continue;
+      const href = await enlaceGrupoPropio.getAttribute("href").catch(() => null);
+      const coincide = href && href.match(/goCpttnDvDetail\(\s*(\d+)\s*,\s*(\d+)/);
+      if (!coincide) continue;
+      candidatos.push({ cpttnId: coincide[1], searchDivision: coincide[2], titulo });
+    }
+  }
+
+  if (candidatos.length === 0) return null;
+  if (candidatos.length === 1) return candidatos[0];
+
+  const coincidencia = candidatos.find(
+    (c) => quitarAcentos(c.titulo).includes(nombreTorneoNorm) || nombreTorneoNorm.includes(quitarAcentos(c.titulo))
+  );
+  return coincidencia || null;
+}
+
+// Lee la tabla `div.ranking_form table.tb_style01` de la página ya
+// cargada. A diferencia de Radikal, aquí no se busca por texto de
+// cabecera (para no depender del idioma) sino por posición de columna,
+// que está fijada por el propio <thead> de la web (ver comentario más
+// arriba). Devuelve un array de filas, o null si no encuentra la tabla o
+// no tiene filas de equipo reconocibles.
+async function leerClasificacionEquiposPhoenixML(page, cpttnId, searchDivision) {
+  const url = `${RANKING_ML_URL}?cpttnId=${encodeURIComponent(cpttnId)}&searchDivision=${encodeURIComponent(searchDivision)}`;
+  await page.goto(url, { waitUntil: "domcontentloaded", timeout: 30000 });
+  await page.waitForLoadState("networkidle", { timeout: 15000 }).catch(() => {});
+
+  const tabla = page.locator("div.ranking_form table.tb_style01").first();
+  if ((await tabla.count().catch(() => 0)) === 0) return null;
+  const filas = await tabla.locator("tbody tr").all();
+  if (filas.length === 0) return null;
+
+  const numero = (texto, entero) => {
+    if (texto == null) return null;
+    const limpio = texto.trim().replace(",", ".");
+    if (limpio === "") return null;
+    const n = parseFloat(limpio);
+    if (Number.isNaN(n)) return null;
+    return entero ? Math.trunc(n) : n;
+  };
+
+  const filasEquipo = [];
+  for (const fila of filas) {
+    const celdas = (await fila.locator("td").allTextContents()).map((c) => c.trim());
+    // [rank, teamName, rating, ppd, mpr, totalPoint, matchW, matchL, matchD, matchWinRate, setW, setL, setD, setWinRate, penalty]
+    if (celdas.length < 15) continue;
+    const nombreEquipo = celdas[1];
+    if (!nombreEquipo) continue;
+    // El rank puede venir como rango ("5 ~ 8") cuando hay empate: nos
+    // quedamos con el primer número.
+    const posicionTexto = celdas[0].replace(/[^\d].*$/, "");
+    const matchW = numero(celdas[6], true);
+    const matchL = numero(celdas[7], true);
+    const matchD = numero(celdas[8], true);
+    filasEquipo.push({
+      posicion: numero(posicionTexto, true) ?? filasEquipo.length + 1,
+      nombreEquipo,
+      puntos: numero(celdas[5]),
+      partidosJugados: matchW != null && matchL != null && matchD != null ? matchW + matchL + matchD : null,
+      partidosGanados: matchW,
+      partidosPerdidos: matchL,
+      partidosEmpatados: matchD,
+      juegosGanados: numero(celdas[10], true),
+      juegosPerdidos: numero(celdas[11], true),
+    });
+  }
+  return filasEquipo.length > 0 ? filasEquipo : null;
+}
+
+// torneos: [{ id, idExterno, nombre }] — idExterno es el nombre EXACTO del
+// EQUIPO en Phoenix Darts (ej. "VDC Gentlemen"; se guarda en
+// Torneo.idExterno igual que para Radikal, aunque aquí signifique otra
+// cosa). "nombre" es el nombre que le hemos puesto nosotros al Torneo, y
+// se usa solo para desambiguar si ese equipo compite en más de una
+// competición de Phoenix a la vez. Devuelve [{ torneoId, ok, filas?,
+// error? }].
+export async function extraerClasificacionEquiposPhoenix(torneos) {
+  const conNombre = torneos.filter((t) => (t.idExterno || "").trim());
+  const resultados = torneos
+    .filter((t) => !(t.idExterno || "").trim())
+    .map((t) => ({
+      torneoId: t.id,
+      ok: false,
+      error: 'Falta indicar el nombre exacto del EQUIPO en Phoenix Darts (campo "Id externo" del torneo).',
+    }));
+  if (conNombre.length === 0) return resultados;
+
+  const browser = await chromium.launch({ headless: true });
+  try {
+    const context = await browser.newContext(CONTEXT_OPTIONS);
+    const page = await context.newPage();
+
+    for (const { id, idExterno, nombre } of conNombre) {
+      try {
+        const destino = await localizarGrupoDelEquipoPhoenix(page, idExterno, nombre);
+        if (!destino) {
+          resultados.push({
+            torneoId: id,
+            ok: false,
+            error: `No se encontró en Phoenix Darts (España) ningún equipo llamado "${idExterno}", o compite en varias competiciones y ninguna coincide con el nombre del torneo ("${nombre}"). Revisa el nombre exacto del equipo en el campo "Id externo".`,
+          });
+          continue;
+        }
+        const filas = await leerClasificacionEquiposPhoenixML(page, destino.cpttnId, destino.searchDivision);
+        if (!filas) {
+          resultados.push({
+            torneoId: id,
+            ok: false,
+            error: `Se encontró el equipo "${idExterno}" en Phoenix Darts pero no se pudo leer su tabla de clasificación (puede que Phoenix Darts haya cambiado el formato de la página).`,
+          });
+          continue;
+        }
+        resultados.push({ torneoId: id, ok: true, filas });
+      } catch (err) {
+        resultados.push({ torneoId: id, ok: false, error: err.message || "Error consultando Phoenix Darts" });
+      }
+    }
+  } finally {
+    await browser.close();
+  }
+  return resultados;
+}

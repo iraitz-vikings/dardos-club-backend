@@ -85,7 +85,13 @@ model Torneo {
   // Nombre EXACTO de la competición tal como aparece en la web de la
   // plataforma (ej. "13 Vegas 2026" en Radikal Darts) — lo usa el scraper de
   // clasificación de equipos para localizarla, igual que "notaBusqueda" para
-  // jugadores en JugadorFabricanteId.
+  // jugadores en JugadorFabricanteId. En Radikal es el único dato que hace
+  // falta (una tabla compartida por todo el Torneo/Liga). En Phoenix ya NO
+  // es el campo principal: cada equipo del club inscrito tiene su propio
+  // nombre en EquipoTorneo.idExternoEquipo (necesario porque varios equipos
+  // del club pueden competir a la vez en el mismo Torneo/Liga de Phoenix,
+  // cada uno en su grupo); este campo solo se usa ahí como último recurso
+  // si una inscripción no tiene su propio idExternoEquipo.
   idExterno     String?
 
   equipos EquipoTorneo[]
@@ -95,12 +101,23 @@ model Torneo {
 // Fila de la tabla de clasificación general (equipos) de un Torneo/Liga
 // externo, extraída por scraping. Incluye TODOS los equipos de la
 // competición (no solo los del club), para poder ver el contexto completo
-// de la liga. Se reescribe entera en cada actualización (upsert por
-// [torneoId, nombreEquipo]), así que siempre refleja el último scrapeo.
+// de la liga. Se reescribe entera en cada actualización, así que siempre
+// refleja el último scrapeo.
+//
+// equipoTorneoId es opcional: cuando la plataforma tiene UNA sola tabla de
+// clasificación compartida por todo el Torneo/Liga (Radikal: se busca por
+// nombre de competición), queda a null y la fila cuelga solo de torneoId.
+// Cuando la plataforma exige buscar equipo por equipo y cada uno puede caer
+// en un grupo distinto dentro del mismo Torneo/Liga (Phoenix: varios
+// equipos del club pueden competir a la vez en la misma competición, cada
+// uno en su grupo — caso real detectado el 2026-08-15 con la "Summer Cup",
+// 5 equipos del club), cada EquipoTorneo tiene su propio bloque de filas.
 model ClasificacionEquipo {
   id                  String   @id @default(uuid())
   torneoId            String
   torneo              Torneo   @relation(fields: [torneoId], references: [id], onDelete: Cascade)
+  equipoTorneoId      String?
+  equipoTorneo        EquipoTorneo? @relation(fields: [equipoTorneoId], references: [id], onDelete: Cascade)
   posicion            Int
   nombreEquipo        String
   puntos              Float?
@@ -113,7 +130,7 @@ model ClasificacionEquipo {
   actualizadoEn       DateTime @updatedAt
   origenActualizacion OrigenActualizacion @default(scraper)
 
-  @@unique([torneoId, nombreEquipo])
+  @@unique([torneoId, equipoTorneoId, nombreEquipo])
 }
 
 // La inscripción de un EquipoClub (el equipo del club, con su plantilla) en
@@ -130,12 +147,19 @@ model EquipoTorneo {
   equipoClubId    String?
   equipoClub      EquipoClub? @relation(fields: [equipoClubId], references: [id])
   nombreEquipo    String?  // solo se usa si no hay equipoClub (filas antiguas); si hay equipoClub, se muestra su nombre
+  // Nombre EXACTO de ESTE equipo (esta inscripción concreta) tal como está
+  // registrado en la plataforma externa — hace falta en plataformas como
+  // Phoenix Darts, donde la clasificación se busca por equipo y no por
+  // competición, y donde varios equipos del club pueden estar inscritos a
+  // la vez en el mismo Torneo/Liga (cada uno en su propio grupo). Para
+  // Radikal no hace falta (se usa Torneo.idExterno, compartido).
   idExternoEquipo String?
   capitanId       String?
   capitan         Jugador? @relation("capitan", fields: [capitanId], references: [id])
 
   jugadores EquipoJugador[]
   partidos  Partido[]
+  clasificacion ClasificacionEquipo[]
 
   @@unique([torneoId, equipoClubId])
 }

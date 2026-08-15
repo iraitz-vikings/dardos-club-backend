@@ -22,6 +22,10 @@ const includeCompleto = {
       capitan: true,
       jugadores: { include: { jugador: true } },
       partidos: { include: { maquina: true }, orderBy: { fecha: "asc" } },
+      // Clasificación propia de ESTA inscripción (solo tiene filas en
+      // plataformas por equipo como Phoenix, donde cada equipo del club
+      // puede caer en un grupo distinto dentro del mismo torneo/liga).
+      clasificacion: { orderBy: { posicion: "asc" } },
     },
   },
 };

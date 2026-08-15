@@ -147,25 +147,51 @@ async function iniciarSesionRadikal(page, context) {
 
   // Diagnóstico adicional: capturamos el código de estado HTTP de la
   // respuesta al enviar el formulario (nunca su contenido/URL completos), el
-  // número total de peticiones/respuestas de red vistas tras el click, y
-  // cuántas cookies hay antes/después, para distinguir "credenciales
-  // rechazadas por la web" de "un firewall/anti-bot bloqueó la petición" de
-  // "el click ni siquiera llegó a enviar el formulario".
+  // número total de peticiones/respuestas de red vistas tras el click, el
+  // host (solo el dominio, nunca ruta/query) de las peticiones POST propias
+  // (esp.radikalplayers.com) frente a las de terceros (SDKs de Google/
+  // Facebook embebidos en la página, que son ruido ajeno al login), los
+  // fallos de red (requestfailed, con su motivo tipo net::ERR_...) y cuántas
+  // cookies hay antes/después — para distinguir "credenciales rechazadas por
+  // la web" de "un firewall/anti-bot bloqueó la petición" de "el click ni
+  // siquiera llegó a enviar el formulario".
   const cookiesAntes = await context.cookies().catch(() => []);
   let estadoRespuesta = null;
   let totalPeticiones = 0;
   let totalRespuestas = 0;
-  const contarPeticion = () => {
+  const postsPropios = [];
+  const postsTerceros = [];
+  const fallos = [];
+  const hostDeUrl = (url) => {
+    try {
+      return new URL(url).hostname;
+    } catch {
+      return "?";
+    }
+  };
+  const contarPeticion = (req) => {
     totalPeticiones += 1;
+    if (req.method() === "POST") {
+      const host = hostDeUrl(req.url());
+      const lista = host.includes("radikalplayers.com") ? postsPropios : postsTerceros;
+      if (lista.length < 5 && !lista.includes(host)) lista.push(host);
+    }
   };
   const capturarRespuesta = (resp) => {
     totalRespuestas += 1;
-    if (resp.request().method() === "POST" && estadoRespuesta === null) {
+    if (resp.request().method() === "POST" && hostDeUrl(resp.url()).includes("radikalplayers.com") && estadoRespuesta === null) {
       estadoRespuesta = resp.status();
+    }
+  };
+  const capturarFallo = (req) => {
+    if (fallos.length < 5) {
+      const motivo = req.failure()?.errorText || "?";
+      fallos.push(`${req.method()} ${hostDeUrl(req.url())}: ${motivo}`);
     }
   };
   page.on("request", contarPeticion);
   page.on("response", capturarRespuesta);
+  page.on("requestfailed", capturarFallo);
 
   const botonEntrar = page.locator('input[name="bot_entrar"]').first();
   await botonEntrar.scrollIntoViewIfNeeded().catch(() => {});
@@ -175,9 +201,12 @@ async function iniciarSesionRadikal(page, context) {
   // porque el botón no está realmente asociado al formulario), pulsar Enter
   // en un campo de un <form> sí fuerza el envío nativo del navegador.
   await campoClave.press("Enter").catch(() => {});
-  await page.waitForLoadState("networkidle", { timeout: 15000 }).catch(() => {});
+  // Esperamos algo más que antes por si la petición está simplemente lenta
+  // (y no bloqueada) antes de darla por colgada.
+  await page.waitForLoadState("networkidle", { timeout: 20000 }).catch(() => {});
   page.off("request", contarPeticion);
   page.off("response", capturarRespuesta);
+  page.off("requestfailed", capturarFallo);
   const cookiesDespues = await context.cookies().catch(() => []);
 
   const logueado = await page
@@ -205,7 +234,16 @@ async function iniciarSesionRadikal(page, context) {
   const formularioSigueAhi = (await page.locator('input[name="dni"]').count().catch(() => 0)) > 0;
   const cookieNuevaCreada = cookiesDespues.length > cookiesAntes.length;
 
-  const detalleTecnico = `[POST→${estadoRespuesta ?? "sin respuesta capturada"}, peticiones ${totalPeticiones}, respuestas ${totalRespuestas}, cookies ${cookiesAntes.length}→${cookiesDespues.length}${erroresPagina.length ? `, errores JS: ${erroresPagina.join(" | ")}` : ""}]`;
+  // Filtramos del listado de errores JS el ruido conocido y ajeno al
+  // formulario dni/clave (los widgets embebidos de "Entrar con Google" /
+  // "Entrar con Facebook", que fallan en un navegador headless por
+  // restricciones de iframe/cookies de terceros pero no tienen relación con
+  // nuestro envío), para no confundir la señal real.
+  const erroresRelevantes = erroresPagina.filter(
+    (t) => !/facebook\.com|x-frame-options|provider'?s accounts list is empty/i.test(t)
+  );
+
+  const detalleTecnico = `[POST→${estadoRespuesta ?? "sin respuesta capturada"}, peticiones ${totalPeticiones}, respuestas ${totalRespuestas}, POST propios (radikalplayers.com): ${postsPropios.length ? postsPropios.join(",") : "ninguno"}, POST terceros: ${postsTerceros.length ? postsTerceros.join(",") : "ninguno"}${fallos.length ? `, peticiones fallidas: ${fallos.join(" | ")}` : ""}, cookies ${cookiesAntes.length}→${cookiesDespues.length}${erroresRelevantes.length ? `, errores JS relevantes: ${erroresRelevantes.join(" | ")}` : ""}]`;
 
   const diagnostico = mensajeError
     ? `la web respondió: "${mensajeError}" ${detalleTecnico}`
@@ -214,7 +252,9 @@ async function iniciarSesionRadikal(page, context) {
         ? `tras enviar el formulario se creó una cookie nueva pero no se detectó "Cerrar sesión" (puede que la página tarde más en reflejarlo) ${detalleTecnico}`
         : totalPeticiones === 0
           ? `el click no llegó a disparar ninguna petición de red — el formulario no se está enviando (posible problema del botón/selector, no de las credenciales) ${detalleTecnico}`
-          : `tras enviar el formulario, seguía en la página de login sin mensaje de error visible y sin crear ninguna cookie nueva — probablemente algo (firewall/anti-bot del sitio) está bloqueando la petición antes de comprobar las credenciales, no un problema con el usuario o la contraseña ${detalleTecnico}`
+          : postsPropios.length === 0
+            ? `el envío no llegó a disparar ninguna petición POST hacia radikalplayers.com (solo tráfico de terceros/ruido) — el formulario no se está enviando de verdad al servidor de login, no parece un problema de credenciales ${detalleTecnico}`
+            : `tras enviar el formulario, seguía en la página de login sin mensaje de error visible y sin crear ninguna cookie nueva — probablemente algo (firewall/anti-bot del sitio) está bloqueando la petición antes de comprobar las credenciales, no un problema con el usuario o la contraseña ${detalleTecnico}`
       : `se envió el formulario pero no se pudo confirmar el login (no aparece "Cerrar sesión" ni un mensaje de error reconocible) ${detalleTecnico}`;
 
   return { ok: false, diagnostico };

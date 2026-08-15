@@ -82,9 +82,38 @@ model Torneo {
   origen        OrigenTorneo
   plataformaId  String?
   plataforma    Plataforma? @relation(fields: [plataformaId], references: [id])
+  // Nombre EXACTO de la competición tal como aparece en la web de la
+  // plataforma (ej. "13 Vegas 2026" en Radikal Darts) — lo usa el scraper de
+  // clasificación de equipos para localizarla, igual que "notaBusqueda" para
+  // jugadores en JugadorFabricanteId.
   idExterno     String?
 
   equipos EquipoTorneo[]
+  clasificacion ClasificacionEquipo[]
+}
+
+// Fila de la tabla de clasificación general (equipos) de un Torneo/Liga
+// externo, extraída por scraping. Incluye TODOS los equipos de la
+// competición (no solo los del club), para poder ver el contexto completo
+// de la liga. Se reescribe entera en cada actualización (upsert por
+// [torneoId, nombreEquipo]), así que siempre refleja el último scrapeo.
+model ClasificacionEquipo {
+  id                  String   @id @default(uuid())
+  torneoId            String
+  torneo              Torneo   @relation(fields: [torneoId], references: [id], onDelete: Cascade)
+  posicion            Int
+  nombreEquipo        String
+  puntos              Float?
+  partidosJugados     Int?
+  partidosGanados     Int?
+  partidosPerdidos    Int?
+  partidosEmpatados   Int?
+  juegosGanados       Int?
+  juegosPerdidos      Int?
+  actualizadoEn       DateTime @updatedAt
+  origenActualizacion OrigenActualizacion @default(scraper)
+
+  @@unique([torneoId, nombreEquipo])
 }
 
 model EquipoTorneo {

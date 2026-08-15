@@ -106,6 +106,27 @@ async function iniciarSesionRadikal(page, context) {
     return { ok: false, diagnostico: "faltan-credenciales" };
   }
 
+  // El resultado anterior (POST sin capturar, cookies sin cambios) apunta a
+  // que el propio click no llega a disparar el envío del formulario — un
+  // sospechoso habitual es que algún script de detección de automatización
+  // mire navigator.webdriver (true por defecto en Playwright) y bloquee el
+  // submit sin avisar. Lo enmascaramos antes de navegar, por si acaso.
+  await page.addInitScript(() => {
+    Object.defineProperty(navigator, "webdriver", { get: () => false });
+  });
+
+  // Diagnóstico adicional: errores de JavaScript de la propia página durante
+  // el intento de login (sin imprimir nunca HTML/URLs/cookies), por si el
+  // submit está fallando por una excepción antes de llegar a hacer red.
+  const erroresPagina = [];
+  const registrarErrorPagina = (texto) => {
+    if (erroresPagina.length < 5 && texto) erroresPagina.push(texto.slice(0, 150));
+  };
+  page.on("pageerror", (err) => registrarErrorPagina(`js:${String(err && err.message ? err.message : err)}`));
+  page.on("console", (msg) => {
+    if (msg.type() === "error") registrarErrorPagina(`console:${msg.text()}`);
+  });
+
   await page.goto(HOME_URL, { waitUntil: "domcontentloaded", timeout: 30000 });
   await page.waitForLoadState("networkidle", { timeout: 15000 }).catch(() => {});
   await page
@@ -120,24 +141,42 @@ async function iniciarSesionRadikal(page, context) {
     return { ok: false, diagnostico: "no se encontró el formulario de login (input dni/clave) en la home de Radikal Darts" };
   }
 
+  await campoId.scrollIntoViewIfNeeded().catch(() => {});
   await campoId.fill(radikalId);
   await campoClave.fill(radikalPassword);
 
   // Diagnóstico adicional: capturamos el código de estado HTTP de la
-  // respuesta al enviar el formulario (nunca su contenido/URL completos) y
+  // respuesta al enviar el formulario (nunca su contenido/URL completos), el
+  // número total de peticiones/respuestas de red vistas tras el click, y
   // cuántas cookies hay antes/después, para distinguir "credenciales
-  // rechazadas por la web" de "un firewall/anti-bot bloqueó la petición" o
-  // "la sesión se creó pero no se detectó en la página".
+  // rechazadas por la web" de "un firewall/anti-bot bloqueó la petición" de
+  // "el click ni siquiera llegó a enviar el formulario".
   const cookiesAntes = await context.cookies().catch(() => []);
   let estadoRespuesta = null;
+  let totalPeticiones = 0;
+  let totalRespuestas = 0;
+  const contarPeticion = () => {
+    totalPeticiones += 1;
+  };
   const capturarRespuesta = (resp) => {
+    totalRespuestas += 1;
     if (resp.request().method() === "POST" && estadoRespuesta === null) {
       estadoRespuesta = resp.status();
     }
   };
+  page.on("request", contarPeticion);
   page.on("response", capturarRespuesta);
-  await page.locator('input[name="bot_entrar"]').first().click();
+
+  const botonEntrar = page.locator('input[name="bot_entrar"]').first();
+  await botonEntrar.scrollIntoViewIfNeeded().catch(() => {});
+  await botonEntrar.click();
+  // Además del click "normal", intentamos también Enter en el campo de la
+  // contraseña: si el click no está disparando el submit real (por ejemplo
+  // porque el botón no está realmente asociado al formulario), pulsar Enter
+  // en un campo de un <form> sí fuerza el envío nativo del navegador.
+  await campoClave.press("Enter").catch(() => {});
   await page.waitForLoadState("networkidle", { timeout: 15000 }).catch(() => {});
+  page.off("request", contarPeticion);
   page.off("response", capturarRespuesta);
   const cookiesDespues = await context.cookies().catch(() => []);
 
@@ -166,14 +205,16 @@ async function iniciarSesionRadikal(page, context) {
   const formularioSigueAhi = (await page.locator('input[name="dni"]').count().catch(() => 0)) > 0;
   const cookieNuevaCreada = cookiesDespues.length > cookiesAntes.length;
 
-  const detalleTecnico = `[POST→${estadoRespuesta ?? "sin respuesta capturada"}, cookies ${cookiesAntes.length}→${cookiesDespues.length}]`;
+  const detalleTecnico = `[POST→${estadoRespuesta ?? "sin respuesta capturada"}, peticiones ${totalPeticiones}, respuestas ${totalRespuestas}, cookies ${cookiesAntes.length}→${cookiesDespues.length}${erroresPagina.length ? `, errores JS: ${erroresPagina.join(" | ")}` : ""}]`;
 
   const diagnostico = mensajeError
     ? `la web respondió: "${mensajeError}" ${detalleTecnico}`
     : formularioSigueAhi
       ? cookieNuevaCreada
         ? `tras enviar el formulario se creó una cookie nueva pero no se detectó "Cerrar sesión" (puede que la página tarde más en reflejarlo) ${detalleTecnico}`
-        : `tras enviar el formulario, seguía en la página de login sin mensaje de error visible y sin crear ninguna cookie nueva — probablemente algo (firewall/anti-bot del sitio) está bloqueando la petición antes de comprobar las credenciales, no un problema con el usuario o la contraseña ${detalleTecnico}`
+        : totalPeticiones === 0
+          ? `el click no llegó a disparar ninguna petición de red — el formulario no se está enviando (posible problema del botón/selector, no de las credenciales) ${detalleTecnico}`
+          : `tras enviar el formulario, seguía en la página de login sin mensaje de error visible y sin crear ninguna cookie nueva — probablemente algo (firewall/anti-bot del sitio) está bloqueando la petición antes de comprobar las credenciales, no un problema con el usuario o la contraseña ${detalleTecnico}`
       : `se envió el formulario pero no se pudo confirmar el login (no aparece "Cerrar sesión" ni un mensaje de error reconocible) ${detalleTecnico}`;
 
   return { ok: false, diagnostico };

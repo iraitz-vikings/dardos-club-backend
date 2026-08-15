@@ -1,320 +1,280 @@
-import { Router } from "express";
-import { PrismaClient } from "@prisma/client";
-import jwt from "jsonwebtoken";
-import { requireAuth } from "./auth.js";
-import { extraerClasificacionEquiposRadikal } from "../scrapers/radikalDarts.js";
+import { useEffect, useState } from "react";
 
-const prisma = new PrismaClient();
-const router = Router();
+const API_URL = import.meta.env.VITE_API_URL || "https://dardos-club-backend-production.up.railway.app";
 
-function requireAdmin(req, res, next) {
-  const token = req.headers["x-admin-token"];
-  if (!token || token !== process.env.ADMIN_TOKEN) {
-    return res.status(401).json({ error: "No autorizado" });
+// El significado de "Id externo" depende de la plataforma: en Radikal Darts
+// es el nombre de la COMPETICIÓN, pero en Phoenix Darts la búsqueda pública
+// parte del EQUIPO (no hay forma de buscar una liga por su nombre), así que
+// ahí hay que poner el nombre exacto del equipo tal como está registrado en
+// Phoenix — el propio nombre que le hemos puesto a este Torneo se usa
+// automáticamente para desambiguar si ese equipo compite en varias
+// competiciones de Phoenix a la vez.
+function hintIdExterno(nombrePlataforma) {
+  const p = (nombrePlataforma || "").toLowerCase();
+  if (p.includes("phoenix")) {
+    return 'Nombre EXACTO del EQUIPO tal como está registrado en Phoenix Darts (no el de la liga). Si ese equipo compite en varias competiciones de Phoenix a la vez, se elige la que mejor coincida con el "Nombre" de este torneo.';
   }
-  next();
+  if (p.includes("radikal")) {
+    return "Nombre EXACTO de la competición tal como aparece en la web de Radikal Darts.";
+  }
+  return 'Nombre EXACTO tal como aparece en la web de la plataforma. Hace falta para poder actualizar la clasificación automáticamente (por ahora solo Radikal Darts y Phoenix Darts).';
 }
 
-// Acepta o bien el admin (panel), o bien la sesión de un socio (para que el
-// capitán pueda confirmar sus propios partidos)
-function requireAdminOSocio(req, res, next) {
-  const adminToken = req.headers["x-admin-token"];
-  if (adminToken && adminToken === process.env.ADMIN_TOKEN) {
-    req.esAdminPanel = true;
-    return next();
+function placeholderIdExterno(nombrePlataforma) {
+  const p = (nombrePlataforma || "").toLowerCase();
+  if (p.includes("phoenix")) return "Ej: VDC Gentlemen";
+  if (p.includes("radikal")) return "Ej: 13 Vegas 2026";
+  return "";
+}
+
+export default function AdminCompeticionesExternas({ token, salir }) {
+  const [plataformas, setPlataformas] = useState([]);
+  const [torneos, setTorneos] = useState([]);
+  const [nombrePlataforma, setNombrePlataforma] = useState("");
+
+  const [nombreTorneo, setNombreTorneo] = useState("");
+  const [nivel, setNivel] = useState("");
+  const [temporada, setTemporada] = useState("");
+  const [plataformaSel, setPlataformaSel] = useState("");
+  const [idExternoTorneo, setIdExternoTorneo] = useState("");
+
+  const [abiertoId, setAbiertoId] = useState(null);
+  const [mensaje, setMensaje] = useState(null);
+  const [clasificando, setClasificando] = useState(null);
+  const [mensajeClasificacion, setMensajeClasificacion] = useState({});
+
+  const nombrePlataformaPorId = (id) => plataformas.find((p) => p.id === id)?.nombre || "";
+
+  const cargarTodo = () => {
+    fetch(`${API_URL}/api/competiciones-externas/plataformas`).then((r) => r.json()).then(setPlataformas).catch(() => {});
+    fetch(`${API_URL}/api/competiciones-externas/torneos/admin`, { headers: { "x-admin-token": token } }).then((r) => r.json()).then(setTorneos).catch(() => {});
+  };
+
+  useEffect(() => {
+    cargarTodo();
+  }, []);
+
+  async function crearPlataforma(e) {
+    e.preventDefault();
+    if (!nombrePlataforma.trim()) return;
+    await fetch(`${API_URL}/api/competiciones-externas/plataformas`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json", "x-admin-token": token },
+      body: JSON.stringify({ nombre: nombrePlataforma.trim() }),
+    });
+    setNombrePlataforma("");
+    cargarTodo();
   }
-  const header = req.headers.authorization || "";
-  const token = header.startsWith("Bearer ") ? header.slice(7) : null;
-  if (token) {
+  async function borrarPlataforma(id) {
+    if (!confirm("¿Borrar esta plataforma? (debe no tener torneos)")) return;
+    await fetch(`${API_URL}/api/competiciones-externas/plataformas/${id}`, { method: "DELETE", headers: { "x-admin-token": token } });
+    cargarTodo();
+  }
+
+  async function crearTorneo(e) {
+    e.preventDefault();
+    if (!nombreTorneo.trim() || !plataformaSel) return;
+    const res = await fetch(`${API_URL}/api/competiciones-externas/torneos`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json", "x-admin-token": token },
+      body: JSON.stringify({
+        nombre: nombreTorneo.trim(),
+        nivel,
+        temporada,
+        plataformaId: plataformaSel,
+        idExterno: idExternoTorneo.trim(),
+      }),
+    });
+    if (res.status === 401) { setMensaje({ tipo: "error", texto: "Contraseña incorrecta." }); salir(); return; }
+    setNombreTorneo(""); setNivel(""); setTemporada(""); setPlataformaSel(""); setIdExternoTorneo("");
+    cargarTodo();
+  }
+  async function borrarTorneo(id) {
+    if (!confirm("¿Borrar este torneo/liga y las inscripciones de equipos en él?")) return;
+    await fetch(`${API_URL}/api/competiciones-externas/torneos/${id}`, { method: "DELETE", headers: { "x-admin-token": token } });
+    cargarTodo();
+  }
+  async function guardarIdExterno(id, idExterno) {
+    await fetch(`${API_URL}/api/competiciones-externas/torneos/${id}`, {
+      method: "PUT",
+      headers: { "Content-Type": "application/json", "x-admin-token": token },
+      body: JSON.stringify({ idExterno }),
+    });
+    cargarTodo();
+  }
+  async function actualizarClasificacion(id) {
+    setClasificando(id);
+    setMensajeClasificacion((m) => ({ ...m, [id]: null }));
     try {
-      req.usuario = jwt.verify(token, process.env.JWT_SECRET);
-      return next();
+      const res = await fetch(`${API_URL}/api/competiciones-externas/torneos/${id}/actualizar-clasificacion`, {
+        method: "POST",
+        headers: { "x-admin-token": token },
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) {
+        setMensajeClasificacion((m) => ({ ...m, [id]: { tipo: "error", texto: data.error || "No se pudo actualizar." } }));
+        return;
+      }
+      setMensajeClasificacion((m) => ({ ...m, [id]: { tipo: "ok", texto: "Clasificación actualizada." } }));
+      cargarTodo();
     } catch {
-      // sigue abajo
+      setMensajeClasificacion((m) => ({ ...m, [id]: { tipo: "error", texto: "Error de conexión." } }));
+    } finally {
+      setClasificando(null);
     }
   }
-  return res.status(401).json({ error: "No autorizado" });
+
+  return (
+    <section className="admin-form">
+      <h2>Competiciones externas</h2>
+      <p className="admin-hint">
+        Aquí solo se dan de alta las competiciones (plataforma, nombre de la liga/torneo). Los equipos que
+        participan en ellas se gestionan desde la pestaña "Equipos" — cada equipo del club se inscribe en la
+        competición que le corresponda.
+      </p>
+
+      <h3>Plataformas</h3>
+      <form onSubmit={crearPlataforma} className="admin-inline-form">
+        <label>
+          Nombre
+          <input value={nombrePlataforma} onChange={(e) => setNombrePlataforma(e.target.value)} placeholder="Ej: Radikal" />
+        </label>
+        <button type="submit" disabled={!nombrePlataforma.trim()}>Añadir plataforma</button>
+      </form>
+      <ul>
+        {plataformas.map((p) => (
+          <li key={p.id} className="admin-list-item">
+            <span>{p.nombre}</span>
+            <button className="admin-link-btn" onClick={() => borrarPlataforma(p.id)}>Borrar</button>
+          </li>
+        ))}
+      </ul>
+
+      <h3 style={{ marginTop: "1.5rem" }}>Torneos / Ligas externas</h3>
+      <form onSubmit={crearTorneo} className="admin-form">
+        <label>
+          Nombre
+          <input value={nombreTorneo} onChange={(e) => setNombreTorneo(e.target.value)} required />
+        </label>
+        <label>
+          Nivel (opcional)
+          <input value={nivel} onChange={(e) => setNivel(e.target.value)} placeholder="Ej: 2ª división" />
+        </label>
+        <label>
+          Temporada (opcional)
+          <input value={temporada} onChange={(e) => setTemporada(e.target.value)} placeholder="Ej: 2025-26" />
+        </label>
+        <label>
+          Plataforma
+          <select value={plataformaSel} onChange={(e) => setPlataformaSel(e.target.value)} required>
+            <option value="">Elige…</option>
+            {plataformas.map((p) => <option key={p.id} value={p.id}>{p.nombre}</option>)}
+          </select>
+        </label>
+        <label>
+          Id externo (opcional)
+          <input
+            value={idExternoTorneo}
+            onChange={(e) => setIdExternoTorneo(e.target.value)}
+            placeholder={placeholderIdExterno(nombrePlataformaPorId(plataformaSel))}
+          />
+          <span className="admin-hint">{hintIdExterno(nombrePlataformaPorId(plataformaSel))}</span>
+        </label>
+        <button type="submit">Crear torneo/liga</button>
+        {mensaje && <p className={`admin-msg admin-msg-${mensaje.tipo}`}>{mensaje.texto}</p>}
+      </form>
+
+      {torneos.map((t) => (
+        <div key={t.id} className="admin-cuadrante" style={{ marginTop: "1rem" }}>
+          <div className="admin-cuadrante-header">
+            <h4>{t.nombre} — {t.plataforma?.nombre}{t.nivel ? ` · ${t.nivel}` : ""}{t.temporada ? ` · ${t.temporada}` : ""}</h4>
+            <div style={{ display: "flex", gap: ".5rem" }}>
+              <button className="admin-link-btn" onClick={() => setAbiertoId(abiertoId === t.id ? null : t.id)}>
+                {abiertoId === t.id ? "Cerrar" : "Gestionar"}
+              </button>
+              <button className="admin-link-btn" onClick={() => borrarTorneo(t.id)}>Borrar</button>
+            </div>
+          </div>
+
+          {abiertoId === t.id && (
+            <div>
+              <label style={{ display: "block", marginTop: ".8rem" }}>
+                Id externo
+                <input
+                  defaultValue={t.idExterno || ""}
+                  placeholder={placeholderIdExterno(t.plataforma?.nombre)}
+                  onBlur={(e) => guardarIdExterno(t.id, e.target.value.trim())}
+                />
+                <span className="admin-hint">{hintIdExterno(t.plataforma?.nombre)}</span>
+              </label>
+
+              <div style={{ marginTop: ".6rem", display: "flex", gap: ".5rem", alignItems: "center" }}>
+                <button type="button" disabled={clasificando === t.id} onClick={() => actualizarClasificacion(t.id)}>
+                  {clasificando === t.id ? "Actualizando…" : "Actualizar clasificación"}
+                </button>
+                {t.clasificacion?.length > 0 && (
+                  <span className="admin-hint">
+                    Última actualización: {new Date(t.clasificacion[0].actualizadoEn).toLocaleString("es-ES")}
+                  </span>
+                )}
+              </div>
+              {mensajeClasificacion[t.id] && (
+                <p className={`admin-msg admin-msg-${mensajeClasificacion[t.id].tipo}`}>{mensajeClasificacion[t.id].texto}</p>
+              )}
+
+              <TablaClasificacion filas={t.clasificacion} />
+
+              <p className="admin-hint" style={{ marginTop: ".8rem" }}>
+                {t.equipos?.length > 0
+                  ? `Equipos del club inscritos: ${t.equipos.map((eq) => eq.equipoClub?.nombre || eq.nombreEquipo || "Vikings").join(", ")}. Gestiónalos desde la pestaña "Equipos".`
+                  : 'Todavía no hay ningún equipo del club inscrito en esta competición. Ve a la pestaña "Equipos" para inscribir uno.'}
+              </p>
+            </div>
+          )}
+        </div>
+      ))}
+    </section>
+  );
 }
 
-const includeTorneo = {
-  plataforma: true,
-  equipos: {
-    include: {
-      equipoClub: true,
-      capitan: true,
-      jugadores: { include: { jugador: true } },
-      partidos: { include: { maquina: true }, orderBy: { fecha: "asc" } },
-    },
-  },
-  clasificacion: { orderBy: { posicion: "asc" } },
-};
-
-// ---------- Plataformas (fabricantes) ----------
-router.get("/plataformas", async (_req, res) => {
-  const plataformas = await prisma.plataforma.findMany({ orderBy: { nombre: "asc" } });
-  res.json(plataformas);
-});
-router.post("/plataformas", requireAdmin, async (req, res) => {
-  const { nombre } = req.body;
-  if (!nombre || !nombre.trim()) return res.status(400).json({ error: "Falta el nombre" });
-  try {
-    const plataforma = await prisma.plataforma.create({ data: { nombre: nombre.trim() } });
-    res.status(201).json(plataforma);
-  } catch {
-    res.status(409).json({ error: "Ya existe una plataforma con ese nombre" });
-  }
-});
-router.delete("/plataformas/:id", requireAdmin, async (req, res) => {
-  await prisma.plataforma.delete({ where: { id: req.params.id } }).catch(() => {});
-  res.status(204).end();
-});
-
-// ---------- Torneos externos ----------
-router.get("/torneos", requireAuth, async (_req, res) => {
-  const torneos = await prisma.torneo.findMany({ include: includeTorneo, orderBy: { nombre: "asc" } });
-  res.json(torneos);
-});
-router.get("/torneos/admin", requireAdmin, async (_req, res) => {
-  const torneos = await prisma.torneo.findMany({ include: includeTorneo, orderBy: { nombre: "asc" } });
-  res.json(torneos);
-});
-router.post("/torneos", requireAdmin, async (req, res) => {
-  const { nombre, nivel, temporada, plataformaId, idExterno } = req.body;
-  if (!nombre || !plataformaId) return res.status(400).json({ error: "Falta el nombre o la plataforma" });
-  const torneo = await prisma.torneo.create({
-    data: {
-      nombre,
-      nivel: nivel || null,
-      temporada: temporada || null,
-      plataformaId,
-      idExterno: idExterno || null,
-      origen: "manual",
-    },
-    include: includeTorneo,
-  });
-  res.status(201).json(torneo);
-});
-router.put("/torneos/:id", requireAdmin, async (req, res) => {
-  const { id } = req.params;
-  const { nombre, nivel, temporada, idExterno } = req.body;
-  try {
-    const torneo = await prisma.torneo.update({
-      where: { id },
-      data: {
-        nombre: nombre !== undefined ? nombre : undefined,
-        nivel: nivel !== undefined ? nivel || null : undefined,
-        temporada: temporada !== undefined ? temporada || null : undefined,
-        idExterno: idExterno !== undefined ? idExterno || null : undefined,
-      },
-      include: includeTorneo,
-    });
-    res.json(torneo);
-  } catch {
-    res.status(404).json({ error: "Torneo no encontrado" });
-  }
-});
-
-// Extrae (scraping) la clasificación de equipos de este torneo desde la
-// plataforma externa y la guarda, sustituyendo la anterior. Por ahora solo
-// implementado para Radikal Darts (la única de las tres cuya tabla de
-// clasificación de equipos es pública, sin necesitar login) — para
-// cualquier otra plataforma devuelve un error explicando que aún no está
-// soportado, en vez de fallar en silencio.
-router.post("/torneos/:id/actualizar-clasificacion", requireAdmin, async (req, res) => {
-  const { id } = req.params;
-  const torneo = await prisma.torneo.findUnique({ where: { id }, include: { plataforma: true } });
-  if (!torneo) return res.status(404).json({ error: "Torneo no encontrado" });
-
-  const nombrePlataforma = (torneo.plataforma?.nombre || "").toLowerCase();
-  if (!nombrePlataforma.includes("radikal")) {
-    return res.status(400).json({
-      error: `La extracción de clasificación de equipos todavía no está implementada para "${torneo.plataforma?.nombre || "esta plataforma"}" (solo Radikal Darts por ahora).`,
-    });
-  }
-
-  const [resultado] = await extraerClasificacionEquiposRadikal([{ id: torneo.id, idExterno: torneo.idExterno }]);
-  if (!resultado.ok) {
-    return res.status(422).json({ error: resultado.error });
-  }
-
-  await prisma.$transaction([
-    prisma.clasificacionEquipo.deleteMany({ where: { torneoId: id } }),
-    prisma.clasificacionEquipo.createMany({
-      data: resultado.filas.map((f) => ({
-        torneoId: id,
-        posicion: f.posicion,
-        nombreEquipo: f.nombreEquipo,
-        puntos: f.puntos,
-        partidosJugados: f.partidosJugados,
-        partidosGanados: f.partidosGanados,
-        partidosPerdidos: f.partidosPerdidos,
-        partidosEmpatados: f.partidosEmpatados,
-        juegosGanados: f.juegosGanados,
-        juegosPerdidos: f.juegosPerdidos,
-        origenActualizacion: "scraper",
-      })),
-    }),
-  ]);
-
-  const actualizado = await prisma.torneo.findUnique({ where: { id }, include: includeTorneo });
-  res.json(actualizado);
-});
-
-router.delete("/torneos/:id", requireAdmin, async (req, res) => {
-  const { id } = req.params;
-  const equipos = await prisma.equipoTorneo.findMany({ where: { torneoId: id }, select: { id: true } });
-  const equipoIds = equipos.map((e) => e.id);
-  await prisma.partido.deleteMany({ where: { equipoTorneoId: { in: equipoIds } } });
-  await prisma.equipoJugador.deleteMany({ where: { equipoTorneoId: { in: equipoIds } } });
-  await prisma.equipoTorneo.deleteMany({ where: { torneoId: id } });
-  await prisma.torneo.delete({ where: { id } });
-  res.status(204).end();
-});
-
-// ---------- Equipos del club en un torneo externo ----------
-router.post("/torneos/:torneoId/equipos", requireAdmin, async (req, res) => {
-  const { torneoId } = req.params;
-  const { nombreEquipo, capitanId } = req.body;
-  const equipo = await prisma.equipoTorneo.create({
-    data: { torneoId, nombreEquipo: nombreEquipo || null, capitanId: capitanId || null },
-  });
-  res.status(201).json(equipo);
-});
-router.put("/equipos/:id", requireAdmin, async (req, res) => {
-  const { id } = req.params;
-  const { nombreEquipo, capitanId } = req.body;
-  const equipo = await prisma.equipoTorneo.update({
-    where: { id },
-    data: {
-      nombreEquipo: nombreEquipo !== undefined ? nombreEquipo || null : undefined,
-      capitanId: capitanId !== undefined ? capitanId || null : undefined,
-    },
-  });
-  res.json(equipo);
-});
-router.delete("/equipos/:id", requireAdmin, async (req, res) => {
-  const { id } = req.params;
-  await prisma.partido.deleteMany({ where: { equipoTorneoId: id } });
-  await prisma.equipoJugador.deleteMany({ where: { equipoTorneoId: id } });
-  await prisma.equipoTorneo.delete({ where: { id } });
-  res.status(204).end();
-});
-router.post("/equipos/:id/jugadores", requireAdmin, async (req, res) => {
-  const { id } = req.params;
-  const { jugadorId } = req.body;
-  try {
-    await prisma.equipoJugador.create({ data: { equipoTorneoId: id, jugadorId } });
-    res.status(201).json({ ok: true });
-  } catch {
-    res.status(409).json({ error: "Ese jugador ya está en el equipo" });
-  }
-});
-router.delete("/equipos/:id/jugadores/:jugadorId", requireAdmin, async (req, res) => {
-  await prisma.equipoJugador.deleteMany({ where: { equipoTorneoId: req.params.id, jugadorId: req.params.jugadorId } });
-  res.status(204).end();
-});
-
-// ---------- Partidos ----------
-router.post("/equipos/:id/partidos", requireAdmin, async (req, res) => {
-  const { id } = req.params;
-  const { fecha, rival } = req.body;
-  if (!fecha) return res.status(400).json({ error: "Falta la fecha" });
-  const partido = await prisma.partido.create({
-    data: { equipoTorneoId: id, fecha: new Date(fecha), rival: rival || null },
-  });
-  res.status(201).json(partido);
-});
-
-// Confirmar (fijar) un partido: el admin, o el capitán de ese equipo concreto
-router.put("/partidos/:id", requireAdminOSocio, async (req, res) => {
-  const { id } = req.params;
-  const partido = await prisma.partido.findUnique({
-    where: { id },
-    include: { equipoTorneo: { include: { capitan: true } } },
-  });
-  if (!partido) return res.status(404).json({ error: "Partido no encontrado" });
-
-  if (!req.esAdminPanel) {
-    const esAdmin = req.usuario?.rol === "admin";
-    const esCapitan = partido.equipoTorneo.capitan?.usuarioId === req.usuario?.sub;
-    if (!esAdmin && !esCapitan) {
-      return res.status(403).json({ error: "Solo el capitán de este equipo o un admin pueden confirmar este partido" });
-    }
-  }
-
-  const { fecha, rival, resultado, maquinaId, notaCapitan, fijado } = req.body;
-  const actualizado = await prisma.partido.update({
-    where: { id },
-    data: {
-      fecha: fecha !== undefined ? new Date(fecha) : undefined,
-      rival: rival !== undefined ? rival || null : undefined,
-      resultado: resultado !== undefined ? resultado || null : undefined,
-      maquinaId: maquinaId !== undefined ? maquinaId || null : undefined,
-      notaCapitan: notaCapitan !== undefined ? notaCapitan || null : undefined,
-      fijado: fijado !== undefined ? !!fijado : undefined,
-      origenActualizacion: "manual",
-    },
-    include: { maquina: true },
-  });
-  res.json(actualizado);
-});
-
-router.delete("/partidos/:id", requireAdmin, async (req, res) => {
-  await prisma.partido.delete({ where: { id: req.params.id } }).catch(() => {});
-  res.status(204).end();
-});
-
-// ---------- Calendario: partidos externos fijados de esta semana +
-// enfrentamientos internos Vikings marcados "en curso" ----------
-router.get("/calendario", requireAuth, async (_req, res) => {
-  const inicioSemana = new Date();
-  inicioSemana.setHours(0, 0, 0, 0);
-  inicioSemana.setDate(inicioSemana.getDate() - ((inicioSemana.getDay() + 6) % 7));
-  const finSemana = new Date(inicioSemana);
-  finSemana.setDate(finSemana.getDate() + 7);
-
-  const partidosExternos = await prisma.partido.findMany({
-    where: { fijado: true, fecha: { gte: inicioSemana, lt: finSemana } },
-    include: { maquina: true, equipoTorneo: { include: { torneo: { include: { plataforma: true } } } } },
-  });
-
-  const cuadroPartidosEnCurso = await prisma.cuadroPartido.findMany({
-    where: { enCurso: true },
-    include: { cuadrante: { include: { torneoClub: true, liga: true } } },
-  });
-  const partidosLigaEnCurso = await prisma.partidoLiga.findMany({
-    where: { enCurso: true },
-    include: { liga: true },
-  });
-
-  res.json({
-    inicioSemana,
-    externos: partidosExternos.map((p) => ({
-      id: p.id,
-      fecha: p.fecha,
-      maquina: p.maquina?.nombre || null,
-      rival: p.rival,
-      equipo: p.equipoTorneo.nombreEquipo || "Vikings",
-      torneo: p.equipoTorneo.torneo?.nombre,
-      plataforma: p.equipoTorneo.torneo?.plataforma?.nombre,
-    })),
-    internos: [
-      ...cuadroPartidosEnCurso.map((p) => ({
-        id: `c-${p.id}`,
-        maquina: p.maquina || null,
-        jugador1: p.jugador1,
-        jugador2: p.jugador2,
-        nombre: p.cuadrante.torneoClub?.nombre || p.cuadrante.liga?.nombre || "Torneo",
-      })),
-      ...partidosLigaEnCurso.map((p) => ({
-        id: `l-${p.id}`,
-        maquina: p.maquina || null,
-        jugador1: p.participante1,
-        jugador2: p.participante2,
-        nombre: p.liga.nombre,
-      })),
-    ],
-  });
-});
-
-export default router;
+// Tabla de clasificación general (todos los equipos de la competición, no
+// solo los del club), de solo lectura — se rellena vía "Actualizar
+// clasificación". Se usa en el panel de admin (aquí y en la pestaña
+// Equipos) y en la vista de socios (Competiciones.jsx).
+export function TablaClasificacion({ filas }) {
+  if (!filas || filas.length === 0) return null;
+  return (
+    <div style={{ overflowX: "auto", marginTop: ".8rem" }}>
+      <table className="admin-tabla-clasificacion">
+        <thead>
+          <tr>
+            <th>Pos</th>
+            <th>Equipo</th>
+            <th>Puntos</th>
+            <th>PJ</th>
+            <th>PG</th>
+            <th>PP</th>
+            <th>PE</th>
+            <th>JG</th>
+            <th>JP</th>
+          </tr>
+        </thead>
+        <tbody>
+          {filas.map((f) => (
+            <tr key={f.id}>
+              <td>{f.posicion}</td>
+              <td>{f.nombreEquipo}</td>
+              <td>{f.puntos ?? "—"}</td>
+              <td>{f.partidosJugados ?? "—"}</td>
+              <td>{f.partidosGanados ?? "—"}</td>
+              <td>{f.partidosPerdidos ?? "—"}</td>
+              <td>{f.partidosEmpatados ?? "—"}</td>
+              <td>{f.juegosGanados ?? "—"}</td>
+              <td>{f.juegosPerdidos ?? "—"}</td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+    </div>
+  );
+}

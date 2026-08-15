@@ -99,7 +99,7 @@ const CONTEXT_OPTIONS = {
 // false, en qué paso concreto falló (sin credenciales, sin formulario,
 // mensaje de error de la propia web, o no se pudo confirmar tras enviar),
 // para poder mostrar un error útil sin tener que repetir pruebas manuales.
-async function iniciarSesionRadikal(page) {
+async function iniciarSesionRadikal(page, context) {
   const radikalId = (process.env.RADIKAL_DARTS_ID || "").trim();
   const radikalPassword = process.env.RADIKAL_DARTS_PASSWORD || "";
   if (!radikalId || !radikalPassword) {
@@ -122,8 +122,24 @@ async function iniciarSesionRadikal(page) {
 
   await campoId.fill(radikalId);
   await campoClave.fill(radikalPassword);
+
+  // Diagnóstico adicional: capturamos el código de estado HTTP de la
+  // respuesta al enviar el formulario (nunca su contenido/URL completos) y
+  // cuántas cookies hay antes/después, para distinguir "credenciales
+  // rechazadas por la web" de "un firewall/anti-bot bloqueó la petición" o
+  // "la sesión se creó pero no se detectó en la página".
+  const cookiesAntes = await context.cookies().catch(() => []);
+  let estadoRespuesta = null;
+  const capturarRespuesta = (resp) => {
+    if (resp.request().method() === "POST" && estadoRespuesta === null) {
+      estadoRespuesta = resp.status();
+    }
+  };
+  page.on("response", capturarRespuesta);
   await page.locator('input[name="bot_entrar"]').first().click();
   await page.waitForLoadState("networkidle", { timeout: 15000 }).catch(() => {});
+  page.off("response", capturarRespuesta);
+  const cookiesDespues = await context.cookies().catch(() => []);
 
   const logueado = await page
     .getByText("Cerrar sesión", { exact: false })
@@ -142,18 +158,23 @@ async function iniciarSesionRadikal(page) {
         .filter((el) => el.children.length === 0)
         .map((el) => (el.textContent || "").trim())
         .filter((t) => t.length > 0 && t.length < 200)
-        .filter((t) => /incorrect|inv[aá]lid|no coincide|error|no existe|bloquead/i.test(t));
+        .filter((t) => /incorrect|inv[aá]lid|err[oó]ne|no coincide|error|no existe|bloquead|denegad|acceso denegado|captcha/i.test(t));
       return candidatos[0] || null;
     })
     .catch(() => null);
 
   const formularioSigueAhi = (await page.locator('input[name="dni"]').count().catch(() => 0)) > 0;
+  const cookieNuevaCreada = cookiesDespues.length > cookiesAntes.length;
+
+  const detalleTecnico = `[POST→${estadoRespuesta ?? "sin respuesta capturada"}, cookies ${cookiesAntes.length}→${cookiesDespues.length}]`;
 
   const diagnostico = mensajeError
-    ? `la web respondió: "${mensajeError}"`
+    ? `la web respondió: "${mensajeError}" ${detalleTecnico}`
     : formularioSigueAhi
-      ? "tras enviar el formulario, seguía en la página de login sin mensaje de error visible (revisa que RADIKAL_DARTS_ID sea el \"Radikal ID\" y no el email)"
-      : "se envió el formulario pero no se pudo confirmar el login (no aparece \"Cerrar sesión\" ni un mensaje de error reconocible)";
+      ? cookieNuevaCreada
+        ? `tras enviar el formulario se creó una cookie nueva pero no se detectó "Cerrar sesión" (puede que la página tarde más en reflejarlo) ${detalleTecnico}`
+        : `tras enviar el formulario, seguía en la página de login sin mensaje de error visible y sin crear ninguna cookie nueva — probablemente algo (firewall/anti-bot del sitio) está bloqueando la petición antes de comprobar las credenciales, no un problema con el usuario o la contraseña ${detalleTecnico}`
+      : `se envió el formulario pero no se pudo confirmar el login (no aparece "Cerrar sesión" ni un mensaje de error reconocible) ${detalleTecnico}`;
 
   return { ok: false, diagnostico };
 }
@@ -332,7 +353,7 @@ export async function actualizarMediasRadikal(registros) {
 
     // La ficha de jugador (y, en Ligas, la Clasificación Individual) exigen
     // sesión iniciada: sin login no tiene sentido intentar nada más.
-    const { ok: logueado, diagnostico } = await iniciarSesionRadikal(page);
+    const { ok: logueado, diagnostico } = await iniciarSesionRadikal(page, context);
     if (!logueado) {
       const error =
         diagnostico === "faltan-credenciales"

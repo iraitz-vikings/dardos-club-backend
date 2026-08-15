@@ -40,6 +40,7 @@ const includeTorneo = {
   plataforma: true,
   equipos: {
     include: {
+      equipoClub: true,
       capitan: true,
       jugadores: { include: { jugador: true } },
       partidos: { include: { maquina: true }, orderBy: { fecha: "asc" } },

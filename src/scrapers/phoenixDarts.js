@@ -176,10 +176,16 @@ export async function actualizarMediasPhoenix(registros) {
 //
 // - En Phoenix no existe una búsqueda pública directa "por nombre de
 //   competición". La búsqueda parte del EQUIPO: selectTeamList.do con
-//   ?searchKey=<nombre>&unifiedFg=1&searchNation=ES. Por eso aquí
-//   `idExterno` (guardado en Torneo.idExterno, igual que para Radikal) es
-//   el nombre EXACTO del EQUIPO tal como está registrado en Phoenix Darts
-//   (ej. "VDC Gentlemen"), no el de la liga.
+//   ?searchKey=<nombre>&unifiedFg=1&searchNation=ES.
+// - Un mismo Torneo/Liga de Phoenix puede tener VARIOS equipos del club
+//   compitiendo a la vez (caso real detectado el 2026-08-15: la "Summer
+//   Cup" tiene 5 equipos del club inscritos), y cada uno puede estar en un
+//   grupo distinto — así que la búsqueda no puede hacerse una sola vez por
+//   Torneo, tiene que hacerse una vez por cada EQUIPO DEL CLUB inscrito
+//   (EquipoTorneo). Por eso esta función recibe una lista de inscripciones,
+//   no de torneos: cada `idExterno` es el nombre EXACTO de ESE equipo tal
+//   como está registrado en Phoenix Darts (ej. "VDC Gentlemen"), guardado
+//   en `EquipoTorneo.idExternoEquipo`, no en `Torneo.idExterno`.
 // - Cada equipo encontrado, al expandir su ficha (click en
 //   `p.box_list_toggle`, que dispara una carga AJAX), muestra un bloque
 //   `div.competition` por cada competición en la que participa, con su
@@ -322,21 +328,25 @@ async function leerClasificacionEquiposPhoenixML(page, cpttnId, searchDivision) 
   return filasEquipo.length > 0 ? filasEquipo : null;
 }
 
-// torneos: [{ id, idExterno, nombre }] — idExterno es el nombre EXACTO del
-// EQUIPO en Phoenix Darts (ej. "VDC Gentlemen"; se guarda en
-// Torneo.idExterno igual que para Radikal, aunque aquí signifique otra
-// cosa). "nombre" es el nombre que le hemos puesto nosotros al Torneo, y
-// se usa solo para desambiguar si ese equipo compite en más de una
-// competición de Phoenix a la vez. Devuelve [{ torneoId, ok, filas?,
-// error? }].
-export async function extraerClasificacionEquiposPhoenix(torneos) {
-  const conNombre = torneos.filter((t) => (t.idExterno || "").trim());
-  const resultados = torneos
+// equiposTorneo: [{ id, idExterno, nombre }] — un elemento por cada
+// EquipoTorneo (inscripción de un equipo del club en este Torneo/Liga) que
+// se quiera actualizar. `id` es el id del EquipoTorneo (no del Torneo).
+// `idExterno` es el nombre EXACTO de ESE equipo en Phoenix Darts (ej. "VDC
+// Gentlemen" — viene de EquipoTorneo.idExternoEquipo). "nombre" es el
+// nombre que le hemos puesto nosotros al Torneo/Liga, y se usa solo para
+// desambiguar si ese equipo compite en más de una competición de Phoenix a
+// la vez. Se reutiliza un único navegador para toda la lista, así que
+// conviene pasar de una vez todos los equipos de un mismo Torneo en lugar
+// de llamar a la función una vez por equipo. Devuelve [{ equipoTorneoId,
+// ok, filas?, error? }].
+export async function extraerClasificacionEquiposPhoenix(equiposTorneo) {
+  const conNombre = equiposTorneo.filter((t) => (t.idExterno || "").trim());
+  const resultados = equiposTorneo
     .filter((t) => !(t.idExterno || "").trim())
     .map((t) => ({
-      torneoId: t.id,
+      equipoTorneoId: t.id,
       ok: false,
-      error: 'Falta indicar el nombre exacto del EQUIPO en Phoenix Darts (campo "Id externo" del torneo).',
+      error: 'Falta indicar el nombre exacto de este equipo en Phoenix Darts (campo "Id del equipo en Phoenix Darts" en su inscripción, pestaña "Equipos").',
     }));
   if (conNombre.length === 0) return resultados;
 
@@ -350,24 +360,24 @@ export async function extraerClasificacionEquiposPhoenix(torneos) {
         const destino = await localizarGrupoDelEquipoPhoenix(page, idExterno, nombre);
         if (!destino) {
           resultados.push({
-            torneoId: id,
+            equipoTorneoId: id,
             ok: false,
-            error: `No se encontró en Phoenix Darts (España) ningún equipo llamado "${idExterno}", o compite en varias competiciones y ninguna coincide con el nombre del torneo ("${nombre}"). Revisa el nombre exacto del equipo en el campo "Id externo".`,
+            error: `No se encontró en Phoenix Darts (España) ningún equipo llamado "${idExterno}", o compite en varias competiciones y ninguna coincide con el nombre del torneo ("${nombre}"). Revisa el nombre exacto del equipo.`,
           });
           continue;
         }
         const filas = await leerClasificacionEquiposPhoenixML(page, destino.cpttnId, destino.searchDivision);
         if (!filas) {
           resultados.push({
-            torneoId: id,
+            equipoTorneoId: id,
             ok: false,
             error: `Se encontró el equipo "${idExterno}" en Phoenix Darts pero no se pudo leer su tabla de clasificación (puede que Phoenix Darts haya cambiado el formato de la página).`,
           });
           continue;
         }
-        resultados.push({ torneoId: id, ok: true, filas });
+        resultados.push({ equipoTorneoId: id, ok: true, filas });
       } catch (err) {
-        resultados.push({ torneoId: id, ok: false, error: err.message || "Error consultando Phoenix Darts" });
+        resultados.push({ equipoTorneoId: id, ok: false, error: err.message || "Error consultando Phoenix Darts" });
       }
     }
   } finally {

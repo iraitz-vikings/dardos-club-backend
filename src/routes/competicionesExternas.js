@@ -45,10 +45,32 @@ const includeTorneo = {
       capitan: true,
       jugadores: { include: { jugador: true } },
       partidos: { include: { maquina: true }, orderBy: { fecha: "asc" } },
+      clasificacion: { orderBy: { posicion: "asc" } },
     },
   },
+  // Clasificación a nivel de Torneo: solo tiene filas cuando la plataforma
+  // usa una tabla compartida por todo el Torneo/Liga (Radikal). Para
+  // plataformas por equipo (Phoenix) la clasificación real está en
+  // equipos[].clasificacion, una por cada inscripción.
   clasificacion: { orderBy: { posicion: "asc" } },
 };
+
+// Convierte una fila extraída por un scraper (posicion/nombreEquipo/...) en
+// los datos que espera Prisma para crear una fila de ClasificacionEquipo.
+function filaClasificacion(f) {
+  return {
+    posicion: f.posicion,
+    nombreEquipo: f.nombreEquipo,
+    puntos: f.puntos,
+    partidosJugados: f.partidosJugados,
+    partidosGanados: f.partidosGanados,
+    partidosPerdidos: f.partidosPerdidos,
+    partidosEmpatados: f.partidosEmpatados,
+    juegosGanados: f.juegosGanados,
+    juegosPerdidos: f.juegosPerdidos,
+    origenActualizacion: "scraper",
+  };
+}
 
 // ---------- Plataformas (fabricantes) ----------
 router.get("/plataformas", async (_req, res) => {
@@ -117,50 +139,90 @@ router.put("/torneos/:id", requireAdmin, async (req, res) => {
 
 // Extrae (scraping) la clasificación de equipos de este torneo desde la
 // plataforma externa y la guarda, sustituyendo la anterior. Por ahora solo
-// implementado para Radikal Darts (la única de las tres cuya tabla de
-// clasificación de equipos es pública, sin necesitar login) — para
-// cualquier otra plataforma devuelve un error explicando que aún no está
-// soportado, en vez de fallar en silencio.
+// implementado para Radikal Darts y Phoenix Darts — para cualquier otra
+// plataforma devuelve un error explicando que aún no está soportado, en vez
+// de fallar en silencio.
+//
+// Radikal: una única búsqueda por Torneo (tabla compartida por toda la
+// competición, con Torneo.idExterno = nombre de la competición).
+//
+// Phoenix: no hay una tabla compartida por Torneo — hay que buscar equipo
+// por equipo, porque un mismo Torneo/Liga puede tener varios equipos del
+// club inscritos a la vez, cada uno en su propio grupo (caso real: la
+// "Summer Cup" tiene 5 equipos del club). Por eso aquí se itera sobre
+// TODOS los EquipoTorneo de este Torneo, usando el nombre de cada uno
+// (EquipoTorneo.idExternoEquipo — con Torneo.idExterno como último recurso
+// si esa inscripción no tiene su propio nombre configurado), y se guarda la
+// clasificación de cada uno por separado. Si algún equipo falla pero otros
+// no, se actualizan los que sí se pudieron y se informa de los que no.
 router.post("/torneos/:id/actualizar-clasificacion", requireAdmin, async (req, res) => {
   const { id } = req.params;
-  const torneo = await prisma.torneo.findUnique({ where: { id }, include: { plataforma: true } });
+  const torneo = await prisma.torneo.findUnique({
+    where: { id },
+    include: { plataforma: true, equipos: true },
+  });
   if (!torneo) return res.status(404).json({ error: "Torneo no encontrado" });
 
   const nombrePlataforma = (torneo.plataforma?.nombre || "").toLowerCase();
-  let resultado;
+
   if (nombrePlataforma.includes("radikal")) {
-    [resultado] = await extraerClasificacionEquiposRadikal([{ id: torneo.id, idExterno: torneo.idExterno }]);
-  } else if (nombrePlataforma.includes("phoenix")) {
-    [resultado] = await extraerClasificacionEquiposPhoenix([
-      { id: torneo.id, idExterno: torneo.idExterno, nombre: torneo.nombre },
+    const [resultado] = await extraerClasificacionEquiposRadikal([{ id: torneo.id, idExterno: torneo.idExterno }]);
+    if (!resultado.ok) return res.status(422).json({ error: resultado.error });
+
+    await prisma.$transaction([
+      prisma.clasificacionEquipo.deleteMany({ where: { torneoId: id, equipoTorneoId: null } }),
+      prisma.clasificacionEquipo.createMany({
+        data: resultado.filas.map((f) => ({ torneoId: id, ...filaClasificacion(f) })),
+      }),
     ]);
+  } else if (nombrePlataforma.includes("phoenix")) {
+    if (torneo.equipos.length === 0) {
+      return res.status(422).json({
+        error: 'Este torneo/liga todavía no tiene ningún equipo del club inscrito. Inscribe uno primero desde la pestaña "Equipos".',
+      });
+    }
+
+    const objetivos = torneo.equipos.map((eq) => ({
+      id: eq.id,
+      idExterno: eq.idExternoEquipo || torneo.idExterno,
+      nombre: torneo.nombre,
+    }));
+    const resultados = await extraerClasificacionEquiposPhoenix(objetivos);
+    const exitos = resultados.filter((r) => r.ok);
+    const fallos = resultados.filter((r) => !r.ok);
+
+    if (exitos.length === 0) {
+      return res.status(422).json({
+        error:
+          fallos.length === 1
+            ? fallos[0].error
+            : `No se pudo actualizar ningún equipo:\n${fallos.map((f) => `- ${f.error}`).join("\n")}`,
+      });
+    }
+
+    await prisma.$transaction(
+      exitos.flatMap((r) => [
+        prisma.clasificacionEquipo.deleteMany({ where: { equipoTorneoId: r.equipoTorneoId } }),
+        prisma.clasificacionEquipo.createMany({
+          data: r.filas.map((f) => ({ torneoId: id, equipoTorneoId: r.equipoTorneoId, ...filaClasificacion(f) })),
+        }),
+      ])
+    );
+
+    if (fallos.length > 0) {
+      const actualizado = await prisma.torneo.findUnique({ where: { id }, include: includeTorneo });
+      const avisosClasificacion = fallos.map((f) => {
+        const eq = torneo.equipos.find((e) => e.id === f.equipoTorneoId);
+        const nombreEq = eq?.idExternoEquipo || eq?.nombreEquipo || "Un equipo";
+        return `${nombreEq}: ${f.error}`;
+      });
+      return res.json({ ...actualizado, avisosClasificacion });
+    }
   } else {
     return res.status(400).json({
       error: `La extracción de clasificación de equipos todavía no está implementada para "${torneo.plataforma?.nombre || "esta plataforma"}" (por ahora solo Radikal Darts y Phoenix Darts).`,
     });
   }
-  if (!resultado.ok) {
-    return res.status(422).json({ error: resultado.error });
-  }
-
-  await prisma.$transaction([
-    prisma.clasificacionEquipo.deleteMany({ where: { torneoId: id } }),
-    prisma.clasificacionEquipo.createMany({
-      data: resultado.filas.map((f) => ({
-        torneoId: id,
-        posicion: f.posicion,
-        nombreEquipo: f.nombreEquipo,
-        puntos: f.puntos,
-        partidosJugados: f.partidosJugados,
-        partidosGanados: f.partidosGanados,
-        partidosPerdidos: f.partidosPerdidos,
-        partidosEmpatados: f.partidosEmpatados,
-        juegosGanados: f.juegosGanados,
-        juegosPerdidos: f.juegosPerdidos,
-        origenActualizacion: "scraper",
-      })),
-    }),
-  ]);
 
   const actualizado = await prisma.torneo.findUnique({ where: { id }, include: includeTorneo });
   res.json(actualizado);
@@ -188,12 +250,13 @@ router.post("/torneos/:torneoId/equipos", requireAdmin, async (req, res) => {
 });
 router.put("/equipos/:id", requireAdmin, async (req, res) => {
   const { id } = req.params;
-  const { nombreEquipo, capitanId } = req.body;
+  const { nombreEquipo, capitanId, idExternoEquipo } = req.body;
   const equipo = await prisma.equipoTorneo.update({
     where: { id },
     data: {
       nombreEquipo: nombreEquipo !== undefined ? nombreEquipo || null : undefined,
       capitanId: capitanId !== undefined ? capitanId || null : undefined,
+      idExternoEquipo: idExternoEquipo !== undefined ? idExternoEquipo || null : undefined,
     },
   });
   res.json(equipo);

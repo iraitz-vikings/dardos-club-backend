@@ -1,12 +1,11 @@
 import { PrismaClient } from "@prisma/client";
 import { actualizarMediasConnection } from "./connectionDarts.js";
 import { actualizarMediasPhoenix } from "./phoenixDarts.js";
-import { actualizarMediasRadikal } from "./radikalDarts.js";
 
 const prisma = new PrismaClient();
 
-// Campos de media que puede rellenar un scraper. Phoenix y Radikal solo
-// devuelven mpr/ppd (una única media); Connection devuelve las 4 variantes
+// Campos de media que puede rellenar un scraper. Phoenix solo devuelve
+// mpr/ppd (una única media); Connection devuelve las 4 variantes
 // Virtual/Presencial. Solo se escriben en la base de datos los campos que el
 // resultado del scraper realmente trae (ver más abajo), para no pisar con
 // null los campos que ese fabricante en concreto nunca rellena.
@@ -15,6 +14,19 @@ const CAMPOS_STATS = ["mpr", "ppd", "mprVirtual", "ppdVirtual", "mprPresencial",
 // Bullshooter es público (se enlaza directamente desde el perfil, sin
 // scraping, por respeto a su robots.txt), así que no tiene scraper aquí.
 //
+// Radikal Darts (ver src/scrapers/radikalDarts.js) tampoco está aquí:
+// confirmado, con varias rondas de diagnóstico en producción (código HTTP,
+// cookies, errores JS, playwright-extra + plugin "stealth"), que su web
+// bloquea en silencio cualquier intento de login desde un navegador
+// automatizado — el POST de login llega al servidor pero nunca devuelve
+// respuesta, ni de éxito ni de error, tampoco con la huella del navegador
+// camuflada. Sin poder iniciar sesión no hay forma de leer la media real de
+// nadie (ver el propio radikalDarts.js), así que se desistió de intentarlo
+// automáticamente: cada socio escribe su MPR/PPD de Radikal a mano en su
+// perfil (ver SocioPerfil.jsx). Si se deja este scraper en la lista de
+// abajo, cada pasada de "Actualizar medias" volvería a machacar con el
+// error de login el statsError que la entrada manual acaba de limpiar.
+//
 // "clave" se busca dentro del nombre del fabricante sin distinguir
 // mayúsculas/minúsculas (ej. "Connection", "Connection Darts", "connection"
 // encajan todos), para no depender de que el admin haya escrito el nombre
@@ -22,7 +34,6 @@ const CAMPOS_STATS = ["mpr", "ppd", "mprVirtual", "ppdVirtual", "mprPresencial",
 const SCRAPERS = [
   { etiqueta: "Connection", clave: "connection", scraper: actualizarMediasConnection },
   { etiqueta: "Phoenix", clave: "phoenix", scraper: actualizarMediasPhoenix },
-  { etiqueta: "Radikal", clave: "radikal", scraper: actualizarMediasRadikal },
 ];
 
 // Recorre los fabricantes con scraper, y para cada uno actualiza el

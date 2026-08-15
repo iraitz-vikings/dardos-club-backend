@@ -49,10 +49,15 @@ const includeTorneo = {
     },
   },
   // Clasificación a nivel de Torneo: solo tiene filas cuando la plataforma
-  // usa una tabla compartida por todo el Torneo/Liga (Radikal). Para
+  // usa una tabla compartida por todo el Torneo/Liga (Radikal, equipoTorneoId
+  // null). El filtro "equipoTorneoId: null" es imprescindible aquí: sin él,
+  // Prisma devuelve TODAS las filas de ClasificacionEquipo de este Torneo,
+  // incluidas las de cada equipo por separado (Phoenix) — eso mezclaba en
+  // una sola tabla "combinada" los grupos de varios equipos del club a la
+  // vez (bug real detectado el 2026-08-15 con la Summer Cup). Para
   // plataformas por equipo (Phoenix) la clasificación real está en
   // equipos[].clasificacion, una por cada inscripción.
-  clasificacion: { orderBy: { posicion: "asc" } },
+  clasificacion: { where: { equipoTorneoId: null }, orderBy: { posicion: "asc" } },
 };
 
 // Convierte una fila extraída por un scraper (posicion/nombreEquipo/...) en

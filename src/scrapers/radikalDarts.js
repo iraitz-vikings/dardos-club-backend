@@ -1,4 +1,15 @@
-import { chromium } from "playwright";
+import { chromium } from "playwright-extra";
+import StealthPlugin from "puppeteer-extra-plugin-stealth";
+
+// El login de Radikal Darts se queda "colgado" (ninguna respuesta, ni éxito
+// ni error) cuando lo intenta un Chromium headless normal, incluso con
+// credenciales correctas y con navigator.webdriver enmascarado a mano —
+// comportamiento típico de una protección anti-bot que analiza más señales
+// del navegador (huella de Chrome DevTools Protocol, plugins, WebGL, etc.).
+// playwright-extra + el plugin "stealth" (el mismo usado con
+// puppeteer-extra) parchea automáticamente ese conjunto más amplio de
+// señales conocidas de detección de automatización.
+chromium.use(StealthPlugin());
 
 // Scraper de Radikal Darts (radikalplayers.com). A diferencia de Connection
 // y Phoenix, aquí NO existe ningún buscador general de jugadores por alias:
@@ -81,6 +92,20 @@ import { chromium } from "playwright";
 // RADIKAL_DARTS_PASSWORD (a configurar en Railway); si no están puestas, o el
 // login falla, se devuelve un error explicando qué falta en vez de intentar
 // scrapear sin sesión (que fallaría igualmente en el paso de la ficha).
+//
+// OJO — con credenciales correctas confirmadas, el login seguía fallando en
+// producción: el POST sí llegaba a esp.radikalplayers.com pero nunca volvía
+// ninguna respuesta (ni éxito, ni error, ni fallo de red), como si la
+// petición se "colgara" — comportamiento típico de una protección anti-bot
+// del sitio que detecta el navegador automatizado (Chromium headless) y
+// bloquea en silencio los intentos de login, sin llegar siquiera a comprobar
+// las credenciales. Por eso se usa "playwright-extra" con el plugin
+// "stealth" (chromium.use(StealthPlugin())) en vez de "playwright" a secas:
+// parchea automáticamente el conjunto de señales de automatización que
+// suelen mirar estas protecciones (navigator.webdriver, plugins, WebGL,
+// etc.). Si el bloqueo resultara ser por reputación de la IP de Railway (no
+// por huella del navegador), esto no bastaría y habría que valorar otra vía
+// (proxy con IP residencial, o abandonar el login automático).
 
 const COMPETICIONES_URL = "https://esp.radikalplayers.com/competiciones.php";
 const HOME_URL = "https://esp.radikalplayers.com/";
@@ -105,15 +130,6 @@ async function iniciarSesionRadikal(page, context) {
   if (!radikalId || !radikalPassword) {
     return { ok: false, diagnostico: "faltan-credenciales" };
   }
-
-  // El resultado anterior (POST sin capturar, cookies sin cambios) apunta a
-  // que el propio click no llega a disparar el envío del formulario — un
-  // sospechoso habitual es que algún script de detección de automatización
-  // mire navigator.webdriver (true por defecto en Playwright) y bloquee el
-  // submit sin avisar. Lo enmascaramos antes de navegar, por si acaso.
-  await page.addInitScript(() => {
-    Object.defineProperty(navigator, "webdriver", { get: () => false });
-  });
 
   // Diagnóstico adicional: errores de JavaScript de la propia página durante
   // el intento de login (sin imprimir nunca HTML/URLs/cookies), por si el

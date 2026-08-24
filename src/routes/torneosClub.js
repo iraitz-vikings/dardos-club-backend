@@ -164,9 +164,11 @@ async function intentarResolverBye(partidoId) {
     if (valorActual) return false;
     const fuente = fuentePara(slot);
     if (!fuente) return false;
-    if (fuente.siguientePartidoGanadorId === partido.id) {
-      return !fuente.ganador;
-    }
+    // Si el partido origen ya quedó resuelto como "bye doble" (sin enfrentamiento
+    // real, sin ganador y sin que vaya a haberlo nunca), este hueco no está
+    // realmente pendiente: nadie va a llegar por ahí. Esto aplica igual tanto si el
+    // hueco se alimenta del GANADOR de ese partido origen como si se alimenta de su
+    // PERDEDOR, así que el chequeo tiene que ser el mismo en los dos casos.
     return !fuente.ganador && fuente.resultado !== "__BYE_DOBLE__";
   };
 
@@ -813,6 +815,13 @@ router.put("/partidos/:partidoId", requireAdmin, async (req, res) => {
         where: { id: partido.siguientePartidoGanadorId },
         data: { [campo]: ganador },
       });
+      // En el cuadro de perdedores es habitual que el otro hueco de este partido
+      // nunca vaya a rellenarse (su origen era, a su vez, un "bye" sin enfrentamiento
+      // real). Hay que comprobar aquí si con este ganador ya se puede resolver un
+      // pase automático (o incluso un "bye doble" en cascada); en el cuadro de
+      // ganadores esto normalmente ya estaba resuelto desde el sorteo, pero no cuesta
+      // nada comprobarlo también.
+      await intentarResolverBye(partido.siguientePartidoGanadorId);
     }
     if (partido.siguientePartidoPerdedorId && perdedor) {
       const campo = partido.siguienteSlotPerdedor === 2 ? "jugador2" : "jugador1";

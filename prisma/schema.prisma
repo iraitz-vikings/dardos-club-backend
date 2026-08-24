@@ -63,6 +63,41 @@ model Jugador {
   equiposClub             MiembroEquipoClub[]
   equiposCapitaneadosClub EquipoClub[]        @relation("capitanEquipoClub")
   idsFabricantes          JugadorFabricanteId[]
+  suscripcionesPush       SuscripcionPush[]
+  suscripcionTelegram     SuscripcionTelegram?
+}
+
+// Un dispositivo (navegador) de un socio con avisos activados. Un mismo
+// Jugador puede tener varias filas (móvil + ordenador, por ejemplo): cuando
+// hay que avisarle se manda a TODAS. Solo lo usan socios (jugadores con
+// cuenta): el alta se hace desde "Mi perfil", vinculando automáticamente por
+// la sesión ya iniciada — no hace falta ningún check-in aparte. endpoint es
+// único porque lo asigna el navegador y sirve como identificador natural del
+// dispositivo suscrito.
+model SuscripcionPush {
+  id        String   @id @default(uuid())
+  jugadorId String
+  jugador   Jugador  @relation(fields: [jugadorId], references: [id], onDelete: Cascade)
+  endpoint  String   @unique
+  p256dh    String
+  auth      String
+  userAgent String?
+  creadoEn  DateTime @default(now())
+}
+
+// Vínculo entre un Jugador invitado (sin cuenta) y su chat de Telegram,
+// creado cuando el invitado pulsa "Iniciar" en el bot tras abrir su enlace
+// de aviso personal (/aviso/:token). Solo hace falta una vez por persona: al
+// ser el Jugador invitado un registro reutilizable entre torneos, el mismo
+// vínculo sirve para siempre. jugadorId es único porque cada invitado solo
+// necesita (y solo puede tener) un chat de Telegram vinculado.
+model SuscripcionTelegram {
+  id          String   @id @default(uuid())
+  jugadorId   String   @unique
+  jugador     Jugador  @relation(fields: [jugadorId], references: [id], onDelete: Cascade)
+  chatId      String   @unique
+  username    String?
+  vinculadoEn DateTime @default(now())
 }
 
 model Plataforma {

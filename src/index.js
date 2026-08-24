@@ -8,7 +8,6 @@ import { actualizarTodasLasClasificaciones } from "./scrapers/actualizarClasific
 import { iniciarBotTelegram } from "./routes/telegram.js";
 
 import noticiasRouter from "./routes/noticias.js";
-import torneosRouter from "./routes/torneos.js";
 import uploadRouter from "./routes/upload.js";
 import torneoDestacadoRouter from "./routes/torneoDestacado.js";
 import galeriaRouter from "./routes/galeria.js";
@@ -47,9 +46,6 @@ app.use("/api/torneo-destacado", torneoDestacadoRouter);
 
 // Patrocinadores del club
 app.use("/api/patrocinadores", patrocinadoresRouter);
-
-// Portal (torneos, partidos, equipos)
-app.use("/api/torneos", torneosRouter);
 
 // Subida de imágenes (admin)
 app.use("/api/upload", uploadRouter);

@@ -81,14 +81,15 @@ router.delete("/plataformas/:id", requireAdmin, async (req, res) => {
 });
 
 // ---------- Torneos externos ----------
-router.get("/torneos", requireAuth, async (_req, res) => {
+// Misma consulta para el listado de socio y el de admin (antes estaba
+// duplicada en dos rutas); lo único que cambia entre una y otra es qué
+// middleware de autenticación exige cada una.
+async function listarTorneos(_req, res) {
   const torneos = await prisma.torneo.findMany({ include: includeTorneo, orderBy: { nombre: "asc" } });
   res.json(torneos);
-});
-router.get("/torneos/admin", requireAdmin, async (_req, res) => {
-  const torneos = await prisma.torneo.findMany({ include: includeTorneo, orderBy: { nombre: "asc" } });
-  res.json(torneos);
-});
+}
+router.get("/torneos", requireAuth, listarTorneos);
+router.get("/torneos/admin", requireAdmin, listarTorneos);
 router.post("/torneos", requireAdmin, async (req, res) => {
   const { nombre, nivel, temporada, plataformaId, idExterno } = req.body;
   if (!nombre || !plataformaId) return res.status(400).json({ error: "Falta el nombre o la plataforma" });

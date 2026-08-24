@@ -62,13 +62,29 @@ router.get("/historial", requireAuth, async (req, res) => {
     include: { cuadrante: { include: { torneoClub: true, liga: true } } },
   });
 
-  const historialTorneos = [];
-  for (const p of participacionesTorneos) {
-    const partidos = await prisma.cuadroPartido.findMany({
-      where: { cuadranteId: p.cuadranteId, OR: [{ jugador1: p.etiqueta }, { jugador2: p.etiqueta }] },
-      orderBy: [{ rama: "asc" }, { ronda: "asc" }],
-    });
-    historialTorneos.push({
+  // Una sola consulta con todos los cuadranteId/etiquetas implicados, en vez
+  // de una consulta por cada torneo en el que ha participado el socio (podía
+  // ser un round-trip a la base de datos por cada fila de historial). El
+  // filtrado por (cuadranteId, etiqueta) exacto se hace después en memoria,
+  // ya que una misma etiqueta ("Juan Pérez", por ejemplo) puede repetirse en
+  // cuadrantes distintos y no identifica por sí sola a la participación.
+  const cuadranteIds = [...new Set(participacionesTorneos.map((p) => p.cuadranteId))];
+  const etiquetasTorneos = [...new Set(participacionesTorneos.map((p) => p.etiqueta))];
+  const todosPartidosTorneos = cuadranteIds.length
+    ? await prisma.cuadroPartido.findMany({
+        where: {
+          cuadranteId: { in: cuadranteIds },
+          OR: [{ jugador1: { in: etiquetasTorneos } }, { jugador2: { in: etiquetasTorneos } }],
+        },
+        orderBy: [{ rama: "asc" }, { ronda: "asc" }],
+      })
+    : [];
+
+  const historialTorneos = participacionesTorneos.map((p) => {
+    const partidos = todosPartidosTorneos.filter(
+      (partido) => partido.cuadranteId === p.cuadranteId && (partido.jugador1 === p.etiqueta || partido.jugador2 === p.etiqueta)
+    );
+    return {
       nombre: p.cuadrante.torneoClub?.nombre || (p.cuadrante.liga ? `${p.cuadrante.liga.nombre} (cuadrante final)` : "Torneo"),
       cuadrante: p.cuadrante.nombre,
       etiqueta: p.etiqueta,
@@ -79,21 +95,33 @@ router.get("/historial", requireAuth, async (req, res) => {
         resultado: partido.resultado,
         ganado: partido.ganador ? partido.ganador === p.etiqueta : null,
       })),
-    });
-  }
+    };
+  });
 
   const participacionesLigas = await prisma.participanteLiga.findMany({
     where: { OR: [{ jugador1Id: jugador.id }, { jugador2Id: jugador.id }] },
     include: { liga: true },
   });
 
-  const historialLigas = [];
-  for (const p of participacionesLigas) {
-    const partidos = await prisma.partidoLiga.findMany({
-      where: { ligaId: p.ligaId, OR: [{ participante1: p.etiqueta }, { participante2: p.etiqueta }] },
-      orderBy: { jornada: "asc" },
-    });
-    historialLigas.push({
+  // Mismo tratamiento que arriba: una sola consulta agrupando por ligaId en
+  // vez de una por cada liga en la que ha participado el socio.
+  const ligaIds = [...new Set(participacionesLigas.map((p) => p.ligaId))];
+  const etiquetasLigas = [...new Set(participacionesLigas.map((p) => p.etiqueta))];
+  const todosPartidosLigas = ligaIds.length
+    ? await prisma.partidoLiga.findMany({
+        where: {
+          ligaId: { in: ligaIds },
+          OR: [{ participante1: { in: etiquetasLigas } }, { participante2: { in: etiquetasLigas } }],
+        },
+        orderBy: { jornada: "asc" },
+      })
+    : [];
+
+  const historialLigas = participacionesLigas.map((p) => {
+    const partidos = todosPartidosLigas.filter(
+      (partido) => partido.ligaId === p.ligaId && (partido.participante1 === p.etiqueta || partido.participante2 === p.etiqueta)
+    );
+    return {
       nombre: p.liga.nombre,
       etiqueta: p.etiqueta,
       partidos: partidos.map((partido) => ({
@@ -102,8 +130,8 @@ router.get("/historial", requireAuth, async (req, res) => {
         resultado: partido.resultado,
         ganado: partido.ganador ? partido.ganador === p.etiqueta : null,
       })),
-    });
-  }
+    };
+  });
 
   res.json({ torneos: historialTorneos, ligas: historialLigas });
 });

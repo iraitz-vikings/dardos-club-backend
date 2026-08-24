@@ -42,7 +42,6 @@ model Usuario {
   noticias                  NoticiaEvento[]
   anuncios                  Anuncio[]
   fotosGaleria               FotoGaleriaPrivada[]
-  notificacionesDisparadas  Notificacion[]
 }
 
 model Jugador {
@@ -222,18 +221,6 @@ model Partido {
   maquina             Maquina? @relation(fields: [maquinaId], references: [id])
   origenActualizacion OrigenActualizacion @default(manual)
   ultimaActualizacion DateTime @updatedAt
-
-  notificaciones Notificacion[]
-}
-
-model Notificacion {
-  id              String    @id @default(uuid())
-  partidoId       String
-  partido         Partido   @relation(fields: [partidoId], references: [id])
-  mensaje         String
-  enviadaEn       DateTime  @default(now())
-  disparadaPorId  String?
-  disparadaPor    Usuario?  @relation(fields: [disparadaPorId], references: [id])
 }
 
 model NoticiaEvento {

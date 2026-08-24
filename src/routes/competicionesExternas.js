@@ -2,8 +2,7 @@ import { Router } from "express";
 import { PrismaClient } from "@prisma/client";
 import jwt from "jsonwebtoken";
 import { requireAuth } from "./auth.js";
-import { extraerClasificacionEquiposRadikal } from "../scrapers/radikalDarts.js";
-import { extraerClasificacionEquiposPhoenix } from "../scrapers/phoenixDarts.js";
+import { actualizarClasificacionTorneo, actualizarTodasLasClasificaciones } from "../scrapers/actualizarClasificaciones.js";
 
 const prisma = new PrismaClient();
 const router = Router();
@@ -59,23 +58,6 @@ const includeTorneo = {
   // equipos[].clasificacion, una por cada inscripción.
   clasificacion: { where: { equipoTorneoId: null }, orderBy: { posicion: "asc" } },
 };
-
-// Convierte una fila extraída por un scraper (posicion/nombreEquipo/...) en
-// los datos que espera Prisma para crear una fila de ClasificacionEquipo.
-function filaClasificacion(f) {
-  return {
-    posicion: f.posicion,
-    nombreEquipo: f.nombreEquipo,
-    puntos: f.puntos,
-    partidosJugados: f.partidosJugados,
-    partidosGanados: f.partidosGanados,
-    partidosPerdidos: f.partidosPerdidos,
-    partidosEmpatados: f.partidosEmpatados,
-    juegosGanados: f.juegosGanados,
-    juegosPerdidos: f.juegosPerdidos,
-    origenActualizacion: "scraper",
-  };
-}
 
 // ---------- Plataformas (fabricantes) ----------
 router.get("/plataformas", async (_req, res) => {
@@ -168,69 +150,31 @@ router.post("/torneos/:id/actualizar-clasificacion", requireAdmin, async (req, r
   });
   if (!torneo) return res.status(404).json({ error: "Torneo no encontrado" });
 
-  const nombrePlataforma = (torneo.plataforma?.nombre || "").toLowerCase();
+  const resultado = await actualizarClasificacionTorneo(torneo);
 
-  if (nombrePlataforma.includes("radikal")) {
-    const [resultado] = await extraerClasificacionEquiposRadikal([{ id: torneo.id, idExterno: torneo.idExterno }]);
-    if (!resultado.ok) return res.status(422).json({ error: resultado.error });
-
-    await prisma.$transaction([
-      prisma.clasificacionEquipo.deleteMany({ where: { torneoId: id, equipoTorneoId: null } }),
-      prisma.clasificacionEquipo.createMany({
-        data: resultado.filas.map((f) => ({ torneoId: id, ...filaClasificacion(f) })),
-      }),
-    ]);
-  } else if (nombrePlataforma.includes("phoenix")) {
-    if (torneo.equipos.length === 0) {
-      return res.status(422).json({
-        error: 'Este torneo/liga todavía no tiene ningún equipo del club inscrito. Inscribe uno primero desde la pestaña "Equipos".',
-      });
-    }
-
-    const objetivos = torneo.equipos.map((eq) => ({
-      id: eq.id,
-      idExterno: eq.idExternoEquipo || torneo.idExterno,
-      nombre: torneo.nombre,
-    }));
-    const resultados = await extraerClasificacionEquiposPhoenix(objetivos);
-    const exitos = resultados.filter((r) => r.ok);
-    const fallos = resultados.filter((r) => !r.ok);
-
-    if (exitos.length === 0) {
-      return res.status(422).json({
-        error:
-          fallos.length === 1
-            ? fallos[0].error
-            : `No se pudo actualizar ningún equipo:\n${fallos.map((f) => `- ${f.error}`).join("\n")}`,
-      });
-    }
-
-    await prisma.$transaction(
-      exitos.flatMap((r) => [
-        prisma.clasificacionEquipo.deleteMany({ where: { equipoTorneoId: r.equipoTorneoId } }),
-        prisma.clasificacionEquipo.createMany({
-          data: r.filas.map((f) => ({ torneoId: id, equipoTorneoId: r.equipoTorneoId, ...filaClasificacion(f) })),
-        }),
-      ])
-    );
-
-    if (fallos.length > 0) {
-      const actualizado = await prisma.torneo.findUnique({ where: { id }, include: includeTorneo });
-      const avisosClasificacion = fallos.map((f) => {
-        const eq = torneo.equipos.find((e) => e.id === f.equipoTorneoId);
-        const nombreEq = eq?.idExternoEquipo || eq?.nombreEquipo || "Un equipo";
-        return `${nombreEq}: ${f.error}`;
-      });
-      return res.json({ ...actualizado, avisosClasificacion });
-    }
-  } else {
-    return res.status(400).json({
-      error: `La extracción de clasificación de equipos todavía no está implementada para "${torneo.plataforma?.nombre || "esta plataforma"}" (por ahora solo Radikal Darts y Phoenix Darts).`,
-    });
-  }
+  if (resultado.omitido) return res.status(400).json({ error: resultado.motivo });
+  if (!resultado.ok) return res.status(422).json({ error: resultado.error });
 
   const actualizado = await prisma.torneo.findUnique({ where: { id }, include: includeTorneo });
+  if (resultado.avisos.length > 0) {
+    return res.json({ ...actualizado, avisosClasificacion: resultado.avisos });
+  }
   res.json(actualizado);
+});
+
+// POST /api/competiciones-externas/actualizar-todas-clasificaciones - lanza
+// a mano la actualización de la clasificación de TODOS los torneos/ligas
+// externos dados de alta (Radikal y Phoenix; Connection Darts se omite hasta
+// que tenga scraper). También se ejecuta sola cada noche (ver el cron en
+// index.js). Puede tardar bastante si hay muchos torneos, porque cada uno
+// abre su propio navegador y se procesan de uno en uno.
+router.post("/actualizar-todas-clasificaciones", requireAdmin, async (_req, res) => {
+  try {
+    const resumen = await actualizarTodasLasClasificaciones();
+    res.json(resumen);
+  } catch (err) {
+    res.status(500).json({ error: err.message || "No se pudo actualizar las clasificaciones" });
+  }
 });
 
 router.delete("/torneos/:id", requireAdmin, async (req, res) => {

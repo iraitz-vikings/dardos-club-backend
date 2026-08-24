@@ -5,6 +5,7 @@ import "dotenv/config";
 
 import { actualizarTodasLasMedias } from "./scrapers/actualizarMedias.js";
 import { actualizarTodasLasClasificaciones } from "./scrapers/actualizarClasificaciones.js";
+import { iniciarBotTelegram } from "./notificaciones/telegram.js";
 
 import noticiasRouter from "./routes/noticias.js";
 import torneosRouter from "./routes/torneos.js";
@@ -26,6 +27,7 @@ import maquinasRouter from "./routes/maquinas.js";
 import fabricantesRouter from "./routes/fabricantes.js";
 import competicionesExternasRouter from "./routes/competicionesExternas.js";
 import calendarioRouter from "./routes/calendario.js";
+import notificacionesRouter from "./routes/notificaciones.js";
 
 const app = express();
 app.use(cors());
@@ -79,7 +81,14 @@ app.use("/api/competiciones-externas", competicionesExternasRouter);
 
 app.use("/api/calendario", calendarioRouter);
 
+// Avisos por Web Push (socios) y Telegram (invitados)
+app.use("/api/notificaciones", notificacionesRouter);
+
 app.get("/api/health", (_req, res) => res.json({ ok: true }));
+
+// Arranca el bot de Telegram (si TELEGRAM_BOT_TOKEN está configurado), para
+// poder recibir el /start de los invitados que hacen check-in.
+iniciarBotTelegram();
 
 // Cada noche a las 04:00 se refrescan las medias de Connection Darts y
 // Phoenix Darts guardadas en los perfiles de los socios (ver

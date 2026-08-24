@@ -5,7 +5,7 @@ import "dotenv/config";
 
 import { actualizarTodasLasMedias } from "./scrapers/actualizarMedias.js";
 import { actualizarTodasLasClasificaciones } from "./scrapers/actualizarClasificaciones.js";
-import { iniciarBotTelegram } from "./notificaciones/telegram.js";
+import { iniciarBotTelegram } from "./routes/telegram.js";
 
 import noticiasRouter from "./routes/noticias.js";
 import torneosRouter from "./routes/torneos.js";

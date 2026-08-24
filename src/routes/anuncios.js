@@ -1,6 +1,7 @@
 import { Router } from "express";
 import { PrismaClient } from "@prisma/client";
 import { requireAuth, requireRole } from "./auth.js";
+import { notificarJugadores } from "../notificaciones/notificar.js";
 
 const prisma = new PrismaClient();
 const router = Router();
@@ -14,9 +15,12 @@ router.get("/", requireAuth, async (_req, res) => {
   res.json(anuncios);
 });
 
-// POST /api/anuncios - publicar un anuncio (admin o capitán)
+// POST /api/anuncios - publicar un anuncio (admin o capitán). Si se envía
+// notificar: true, se avisa a todos los socios (jugadores con cuenta) por
+// su canal de avisos activo — los anuncios del club nunca se mandan a
+// invitados, solo a socios.
 router.post("/", requireAuth, requireRole("admin", "capitan"), async (req, res) => {
-  const { titulo, contenido, fijado } = req.body;
+  const { titulo, contenido, fijado, notificar } = req.body;
   if (!titulo || !contenido) {
     return res.status(400).json({ error: "Falta título o contenido" });
   }
@@ -24,6 +28,19 @@ router.post("/", requireAuth, requireRole("admin", "capitan"), async (req, res) 
     data: { titulo, contenido, fijado: !!fijado, autorId: req.usuario.sub },
     include: { autor: { select: { nombre: true, rol: true } } },
   });
+
+  if (notificar) {
+    prisma.jugador
+      .findMany({ where: { usuarioId: { not: null } }, select: { id: true } })
+      .then((socios) =>
+        notificarJugadores(
+          socios.map((s) => s.id),
+          { titulo: `Anuncio: ${titulo}`, cuerpo: contenido }
+        )
+      )
+      .catch((err) => console.error("Error notificando anuncio:", err.message || err));
+  }
+
   res.status(201).json(anuncio);
 });
 

@@ -1,7 +1,7 @@
 import { Router } from "express";
 import { PrismaClient } from "@prisma/client";
 import { requireAuth, requireRole } from "./auth.js";
-import { notificarJugadores } from "../notificaciones/notificar.js";
+import { notificarJugadores } from "./notificar.js";
 
 const prisma = new PrismaClient();
 const router = Router();

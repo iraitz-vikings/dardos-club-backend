@@ -2,6 +2,7 @@ import { Router } from "express";
 import { PrismaClient } from "@prisma/client";
 import { generarPartidos } from "./torneosClub.js";
 import { requireAuth } from "./auth.js";
+import { sortearParejasPorGrupos, resolverNombresJugadores } from "../lib/sorteoParejasGrupos.js";
 
 const prisma = new PrismaClient();
 const router = Router();
@@ -185,53 +186,18 @@ router.post("/:ligaId/sortear-parejas-grupos", requireAdmin, async (req, res) =>
     return res.status(400).json({ error: "No hay participantes para sortear." });
   }
 
-  const gruposValidos = metodo === "AB" ? ["A", "B"] : metodo === "ABC" ? ["A", "B", "C"] : ["A", "B", "C", "D"];
-  for (const e of entradas) {
-    if (!gruposValidos.includes(e.grupo)) return res.status(400).json({ error: `Grupo inválido: ${e.grupo}` });
-    if (!e.jugadorId && !e.nombre) return res.status(400).json({ error: "Falta jugador o nombre en algún participante." });
-  }
-
-  const porGrupo = {};
-  for (const g of gruposValidos) porGrupo[g] = entradas.filter((e) => e.grupo === g);
-
-  function barajar(arr) {
-    const a = [...arr];
-    for (let i = a.length - 1; i > 0; i--) {
-      const j = Math.floor(Math.random() * (i + 1));
-      [a[i], a[j]] = [a[j], a[i]];
-    }
-    return a;
-  }
-
-  const parejas = [];
-  function emparejarCruzado(g1, g2) {
-    if (porGrupo[g1].length !== porGrupo[g2].length) {
-      throw new Error(`El grupo ${g1} (${porGrupo[g1].length}) y el grupo ${g2} (${porGrupo[g2].length}) deben tener el mismo número de jugadores.`);
-    }
-    const a = barajar(porGrupo[g1]);
-    const b = barajar(porGrupo[g2]);
-    for (let i = 0; i < a.length; i++) parejas.push([a[i], b[i]]);
-  }
-  function emparejarInterno(g) {
-    if (porGrupo[g].length % 2 !== 0) {
-      throw new Error(`El grupo ${g} (${porGrupo[g].length}) necesita un número par de jugadores para sortearse entre ellos.`);
-    }
-    const a = barajar(porGrupo[g]);
-    for (let i = 0; i < a.length; i += 2) parejas.push([a[i], a[i + 1]]);
-  }
-
+  let parejas;
   try {
-    if (metodo === "AB") emparejarCruzado("A", "B");
-    else if (metodo === "ABC") { emparejarCruzado("A", "C"); emparejarInterno("B"); }
-    else if (metodo === "ABCD") { emparejarCruzado("A", "D"); emparejarCruzado("B", "C"); }
+    parejas = sortearParejasPorGrupos(entradas, metodo);
   } catch (err) {
     return res.status(400).json({ error: err.message });
   }
 
+  const nombresPorId = await resolverNombresJugadores(prisma, entradas);
   const creadas = [];
   for (const [e1, e2] of parejas) {
-    const nombre1 = e1.jugadorId ? (await prisma.jugador.findUnique({ where: { id: e1.jugadorId } }))?.nombre : e1.nombre;
-    const nombre2 = e2.jugadorId ? (await prisma.jugador.findUnique({ where: { id: e2.jugadorId } }))?.nombre : e2.nombre;
+    const nombre1 = e1.jugadorId ? nombresPorId.get(e1.jugadorId) : e1.nombre;
+    const nombre2 = e2.jugadorId ? nombresPorId.get(e2.jugadorId) : e2.nombre;
     const etiqueta = `${nombre1} / ${nombre2}`;
     const participante = await prisma.participanteLiga.create({
       data: { ligaId, etiqueta, jugador1Id: e1.jugadorId || null, jugador2Id: e2.jugadorId || null },

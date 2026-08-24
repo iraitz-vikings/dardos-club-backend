@@ -4,6 +4,7 @@ import cron from "node-cron";
 import "dotenv/config";
 
 import { actualizarTodasLasMedias } from "./scrapers/actualizarMedias.js";
+import { actualizarTodasLasClasificaciones } from "./scrapers/actualizarClasificaciones.js";
 
 import noticiasRouter from "./routes/noticias.js";
 import torneosRouter from "./routes/torneos.js";
@@ -89,6 +90,22 @@ cron.schedule("0 4 * * *", () => {
   actualizarTodasLasMedias()
     .then((resumen) => console.log("Medias actualizadas:", resumen))
     .catch((err) => console.error("Error actualizando medias:", err));
+});
+
+// Cada noche a las 04:30 (media hora después del cron de medias de arriba,
+// para no tener dos navegadores Playwright abiertos a la vez en el mismo
+// servidor) se refresca la clasificación de todos los torneos/ligas
+// externos dados de alta (ver src/scrapers/actualizarClasificaciones.js).
+// Por ahora esto solo actualiza algo en Radikal Darts y Phoenix Darts;
+// Connection Darts se omite hasta que tenga scraper. También se puede
+// lanzar a mano desde el admin, tanto por torneo ("Actualizar
+// clasificación") como para todos a la vez ("Actualizar todas las
+// clasificaciones ahora", en "Comp. externas").
+cron.schedule("30 4 * * *", () => {
+  console.log("Actualizando clasificaciones de equipos (cron nocturno)...");
+  actualizarTodasLasClasificaciones()
+    .then((resumen) => console.log("Clasificaciones actualizadas:", resumen))
+    .catch((err) => console.error("Error actualizando clasificaciones:", err));
 });
 
 const PORT = process.env.PORT || 3000;

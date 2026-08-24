@@ -3,7 +3,7 @@ import { PrismaClient } from "@prisma/client";
 import jwt from "jsonwebtoken";
 import { requireAuth } from "./auth.js";
 import { actualizarClasificacionTorneo, actualizarTodasLasClasificaciones } from "../scrapers/actualizarClasificaciones.js";
-import { notificarJugadores } from "../notificaciones/notificar.js";
+import { notificarJugadores } from "./notificar.js";
 
 const prisma = new PrismaClient();
 const router = Router();

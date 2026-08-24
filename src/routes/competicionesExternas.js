@@ -3,6 +3,7 @@ import { PrismaClient } from "@prisma/client";
 import jwt from "jsonwebtoken";
 import { requireAuth } from "./auth.js";
 import { actualizarClasificacionTorneo, actualizarTodasLasClasificaciones } from "../scrapers/actualizarClasificaciones.js";
+import { notificarJugadores } from "../notificaciones/notificar.js";
 
 const prisma = new PrismaClient();
 const router = Router();
@@ -248,7 +249,7 @@ router.put("/partidos/:id", requireAdminOSocio, async (req, res) => {
   const { id } = req.params;
   const partido = await prisma.partido.findUnique({
     where: { id },
-    include: { equipoTorneo: { include: { capitan: true } } },
+    include: { equipoTorneo: { include: { capitan: true, equipoClub: true, torneo: true } } },
   });
   if (!partido) return res.status(404).json({ error: "Partido no encontrado" });
 
@@ -274,6 +275,31 @@ router.put("/partidos/:id", requireAdminOSocio, async (req, res) => {
     },
     include: { maquina: true },
   });
+
+  // Si el partido acaba de pasar a "fijado" (no lo estaba antes), se avisa a
+  // toda la plantilla de ese equipo por su canal de avisos (Web Push si son
+  // socios). No bloquea la respuesta al capitán/admin si el envío falla.
+  if (!partido.fijado && actualizado.fijado) {
+    prisma.equipoJugador
+      .findMany({ where: { equipoTorneoId: partido.equipoTorneoId }, select: { jugadorId: true } })
+      .then((roster) => {
+        const nombreEquipo = partido.equipoTorneo.equipoClub?.nombre || "Tu equipo";
+        const nombreTorneo = partido.equipoTorneo.torneo?.nombre || "";
+        const fechaTexto = new Date(actualizado.fecha).toLocaleDateString("es-ES", {
+          day: "2-digit",
+          month: "2-digit",
+        });
+        return notificarJugadores(
+          roster.map((r) => r.jugadorId),
+          {
+            titulo: `Partido fijado: ${nombreEquipo}`,
+            cuerpo: `${actualizado.rival ? `Contra ${actualizado.rival}` : "Partido"} el ${fechaTexto}${nombreTorneo ? ` (${nombreTorneo})` : ""}.`,
+          }
+        );
+      })
+      .catch((err) => console.error("Error notificando partido fijado:", err.message || err));
+  }
+
   res.json(actualizado);
 });
 

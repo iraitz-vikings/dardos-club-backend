@@ -3,6 +3,7 @@ import { PrismaClient } from "@prisma/client";
 import { generarPartidos } from "./torneosClub.js";
 import { requireAuth } from "./auth.js";
 import { sortearParejasPorGrupos, resolverNombresJugadores } from "../lib/sorteoParejasGrupos.js";
+import { notificarJugadores } from "./notificar.js";
 
 const prisma = new PrismaClient();
 const router = Router();
@@ -264,11 +265,50 @@ router.post("/:ligaId/generar-calendario", requireAdmin, async (req, res) => {
   res.json(ligaCompleta);
 });
 
+// Avisa (Web Push/Telegram) a los jugadores del club implicados en un
+// partido de liga, si son socios con cuenta. Mismo patrón que en
+// torneosClub.js (ver notificarPartidoDeCuadrante), adaptado a
+// ParticipanteLiga/PartidoLiga.
+async function notificarPartidoDeLiga(partido, motivo = "programado") {
+  const etiquetas = [partido.participante1, partido.participante2].filter(Boolean);
+  if (etiquetas.length === 0) return;
+
+  const [participantes, liga] = await Promise.all([
+    prisma.participanteLiga.findMany({ where: { ligaId: partido.ligaId, etiqueta: { in: etiquetas } } }),
+    prisma.ligaClub.findUnique({ where: { id: partido.ligaId } }),
+  ]);
+  const jugadorIds = participantes.flatMap((p) => [p.jugador1Id, p.jugador2Id]).filter(Boolean);
+  if (jugadorIds.length === 0) return;
+
+  const nombreLiga = liga?.nombre || "Liga del club";
+  const enfrentamiento = `${partido.participante1 || "?"} vs ${partido.participante2 || "?"}`;
+
+  if (motivo === "en_curso") {
+    await notificarJugadores(jugadorIds, {
+      titulo: `¡Tu partido empieza ahora! ${nombreLiga}`,
+      cuerpo: `${enfrentamiento}${partido.maquina ? ` en ${partido.maquina}` : ""}.`,
+    });
+    return;
+  }
+
+  const fechaTexto = partido.fechaCalendario
+    ? new Date(partido.fechaCalendario).toLocaleDateString("es-ES", { day: "2-digit", month: "2-digit" })
+    : null;
+  await notificarJugadores(jugadorIds, {
+    titulo: `Partido programado: ${nombreLiga}`,
+    cuerpo: `${enfrentamiento}${fechaTexto ? ` el ${fechaTexto}` : ""}${
+      partido.maquinaCalendario ? ` en ${partido.maquinaCalendario.nombre}` : ""
+    }.`,
+  });
+}
+
 // PUT /api/ligas-club/partidos/:partidoId/calendario - programa un partido de
 // liga en el calendario general, con fecha y máquina
 router.put("/partidos/:partidoId/calendario", requireAdmin, async (req, res) => {
   const { partidoId } = req.params;
   const { fecha, maquinaId, confirmado } = req.body;
+  const antes = await prisma.partidoLiga.findUnique({ where: { id: partidoId } });
+  if (!antes) return res.status(404).json({ error: "Enfrentamiento no encontrado" });
   try {
     const partido = await prisma.partidoLiga.update({
       where: { id: partidoId },
@@ -279,6 +319,13 @@ router.put("/partidos/:partidoId/calendario", requireAdmin, async (req, res) => 
       },
       include: { maquinaCalendario: true },
     });
+
+    if (!antes.confirmadoCalendario && partido.confirmadoCalendario) {
+      notificarPartidoDeLiga(partido).catch((err) =>
+        console.error("Error notificando partido de liga:", err.message || err)
+      );
+    }
+
     res.json(partido);
   } catch {
     res.status(404).json({ error: "Enfrentamiento no encontrado" });
@@ -288,6 +335,8 @@ router.put("/partidos/:partidoId/calendario", requireAdmin, async (req, res) => 
 router.put("/partidos/:partidoId", requireAdmin, async (req, res) => {
   const { partidoId } = req.params;
   const { resultado, ganador, maquina, enCurso } = req.body;
+  const antes = await prisma.partidoLiga.findUnique({ where: { id: partidoId } });
+  if (!antes) return res.status(404).json({ error: "Enfrentamiento no encontrado" });
   try {
     const partido = await prisma.partidoLiga.update({
       where: { id: partidoId },
@@ -298,6 +347,15 @@ router.put("/partidos/:partidoId", requireAdmin, async (req, res) => {
         enCurso: enCurso !== undefined ? !!enCurso : undefined,
       },
     });
+
+    // Mismo aviso "tu partido empieza ahora" que en torneosClub.js, solo en
+    // la transición false -> true.
+    if (!antes.enCurso && partido.enCurso) {
+      notificarPartidoDeLiga(partido, "en_curso").catch((err) =>
+        console.error("Error notificando partido de liga en curso:", err.message || err)
+      );
+    }
+
     res.json(partido);
   } catch {
     res.status(404).json({ error: "Enfrentamiento no encontrado" });

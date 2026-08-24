@@ -3,6 +3,7 @@ import { PrismaClient } from "@prisma/client";
 import { randomUUID } from "crypto";
 import { requireAuth } from "./auth.js";
 import { sortearParejasPorGrupos, resolverNombresJugadores } from "../lib/sorteoParejasGrupos.js";
+import { notificarJugadores } from "./notificar.js";
 
 const prisma = new PrismaClient();
 const router = Router();
@@ -704,11 +705,63 @@ router.delete("/cuadrantes/:cuadranteId", requireAdmin, async (req, res) => {
   res.status(204).end();
 });
 
+// Avisa (Web Push y/o Telegram) a los jugadores del club implicados en un
+// enfrentamiento de cuadrante. notificarJugadores() no distingue entre
+// socios e invitados: manda Web Push a quien lo tenga activado en "Mi
+// perfil" (solo socios, ahí necesitan cuenta) y Telegram a quien haya hecho
+// el check-in del bot (socios o invitados, indistintamente — ver
+// routes/telegram.js). Lo único que de verdad hace falta es que el
+// participante esté enlazado a un jugadorId real: los nombres sueltos
+// escritos a mano en el sorteo (sin seleccionar a nadie del desplegable de
+// "Jugadores del club") no tienen jugadorId y por tanto no hay a quién
+// avisar — no es un error, es que no hay ninguna cuenta ni chat de
+// Telegram que relacionar con ese nombre. Mismo patrón que el aviso al
+// fijar partido de competiciones externas (ver
+// routes/competicionesExternas.js), adaptado aquí porque los participantes
+// de un cuadrante se identifican por etiqueta (nombre o "Fulano / Mengano"),
+// no por un EquipoJugador con jugadorId directo.
+async function notificarPartidoDeCuadrante(partido, motivo = "programado") {
+  const etiquetas = [partido.jugador1, partido.jugador2].filter(Boolean);
+  if (etiquetas.length === 0) return;
+
+  const [participantes, cuadrante] = await Promise.all([
+    prisma.participanteCuadrante.findMany({
+      where: { cuadranteId: partido.cuadranteId, etiqueta: { in: etiquetas } },
+    }),
+    prisma.cuadrante.findUnique({ where: { id: partido.cuadranteId }, include: { torneoClub: true, liga: true } }),
+  ]);
+  const jugadorIds = participantes.flatMap((p) => [p.jugador1Id, p.jugador2Id]).filter(Boolean);
+  if (jugadorIds.length === 0) return;
+
+  const nombreCompeticion = cuadrante?.torneoClub?.nombre || cuadrante?.liga?.nombre || "Torneo del club";
+  const enfrentamiento = `${partido.jugador1 || "?"} vs ${partido.jugador2 || "?"}`;
+
+  if (motivo === "en_curso") {
+    await notificarJugadores(jugadorIds, {
+      titulo: `¡Tu partido empieza ahora! ${nombreCompeticion}`,
+      cuerpo: `${enfrentamiento}${partido.maquina ? ` en ${partido.maquina}` : ""}.`,
+    });
+    return;
+  }
+
+  const fechaTexto = partido.fechaCalendario
+    ? new Date(partido.fechaCalendario).toLocaleDateString("es-ES", { day: "2-digit", month: "2-digit" })
+    : null;
+  await notificarJugadores(jugadorIds, {
+    titulo: `Partido programado: ${nombreCompeticion}`,
+    cuerpo: `${enfrentamiento}${fechaTexto ? ` el ${fechaTexto}` : ""}${
+      partido.maquinaCalendario ? ` en ${partido.maquinaCalendario.nombre}` : ""
+    }.`,
+  });
+}
+
 // PUT /api/torneos-club/partidos/:partidoId/calendario - programa (o desprograma)
 // un enfrentamiento del cuadro en el calendario general, con fecha y máquina
 router.put("/partidos/:partidoId/calendario", requireAdmin, async (req, res) => {
   const { partidoId } = req.params;
   const { fecha, maquinaId, confirmado } = req.body;
+  const antes = await prisma.cuadroPartido.findUnique({ where: { id: partidoId } });
+  if (!antes) return res.status(404).json({ error: "Enfrentamiento no encontrado" });
   try {
     const partido = await prisma.cuadroPartido.update({
       where: { id: partidoId },
@@ -719,6 +772,16 @@ router.put("/partidos/:partidoId/calendario", requireAdmin, async (req, res) => 
       },
       include: { maquinaCalendario: true },
     });
+
+    // Solo se avisa al pasar de no confirmado a confirmado (no en cada
+    // edición posterior de fecha/máquina de un partido ya confirmado). No
+    // bloquea la respuesta al admin si el envío falla.
+    if (!antes.confirmadoCalendario && partido.confirmadoCalendario) {
+      notificarPartidoDeCuadrante(partido).catch((err) =>
+        console.error("Error notificando partido de cuadrante:", err.message || err)
+      );
+    }
+
     res.json(partido);
   } catch {
     res.status(404).json({ error: "Enfrentamiento no encontrado" });
@@ -757,6 +820,17 @@ router.put("/partidos/:partidoId", requireAdmin, async (req, res) => {
       enCurso: enCurso !== undefined ? !!enCurso : undefined,
     },
   });
+
+  // Aviso a los jugadores del club implicados (si son socios con cuenta) al
+  // marcar el partido "en curso" — es el momento en el que de verdad
+  // interesa avisar ("tu partido empieza ahora"), no solo al fijarlo en el
+  // calendario con antelación. Solo en la transición false -> true, no en
+  // cada edición posterior.
+  if (!actual.enCurso && partido.enCurso) {
+    notificarPartidoDeCuadrante(partido, "en_curso").catch((err) =>
+      console.error("Error notificando partido en curso:", err.message || err)
+    );
+  }
 
   if (ganador !== undefined && ganador) {
     const jug1 = jugador1 !== undefined ? jugador1 : actual.jugador1;

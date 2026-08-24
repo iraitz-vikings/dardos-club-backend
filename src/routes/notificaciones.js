@@ -2,8 +2,8 @@ import { Router } from "express";
 import { PrismaClient } from "@prisma/client";
 import jwt from "jsonwebtoken";
 import { requireAuth } from "./auth.js";
-import { vapidPublicKey } from "../notificaciones/webPush.js";
-import { generarEnlaceCheckIn } from "../notificaciones/telegram.js";
+import { vapidPublicKey } from "./webPush.js";
+import { generarEnlaceCheckIn } from "./telegram.js";
 
 const prisma = new PrismaClient();
 const router = Router();

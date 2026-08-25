@@ -1,16 +1,9 @@
 import { Router } from "express";
 import { PrismaClient } from "@prisma/client";
+import { requireAdmin } from "../middleware/requireAdmin.js";
 
 const prisma = new PrismaClient();
 const router = Router();
-
-function requireAdmin(req, res, next) {
-  const token = req.headers["x-admin-token"];
-  if (!token || token !== process.env.ADMIN_TOKEN) {
-    return res.status(401).json({ error: "No autorizado" });
-  }
-  next();
-}
 
 // GET /api/mensaje-anclado - público. Solo devuelve el mensaje si está activo.
 router.get("/", async (_req, res) => {

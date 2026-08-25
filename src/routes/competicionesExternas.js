@@ -2,23 +2,24 @@ import { Router } from "express";
 import { PrismaClient } from "@prisma/client";
 import jwt from "jsonwebtoken";
 import { requireAuth } from "./auth.js";
+import { requireAdmin, adminRateLimiter } from "../middleware/requireAdmin.js";
 import { actualizarClasificacionTorneo, actualizarTodasLasClasificaciones } from "../scrapers/actualizarClasificaciones.js";
 import { notificarJugadores } from "./notificar.js";
 
 const prisma = new PrismaClient();
 const router = Router();
 
-function requireAdmin(req, res, next) {
-  const token = req.headers["x-admin-token"];
-  if (!token || token !== process.env.ADMIN_TOKEN) {
-    return res.status(401).json({ error: "No autorizado" });
-  }
-  next();
-}
-
 // Acepta o bien el admin (panel), o bien la sesión de un socio (para que el
-// capitán pueda confirmar sus propios partidos)
+// capitán pueda confirmar sus propios partidos). adminRateLimiter protege el
+// token fijo de admin también en esta puerta de entrada alternativa (ver
+// src/middleware/requireAdmin.js).
 function requireAdminOSocio(req, res, next) {
+  adminRateLimiter(req, res, (err) => {
+    if (err) return next(err);
+    continuarRequireAdminOSocio(req, res, next);
+  });
+}
+function continuarRequireAdminOSocio(req, res, next) {
   const adminToken = req.headers["x-admin-token"];
   if (adminToken && adminToken === process.env.ADMIN_TOKEN) {
     req.esAdminPanel = true;

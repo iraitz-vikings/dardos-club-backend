@@ -5,17 +5,10 @@ import { requireAuth } from "./auth.js";
 import { sortearParejasPorGrupos, resolverNombresJugadores } from "../lib/sorteoParejasGrupos.js";
 import { notificarJugadores } from "./notificar.js";
 import { diasRestantesPapelera } from "../lib/papelera.js";
+import { requireAdmin } from "../middleware/requireAdmin.js";
 
 const prisma = new PrismaClient();
 const router = Router();
-
-function requireAdmin(req, res, next) {
-  const token = req.headers["x-admin-token"];
-  if (!token || token !== process.env.ADMIN_TOKEN) {
-    return res.status(401).json({ error: "No autorizado" });
-  }
-  next();
-}
 
 const includeCompleto = {
   cuadrantes: {

@@ -4,17 +4,10 @@ import jwt from "jsonwebtoken";
 import { requireAuth } from "./auth.js";
 import { vapidPublicKey } from "./webPush.js";
 import { generarEnlaceCheckIn } from "./telegram.js";
+import { requireAdmin } from "../middleware/requireAdmin.js";
 
 const prisma = new PrismaClient();
 const router = Router();
-
-function requireAdmin(req, res, next) {
-  const token = req.headers["x-admin-token"];
-  if (!token || token !== process.env.ADMIN_TOKEN) {
-    return res.status(401).json({ error: "No autorizado" });
-  }
-  next();
-}
 
 // GET /api/notificaciones/vapid-public-key - clave pública para que el
 // frontend pueda suscribirse a Web Push. Pública (no hace falta sesión).

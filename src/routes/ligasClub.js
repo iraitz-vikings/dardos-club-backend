@@ -7,6 +7,7 @@ import { notificarJugadores } from "./notificar.js";
 import { clasificacionPorGrupos } from "../lib/clasificacionLiga.js";
 import { construirRondaUnoConGrupos } from "../lib/cruceGruposFinal.js";
 import { diasRestantesPapelera } from "../lib/papelera.js";
+import { requireAdmin } from "../middleware/requireAdmin.js";
 
 // "A", "B", "C"... — nombres de grupo para `numeroGrupos` grupos.
 function letrasDeGrupos(numeroGrupos) {
@@ -15,14 +16,6 @@ function letrasDeGrupos(numeroGrupos) {
 
 const prisma = new PrismaClient();
 const router = Router();
-
-function requireAdmin(req, res, next) {
-  const token = req.headers["x-admin-token"];
-  if (!token || token !== process.env.ADMIN_TOKEN) {
-    return res.status(401).json({ error: "No autorizado" });
-  }
-  next();
-}
 
 const includeCompleto = {
   participantes: { include: { jugador1: true, jugador2: true }, orderBy: { creadoEn: "asc" } },

@@ -2,9 +2,25 @@ import { Router } from "express";
 import multer from "multer";
 import { v2 as cloudinary } from "cloudinary";
 import jwt from "jsonwebtoken";
+import { requireAdmin, adminRateLimiter } from "../middleware/requireAdmin.js";
 
 const router = Router();
-const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 100 * 1024 * 1024 } });
+
+// 20 MB y solo imagen/vídeo: antes no había ningún filtro de tipo y el
+// límite era 100 MB, así que cualquier socio logueado podía subir hasta
+// 100 MB de cualquier archivo a la cuenta de Cloudinary del club. Los
+// carteles/fotos/vídeos reales del club caben de sobra en 20 MB.
+const upload = multer({
+  storage: multer.memoryStorage(),
+  limits: { fileSize: 20 * 1024 * 1024 },
+  fileFilter: (req, file, cb) => {
+    if (file.mimetype.startsWith("image/") || file.mimetype.startsWith("video/")) {
+      cb(null, true);
+    } else {
+      cb(new Error("TIPO_NO_PERMITIDO"));
+    }
+  },
+});
 
 cloudinary.config({
   cloud_name: process.env.CLOUDINARY_CLOUD_NAME,
@@ -12,17 +28,17 @@ cloudinary.config({
   api_secret: process.env.CLOUDINARY_API_SECRET,
 });
 
-function requireAdmin(req, res, next) {
-  const token = req.headers["x-admin-token"];
-  if (!token || token !== process.env.ADMIN_TOKEN) {
-    return res.status(401).json({ error: "No autorizado" });
-  }
-  next();
-}
-
 // Acepta o bien el token de admin, o bien la sesión de un socio logueado (para
-// que cada uno pueda subir su propia foto de perfil sin usar la contraseña de admin).
+// que cada uno pueda subir su propia foto de perfil sin usar la contraseña de
+// admin). adminRateLimiter protege el token fijo también en esta puerta de
+// entrada alternativa (ver src/middleware/requireAdmin.js).
 function requireAdminOAuth(req, res, next) {
+  adminRateLimiter(req, res, (err) => {
+    if (err) return next(err);
+    continuarRequireAdminOAuth(req, res, next);
+  });
+}
+function continuarRequireAdminOAuth(req, res, next) {
   const adminToken = req.headers["x-admin-token"];
   if (adminToken && adminToken === process.env.ADMIN_TOKEN) return next();
   const header = req.headers.authorization || "";
@@ -38,10 +54,27 @@ function requireAdminOAuth(req, res, next) {
   return res.status(401).json({ error: "No autorizado" });
 }
 
+// Envuelve upload.single a mano (en vez de pasarlo directo como middleware)
+// para poder traducir sus errores (tipo no permitido, archivo demasiado
+// grande) a una respuesta JSON normal en vez de que caigan al manejador de
+// errores por defecto de Express.
+function subirArchivo(req, res, next) {
+  upload.single("imagen")(req, res, (err) => {
+    if (!err) return next();
+    if (err.code === "LIMIT_FILE_SIZE") {
+      return res.status(413).json({ error: "El archivo supera el límite de tamaño (20 MB)." });
+    }
+    if (err.message === "TIPO_NO_PERMITIDO") {
+      return res.status(400).json({ error: "Solo se permiten imágenes o vídeos." });
+    }
+    return res.status(400).json({ error: "No se pudo procesar el archivo." });
+  });
+}
+
 // POST /api/upload - sube una imagen o vídeo a Cloudinary y devuelve su URL (protegido)
 // resource_type "auto" detecta si es imagen o vídeo; los vídeos se convierten
 // automáticamente a un formato reproducible en cualquier navegador.
-router.post("/", requireAdminOAuth, upload.single("imagen"), async (req, res) => {
+router.post("/", requireAdminOAuth, subirArchivo, async (req, res) => {
   if (!req.file) {
     return res.status(400).json({ error: "No se ha recibido ningún archivo" });
   }
@@ -65,7 +98,7 @@ router.post("/", requireAdminOAuth, upload.single("imagen"), async (req, res) =>
     res.status(201).json({ url, tipo: resultado.resource_type });
   } catch (err) {
     if (err?.http_code === 400 && /File size too large/i.test(err.message || "")) {
-      return res.status(413).json({ error: "El archivo supera el límite de tamaño (100 MB)." });
+      return res.status(413).json({ error: "El archivo supera el límite de tamaño (20 MB)." });
     }
     res.status(500).json({ error: "No se pudo subir el archivo" });
   }

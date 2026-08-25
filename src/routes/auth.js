@@ -2,17 +2,11 @@ import { Router } from "express";
 import { PrismaClient } from "@prisma/client";
 import bcrypt from "bcryptjs";
 import jwt from "jsonwebtoken";
+import { requireAdmin } from "../middleware/requireAdmin.js";
+import { loginLimiter } from "../middleware/loginLimiter.js";
 
 const prisma = new PrismaClient();
 const router = Router();
-
-function requireAdmin(req, res, next) {
-  const token = req.headers["x-admin-token"];
-  if (!token || token !== process.env.ADMIN_TOKEN) {
-    return res.status(401).json({ error: "No autorizado" });
-  }
-  next();
-}
 
 // Middleware para rutas que requieren socio logueado (se reutilizará en fases futuras)
 export function requireAuth(req, res, next) {
@@ -44,7 +38,9 @@ function firmarToken(usuario) {
 }
 
 // POST /api/auth/registro - alta pública con código de invitación, queda pendiente de aprobación
-router.post("/registro", async (req, res) => {
+// loginLimiter también aquí: el código de invitación es otro secreto fijo que
+// se podría intentar adivinar a base de intentos, igual que una contraseña.
+router.post("/registro", loginLimiter, async (req, res) => {
   const { nombre, email, password, codigoInvitacion } = req.body;
   if (!nombre || !email || !password || !codigoInvitacion) {
     return res.status(400).json({ error: "Faltan datos" });
@@ -68,7 +64,7 @@ router.post("/registro", async (req, res) => {
 });
 
 // POST /api/auth/login
-router.post("/login", async (req, res) => {
+router.post("/login", loginLimiter, async (req, res) => {
   const { email, password } = req.body;
   if (!email || !password) {
     return res.status(400).json({ error: "Faltan datos" });

@@ -41,7 +41,11 @@ const includeTorneo = {
   plataforma: true,
   equipos: {
     include: {
-      equipoClub: true,
+      // El capitán "de verdad" es el de la plantilla del club (EquipoClub):
+      // el desplegable de capitán por inscripción (EquipoTorneo.capitan) no
+      // se usa en la práctica, así que se incluyen los dos para poder
+      // comprobar cualquiera de ellos.
+      equipoClub: { include: { capitan: true } },
       capitan: true,
       jugadores: { include: { jugador: true } },
       partidos: { include: { maquina: true }, orderBy: { fecha: "asc" } },
@@ -250,13 +254,21 @@ router.put("/partidos/:id", requireAdminOSocio, async (req, res) => {
   const { id } = req.params;
   const partido = await prisma.partido.findUnique({
     where: { id },
-    include: { equipoTorneo: { include: { capitan: true, equipoClub: true, torneo: true } } },
+    include: {
+      equipoTorneo: {
+        include: { capitan: true, equipoClub: { include: { capitan: true } }, torneo: true },
+      },
+    },
   });
   if (!partido) return res.status(404).json({ error: "Partido no encontrado" });
 
   if (!req.esAdminPanel) {
     const esAdmin = req.usuario?.rol === "admin";
-    const esCapitan = partido.equipoTorneo.capitan?.usuarioId === req.usuario?.sub;
+    // El capitán puede ser el de esta inscripción concreta (poco usado) o,
+    // el caso real, el capitán de la plantilla del equipo del club.
+    const esCapitan =
+      partido.equipoTorneo.capitan?.usuarioId === req.usuario?.sub ||
+      partido.equipoTorneo.equipoClub?.capitan?.usuarioId === req.usuario?.sub;
     if (!esAdmin && !esCapitan) {
       return res.status(403).json({ error: "Solo el capitán de este equipo o un admin pueden confirmar este partido" });
     }

@@ -65,6 +65,21 @@ export function iniciarBotTelegram() {
     bot.sendMessage(chatId, `¡Listo, ${jugador.nombre}! A partir de ahora recibirás por aquí los avisos de tus partidos.`);
   });
 
+  // /parar - el propio invitado se desvincula de los avisos por Telegram,
+  // sin depender del admin. Solo borra la SuscripcionTelegram (el Jugador se
+  // mantiene intacto); si vuelve a abrir su enlace de avisos y pulsa
+  // "Iniciar" de nuevo, se re-vincula sin problema (el enlace no caduca).
+  bot.onText(/\/parar/, async (msg) => {
+    const chatId = msg.chat.id;
+    const sub = await prisma.suscripcionTelegram.findUnique({ where: { chatId: String(chatId) } });
+    if (!sub) {
+      bot.sendMessage(chatId, "No tenías avisos activados por aquí.");
+      return;
+    }
+    await prisma.suscripcionTelegram.delete({ where: { chatId: String(chatId) } });
+    bot.sendMessage(chatId, "Avisos desactivados. Si quieres volver a activarlos, abre de nuevo tu enlace personal del club.");
+  });
+
   bot.on("polling_error", (err) => {
     console.error("Error de polling del bot de Telegram:", err.message || err);
   });

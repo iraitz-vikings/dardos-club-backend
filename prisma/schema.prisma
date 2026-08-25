@@ -254,6 +254,10 @@ model TorneoClub {
   modalidad       String   @default("individual")
   afectaCalendario Boolean  @default(true)
   finalizado       Boolean  @default(false)
+  // Borrado suave (papelera): null = activo; con fecha = en la papelera,
+  // recuperable durante 7 días (ver src/lib/papelera.js) antes de que el
+  // cron nocturno lo purgue de verdad.
+  borradoEn       DateTime?
   creadoEn        DateTime @default(now())
   actualizadoEn   DateTime @updatedAt
 
@@ -365,6 +369,10 @@ model LigaClub {
   metodoSorteoParejas String?
   afectaCalendario Boolean  @default(true)
   finalizado       Boolean  @default(false)
+  // Borrado suave (papelera): null = activa; con fecha = en la papelera,
+  // recuperable durante 7 días (ver src/lib/papelera.js) antes de que el
+  // cron nocturno la purgue de verdad.
+  borradoEn           DateTime?
   creadoEn            DateTime @default(now())
   actualizadoEn       DateTime @updatedAt
 

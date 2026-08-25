@@ -6,6 +6,7 @@ import "dotenv/config";
 import { actualizarTodasLasMedias } from "./scrapers/actualizarMedias.js";
 import { actualizarTodasLasClasificaciones } from "./scrapers/actualizarClasificaciones.js";
 import { iniciarBotTelegram } from "./routes/telegram.js";
+import { limpiarPapelera } from "./lib/limpiarPapelera.js";
 
 import noticiasRouter from "./routes/noticias.js";
 import uploadRouter from "./routes/upload.js";
@@ -111,6 +112,17 @@ cron.schedule("30 4 * * *", () => {
   actualizarTodasLasClasificaciones()
     .then((resumen) => console.log("Clasificaciones actualizadas:", resumen))
     .catch((err) => console.error("Error actualizando clasificaciones:", err));
+});
+
+// Cada noche a las 05:00 (después de los crons de medias/clasificaciones de
+// arriba) se purgan de verdad los torneos/ligas del club que llevan más de
+// 7 días en la papelera (ver src/lib/limpiarPapelera.js y "Borrar" en
+// AdminTorneosClub.jsx/AdminLigasClub.jsx, que ahora es un borrado suave).
+cron.schedule("0 5 * * *", () => {
+  console.log("Purgando papelera de torneos/ligas (cron nocturno)...");
+  limpiarPapelera()
+    .then((resumen) => console.log("Papelera purgada:", resumen))
+    .catch((err) => console.error("Error purgando papelera:", err));
 });
 
 const PORT = process.env.PORT || 3000;

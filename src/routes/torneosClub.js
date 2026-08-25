@@ -4,6 +4,7 @@ import { randomUUID } from "crypto";
 import { requireAuth } from "./auth.js";
 import { sortearParejasPorGrupos, resolverNombresJugadores } from "../lib/sorteoParejasGrupos.js";
 import { notificarJugadores } from "./notificar.js";
+import { diasRestantesPapelera } from "../lib/papelera.js";
 
 const prisma = new PrismaClient();
 const router = Router();
@@ -202,9 +203,12 @@ async function intentarResolverBye(partidoId) {
 
 // ---------- Rutas de torneos del club ----------
 
+// En todos los listados normales (públicos, admin, socios) se excluyen los
+// torneos que están en la papelera (`borradoEn` no nulo) — tienen su propio
+// listado en GET /papelera. Ver src/lib/papelera.js.
 router.get("/", async (_req, res) => {
   const torneos = await prisma.torneoClub.findMany({
-    where: { visibilidad: "publico" },
+    where: { visibilidad: "publico", borradoEn: null },
     orderBy: { fechaInicio: "desc" },
     include: includeCompleto,
   });
@@ -215,7 +219,7 @@ router.get("/", async (_req, res) => {
 // histórico dentro del portal de socios (requiere sesión de socio, no admin)
 router.get("/privados", requireAuth, async (_req, res) => {
   const torneos = await prisma.torneoClub.findMany({
-    where: { visibilidad: "privado", finalizado: true },
+    where: { visibilidad: "privado", finalizado: true, borradoEn: null },
     orderBy: { fechaInicio: "desc" },
     select: { id: true, nombre: true, fechaInicio: true, fechaFin: true },
   });
@@ -226,7 +230,7 @@ router.get("/privados", requireAuth, async (_req, res) => {
 // en el portal de socios (públicos o privados, cualquier socio logueado los ve)
 router.get("/activos", requireAuth, async (_req, res) => {
   const torneos = await prisma.torneoClub.findMany({
-    where: { finalizado: false },
+    where: { finalizado: false, borradoEn: null },
     orderBy: { fechaInicio: "desc" },
     select: { id: true, nombre: true, fechaInicio: true, fechaFin: true, modalidad: true },
   });
@@ -235,17 +239,30 @@ router.get("/activos", requireAuth, async (_req, res) => {
 
 router.get("/todos", requireAdmin, async (_req, res) => {
   const torneos = await prisma.torneoClub.findMany({
+    where: { borradoEn: null },
     orderBy: { fechaInicio: "desc" },
     include: includeCompleto,
   });
   res.json(torneos);
 });
 
+// GET /api/torneos-club/papelera - torneos borrados en los últimos 7 días,
+// con los días que quedan antes de que el cron nocturno los purgue de
+// verdad (ver src/lib/limpiarPapelera.js). Solo admin.
+router.get("/papelera", requireAdmin, async (_req, res) => {
+  const torneos = await prisma.torneoClub.findMany({
+    where: { borradoEn: { not: null } },
+    orderBy: { borradoEn: "desc" },
+    include: includeCompleto,
+  });
+  res.json(torneos.map((t) => ({ ...t, diasRestantes: diasRestantesPapelera(t.borradoEn) })));
+});
+
 // GET /api/torneos-club/:id - un torneo público concreto, con todo su detalle (para la página del torneo)
 router.get("/:id", async (req, res) => {
   const { id } = req.params;
   const torneo = await prisma.torneoClub.findUnique({ where: { id }, include: includeCompleto });
-  if (!torneo) {
+  if (!torneo || torneo.borradoEn) {
     return res.status(404).json({ error: "Torneo no encontrado" });
   }
   res.json(torneo);
@@ -298,14 +315,49 @@ router.put("/:id", requireAdmin, async (req, res) => {
   }
 });
 
-router.delete("/:id", requireAdmin, async (req, res) => {
-  const { id } = req.params;
+// Borra definitivamente un torneo del club y todo lo que cuelga de él
+// (cuadrantes, cuadro de partidos, participantes). La usan tanto el borrado
+// definitivo a mano (DELETE /:id/definitivo) como el cron nocturno que
+// purga la papelera pasados los 7 días (ver src/lib/limpiarPapelera.js).
+export async function purgarTorneo(id) {
   const cuadrantes = await prisma.cuadrante.findMany({ where: { torneoClubId: id }, select: { id: true } });
   const cuadranteIds = cuadrantes.map((c) => c.id);
   await prisma.cuadroPartido.deleteMany({ where: { cuadranteId: { in: cuadranteIds } } });
   await prisma.participanteCuadrante.deleteMany({ where: { cuadranteId: { in: cuadranteIds } } });
   await prisma.cuadrante.deleteMany({ where: { torneoClubId: id } });
   await prisma.torneoClub.delete({ where: { id } });
+}
+
+// DELETE /api/torneos-club/:id - envía el torneo a la papelera (borrado
+// suave, marca `borradoEn`): desaparece de todos los listados normales y del
+// historial de los jugadores, pero se puede restaurar hasta 7 días desde
+// GET /papelera. Si nadie lo restaura, el cron nocturno lo purga de verdad.
+router.delete("/:id", requireAdmin, async (req, res) => {
+  try {
+    await prisma.torneoClub.update({ where: { id: req.params.id }, data: { borradoEn: new Date() } });
+    res.status(204).end();
+  } catch (err) {
+    if (err.code === "P2025") return res.status(404).json({ error: "Torneo no encontrado" });
+    console.error("Error moviendo torneo a la papelera:", err);
+    res.status(500).json({ error: "No se pudo borrar el torneo." });
+  }
+});
+
+// POST /api/torneos-club/:id/restaurar - saca un torneo de la papelera
+router.post("/:id/restaurar", requireAdmin, async (req, res) => {
+  try {
+    const torneo = await prisma.torneoClub.update({ where: { id: req.params.id }, data: { borradoEn: null } });
+    res.json(torneo);
+  } catch {
+    res.status(404).json({ error: "Torneo no encontrado" });
+  }
+});
+
+// DELETE /api/torneos-club/:id/definitivo - borra ya, sin esperar a que
+// pasen los 7 días de la papelera (mismo borrado en cascada que antes hacía
+// DELETE /:id directamente).
+router.delete("/:id/definitivo", requireAdmin, async (req, res) => {
+  await purgarTorneo(req.params.id);
   res.status(204).end();
 });
 

@@ -2,7 +2,7 @@
 # sistema ya instaladas, necesarias para los scrapers de Connection Darts y
 # Phoenix Darts (ver src/scrapers). La versión de la imagen tiene que
 # coincidir con la versión de "playwright" fijada en package.json.
-FROM mcr.microsoft.com/playwright:v1.47.2-jammy
+FROM mcr.microsoft.com/playwright:v1.62.1-jammy
 
 WORKDIR /app
 

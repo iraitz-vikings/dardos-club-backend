@@ -370,7 +370,9 @@ router.post("/cuadrantes/:cuadranteId/participantes", requireAdmin, async (req, 
     if (id) {
       const j = await prisma.jugador.findUnique({ where: { id } });
       if (!j) return { error: true };
-      return { id: j.id, nombre: j.nombre };
+      // Si el jugador tiene alias puesto en su perfil, se usa ese en vez del
+      // nombre real para la etiqueta del participante.
+      return { id: j.id, nombre: j.apodo || j.nombre };
     }
     if (nombreLibre && nombreLibre.trim()) {
       return { id: null, nombre: nombreLibre.trim() };

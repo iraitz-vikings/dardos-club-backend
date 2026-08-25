@@ -239,10 +239,39 @@ router.delete("/equipos/:id/jugadores/:jugadorId", requireAdmin, async (req, res
 });
 
 // ---------- Partidos ----------
-router.post("/equipos/:id/partidos", requireAdmin, async (req, res) => {
+
+// Comprueba si `usuarioSub` es el capitán de esta inscripción: el de la
+// inscripción concreta (poco usado) o, el caso real, el capitán de la
+// plantilla del equipo del club. Devuelve también el equipoTorneo por si
+// hace falta (null si no existe).
+async function esCapitanDeEquipo(equipoTorneoId, usuarioSub) {
+  const equipoTorneo = await prisma.equipoTorneo.findUnique({
+    where: { id: equipoTorneoId },
+    include: { capitan: true, equipoClub: { include: { capitan: true } } },
+  });
+  if (!equipoTorneo) return { equipoTorneo: null, esCapitan: false };
+  const esCapitan =
+    equipoTorneo.capitan?.usuarioId === usuarioSub || equipoTorneo.equipoClub?.capitan?.usuarioId === usuarioSub;
+  return { equipoTorneo, esCapitan };
+}
+
+// El admin, o el capitán de este equipo, pueden crear el partido (fecha +
+// rival) por primera vez — normalmente porque es el capitán quien acuerda
+// con el equipo rival cuándo se juega.
+router.post("/equipos/:id/partidos", requireAdminOSocio, async (req, res) => {
   const { id } = req.params;
   const { fecha, rival } = req.body;
   if (!fecha) return res.status(400).json({ error: "Falta la fecha" });
+
+  if (!req.esAdminPanel) {
+    const esAdmin = req.usuario?.rol === "admin";
+    const { equipoTorneo, esCapitan } = await esCapitanDeEquipo(id, req.usuario?.sub);
+    if (!equipoTorneo) return res.status(404).json({ error: "Equipo no encontrado" });
+    if (!esAdmin && !esCapitan) {
+      return res.status(403).json({ error: "Solo el capitán de este equipo o un admin pueden añadir partidos" });
+    }
+  }
+
   const partido = await prisma.partido.create({
     data: { equipoTorneoId: id, fecha: new Date(fecha), rival: rival || null },
   });

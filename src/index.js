@@ -7,8 +7,10 @@ import { actualizarTodasLasMedias } from "./scrapers/actualizarMedias.js";
 import { actualizarTodasLasClasificaciones } from "./scrapers/actualizarClasificaciones.js";
 import { iniciarBotTelegram } from "./routes/telegram.js";
 import { limpiarPapelera } from "./lib/limpiarPapelera.js";
+import { enviarRecordatoriosDeHoy } from "./lib/recordatoriosPartidos.js";
 
 import noticiasRouter from "./routes/noticias.js";
+import buscarRouter from "./routes/buscar.js";
 import uploadRouter from "./routes/upload.js";
 import torneoDestacadoRouter from "./routes/torneoDestacado.js";
 import galeriaRouter from "./routes/galeria.js";
@@ -81,6 +83,9 @@ app.use("/api/calendario", calendarioRouter);
 // Avisos por Web Push (socios) y Telegram (invitados)
 app.use("/api/notificaciones", notificacionesRouter);
 
+// Buscador global de la web (noticias, torneos, ligas)
+app.use("/api/buscar", buscarRouter);
+
 app.get("/api/health", (_req, res) => res.json({ ok: true }));
 
 // Arranca el bot de Telegram (si TELEGRAM_BOT_TOKEN está configurado), para
@@ -123,6 +128,19 @@ cron.schedule("0 5 * * *", () => {
   limpiarPapelera()
     .then((resumen) => console.log("Papelera purgada:", resumen))
     .catch((err) => console.error("Error purgando papelera:", err));
+});
+
+// Cada mañana a las 08:00 UTC (10:00 en Madrid en verano, 09:00 en
+// invierno) se manda el recordatorio del día a quien tenga un partido
+// confirmado para hoy — torneos, ligas y competiciones externas del club
+// (ver src/lib/recordatoriosPartidos.js). Es un segundo aviso, aparte del
+// que ya se manda en el momento de fijar/confirmar el partido (que puede
+// haber sido días o semanas antes).
+cron.schedule("0 8 * * *", () => {
+  console.log("Enviando recordatorios de partidos de hoy (cron matutino)...");
+  enviarRecordatoriosDeHoy()
+    .then((resumen) => console.log("Recordatorios enviados:", resumen))
+    .catch((err) => console.error("Error enviando recordatorios:", err));
 });
 
 const PORT = process.env.PORT || 3000;

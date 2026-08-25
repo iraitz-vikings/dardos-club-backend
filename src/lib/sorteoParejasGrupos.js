@@ -88,13 +88,15 @@ export function sortearParejasPorGrupos(entradas, metodo) {
 
 // Resuelve los nombres de una lista de entradas { jugadorId?, nombre? } en
 // una sola consulta (en vez de una por entrada, que era el patrón N+1 que
-// tenían ambas copias originales). Devuelve un Map jugadorId -> nombre.
+// tenían ambas copias originales). Devuelve un Map jugadorId -> nombre para
+// mostrar: el alias del jugador si lo tiene puesto en su perfil, si no su
+// nombre real.
 export async function resolverNombresJugadores(prisma, entradas) {
   const ids = [...new Set(entradas.filter((e) => e.jugadorId).map((e) => e.jugadorId))];
   if (ids.length === 0) return new Map();
   const jugadores = await prisma.jugador.findMany({
     where: { id: { in: ids } },
-    select: { id: true, nombre: true },
+    select: { id: true, nombre: true, apodo: true },
   });
-  return new Map(jugadores.map((j) => [j.id, j.nombre]));
+  return new Map(jugadores.map((j) => [j.id, j.apodo || j.nombre]));
 }

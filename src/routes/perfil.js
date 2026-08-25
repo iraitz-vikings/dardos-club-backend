@@ -57,10 +57,18 @@ router.get("/historial", requireAuth, async (req, res) => {
   const jugador = await prisma.jugador.findUnique({ where: { usuarioId: req.usuario.sub } });
   if (!jugador) return res.json({ torneos: [], ligas: [] });
 
-  const participacionesTorneos = await prisma.participanteCuadrante.findMany({
+  // borradoEn: null filtra los torneos/ligas en la papelera (ver
+  // src/lib/papelera.js): mientras no se purguen de verdad o se restauren,
+  // no deben aparecer en el historial del socio. Un cuadrante de torneo no
+  // tiene liga (y viceversa), así que basta con exigir que la que exista
+  // esté activa.
+  const participacionesTorneosRaw = await prisma.participanteCuadrante.findMany({
     where: { OR: [{ jugador1Id: jugador.id }, { jugador2Id: jugador.id }] },
     include: { cuadrante: { include: { torneoClub: true, liga: true } } },
   });
+  const participacionesTorneos = participacionesTorneosRaw.filter(
+    (p) => !p.cuadrante.torneoClub?.borradoEn && !p.cuadrante.liga?.borradoEn
+  );
 
   // Una sola consulta con todos los cuadranteId/etiquetas implicados, en vez
   // de una consulta por cada torneo en el que ha participado el socio (podía
@@ -98,10 +106,11 @@ router.get("/historial", requireAuth, async (req, res) => {
     };
   });
 
-  const participacionesLigas = await prisma.participanteLiga.findMany({
+  const participacionesLigasRaw = await prisma.participanteLiga.findMany({
     where: { OR: [{ jugador1Id: jugador.id }, { jugador2Id: jugador.id }] },
     include: { liga: true },
   });
+  const participacionesLigas = participacionesLigasRaw.filter((p) => !p.liga?.borradoEn);
 
   // Mismo tratamiento que arriba: una sola consulta agrupando por ligaId en
   // vez de una por cada liga en la que ha participado el socio.

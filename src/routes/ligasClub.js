@@ -6,6 +6,7 @@ import { sortearParejasPorGrupos, resolverNombresJugadores } from "../lib/sorteo
 import { notificarJugadores } from "./notificar.js";
 import { clasificacionPorGrupos } from "../lib/clasificacionLiga.js";
 import { construirRondaUnoConGrupos } from "../lib/cruceGruposFinal.js";
+import { diasRestantesPapelera } from "../lib/papelera.js";
 
 // "A", "B", "C"... — nombres de grupo para `numeroGrupos` grupos.
 function letrasDeGrupos(numeroGrupos) {
@@ -35,9 +36,12 @@ const includeCompleto = {
   },
 };
 
+// En todos los listados normales (públicos, admin, socios) se excluyen las
+// ligas que están en la papelera (`borradoEn` no nulo) — tienen su propio
+// listado en GET /papelera. Ver src/lib/papelera.js.
 router.get("/", async (_req, res) => {
   const ligas = await prisma.ligaClub.findMany({
-    where: { visibilidad: "publico" },
+    where: { visibilidad: "publico", borradoEn: null },
     orderBy: { fechaInicio: "desc" },
     include: includeCompleto,
   });
@@ -48,7 +52,7 @@ router.get("/", async (_req, res) => {
 // histórico dentro del portal de socios
 router.get("/privados", requireAuth, async (_req, res) => {
   const ligas = await prisma.ligaClub.findMany({
-    where: { visibilidad: "privado", finalizado: true },
+    where: { visibilidad: "privado", finalizado: true, borradoEn: null },
     orderBy: { fechaInicio: "desc" },
     select: { id: true, nombre: true, fechaInicio: true, fechaFin: true },
   });
@@ -58,7 +62,7 @@ router.get("/privados", requireAuth, async (_req, res) => {
 // GET /api/ligas-club/activos - ligas aún no finalizadas, para "Competiciones"
 router.get("/activos", requireAuth, async (_req, res) => {
   const ligas = await prisma.ligaClub.findMany({
-    where: { finalizado: false },
+    where: { finalizado: false, borradoEn: null },
     orderBy: { fechaInicio: "desc" },
     select: { id: true, nombre: true, fechaInicio: true, fechaFin: true, modalidad: true },
   });
@@ -66,13 +70,29 @@ router.get("/activos", requireAuth, async (_req, res) => {
 });
 
 router.get("/todos", requireAdmin, async (_req, res) => {
-  const ligas = await prisma.ligaClub.findMany({ orderBy: { fechaInicio: "desc" }, include: includeCompleto });
+  const ligas = await prisma.ligaClub.findMany({
+    where: { borradoEn: null },
+    orderBy: { fechaInicio: "desc" },
+    include: includeCompleto,
+  });
   res.json(ligas);
+});
+
+// GET /api/ligas-club/papelera - ligas borradas en los últimos 7 días, con
+// los días que quedan antes de que el cron nocturno las purgue de verdad
+// (ver src/lib/limpiarPapelera.js). Solo admin.
+router.get("/papelera", requireAdmin, async (_req, res) => {
+  const ligas = await prisma.ligaClub.findMany({
+    where: { borradoEn: { not: null } },
+    orderBy: { borradoEn: "desc" },
+    include: includeCompleto,
+  });
+  res.json(ligas.map((l) => ({ ...l, diasRestantes: diasRestantesPapelera(l.borradoEn) })));
 });
 
 router.get("/:id", async (req, res) => {
   const liga = await prisma.ligaClub.findUnique({ where: { id: req.params.id }, include: includeCompleto });
-  if (!liga) return res.status(404).json({ error: "Liga no encontrada" });
+  if (!liga || liga.borradoEn) return res.status(404).json({ error: "Liga no encontrada" });
   res.json(liga);
 });
 
@@ -154,13 +174,15 @@ router.put("/:id", requireAdmin, async (req, res) => {
   }
 });
 
-router.delete("/:id", requireAdmin, async (req, res) => {
-  const { id } = req.params;
-  // El cuadrante final de la liga (si lo tiene) cuelga de Cuadrante.ligaId,
-  // con sus propios CuadroPartido/ParticipanteCuadrante — sin este borrado,
-  // el delete de más abajo falla por la relación pendiente, o deja rastros
-  // huérfanos que seguirían saliendo en el historial del jugador (ver
-  // mismo patrón ya aplicado en torneosClub.js DELETE /:id).
+// Borra definitivamente una liga del club y todo lo que cuelga de ella
+// (cuadrante final si lo tiene, calendario, participantes). La usan tanto
+// el borrado definitivo a mano (DELETE /:id/definitivo) como el cron
+// nocturno que purga la papelera pasados los 7 días (ver
+// src/lib/limpiarPapelera.js). El cuadrante final de la liga (si lo tiene)
+// cuelga de Cuadrante.ligaId, con sus propios CuadroPartido/
+// ParticipanteCuadrante — sin este borrado, el delete de más abajo falla
+// por la relación pendiente.
+export async function purgarLiga(id) {
   const cuadrantes = await prisma.cuadrante.findMany({ where: { ligaId: id }, select: { id: true } });
   const cuadranteIds = cuadrantes.map((c) => c.id);
   await prisma.cuadroPartido.deleteMany({ where: { cuadranteId: { in: cuadranteIds } } });
@@ -169,6 +191,38 @@ router.delete("/:id", requireAdmin, async (req, res) => {
   await prisma.partidoLiga.deleteMany({ where: { ligaId: id } });
   await prisma.participanteLiga.deleteMany({ where: { ligaId: id } });
   await prisma.ligaClub.delete({ where: { id } });
+}
+
+// DELETE /api/ligas-club/:id - envía la liga a la papelera (borrado suave,
+// marca `borradoEn`): desaparece de todos los listados normales y del
+// historial de los jugadores, pero se puede restaurar hasta 7 días desde
+// GET /papelera. Si nadie la restaura, el cron nocturno la purga de verdad.
+router.delete("/:id", requireAdmin, async (req, res) => {
+  try {
+    await prisma.ligaClub.update({ where: { id: req.params.id }, data: { borradoEn: new Date() } });
+    res.status(204).end();
+  } catch (err) {
+    if (err.code === "P2025") return res.status(404).json({ error: "Liga no encontrada" });
+    console.error("Error moviendo liga a la papelera:", err);
+    res.status(500).json({ error: "No se pudo borrar la liga." });
+  }
+});
+
+// POST /api/ligas-club/:id/restaurar - saca una liga de la papelera
+router.post("/:id/restaurar", requireAdmin, async (req, res) => {
+  try {
+    const liga = await prisma.ligaClub.update({ where: { id: req.params.id }, data: { borradoEn: null } });
+    res.json(liga);
+  } catch {
+    res.status(404).json({ error: "Liga no encontrada" });
+  }
+});
+
+// DELETE /api/ligas-club/:id/definitivo - borra ya, sin esperar a que pasen
+// los 7 días de la papelera (mismo borrado en cascada que antes hacía
+// DELETE /:id directamente).
+router.delete("/:id/definitivo", requireAdmin, async (req, res) => {
+  await purgarLiga(req.params.id);
   res.status(204).end();
 });
 

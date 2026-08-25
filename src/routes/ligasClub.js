@@ -156,6 +156,16 @@ router.put("/:id", requireAdmin, async (req, res) => {
 
 router.delete("/:id", requireAdmin, async (req, res) => {
   const { id } = req.params;
+  // El cuadrante final de la liga (si lo tiene) cuelga de Cuadrante.ligaId,
+  // con sus propios CuadroPartido/ParticipanteCuadrante — sin este borrado,
+  // el delete de más abajo falla por la relación pendiente, o deja rastros
+  // huérfanos que seguirían saliendo en el historial del jugador (ver
+  // mismo patrón ya aplicado en torneosClub.js DELETE /:id).
+  const cuadrantes = await prisma.cuadrante.findMany({ where: { ligaId: id }, select: { id: true } });
+  const cuadranteIds = cuadrantes.map((c) => c.id);
+  await prisma.cuadroPartido.deleteMany({ where: { cuadranteId: { in: cuadranteIds } } });
+  await prisma.participanteCuadrante.deleteMany({ where: { cuadranteId: { in: cuadranteIds } } });
+  await prisma.cuadrante.deleteMany({ where: { ligaId: id } });
   await prisma.partidoLiga.deleteMany({ where: { ligaId: id } });
   await prisma.participanteLiga.deleteMany({ where: { ligaId: id } });
   await prisma.ligaClub.delete({ where: { id } });

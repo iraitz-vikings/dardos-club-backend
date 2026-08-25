@@ -1,9 +1,16 @@
 import { Router } from "express";
 import { PrismaClient } from "@prisma/client";
-import { generarPartidos } from "./torneosClub.js";
+import { generarPartidos, aplicarPosicionesRonda1 } from "./torneosClub.js";
 import { requireAuth } from "./auth.js";
 import { sortearParejasPorGrupos, resolverNombresJugadores } from "../lib/sorteoParejasGrupos.js";
 import { notificarJugadores } from "./notificar.js";
+import { clasificacionPorGrupos } from "../lib/clasificacionLiga.js";
+import { construirRondaUnoConGrupos } from "../lib/cruceGruposFinal.js";
+
+// "A", "B", "C"... — nombres de grupo para `numeroGrupos` grupos.
+function letrasDeGrupos(numeroGrupos) {
+  return Array.from({ length: numeroGrupos }, (_, i) => String.fromCharCode(65 + i));
+}
 
 const prisma = new PrismaClient();
 const router = Router();
@@ -69,13 +76,34 @@ router.get("/:id", async (req, res) => {
   res.json(liga);
 });
 
+// Valida `numeroGrupos`: vacío/null/1 = sin grupos (undefined en el
+// resultado); si se indica, tiene que ser un entero par >= 2 para poder
+// cruzar los grupos en el cuadrante final (ver lib/cruceGruposFinal.js).
+function validarNumeroGrupos(valor) {
+  if (valor === undefined || valor === null || valor === "" || Number(valor) === 1) {
+    return { ok: true, numeroGrupos: null };
+  }
+  const n = Number(valor);
+  if (!Number.isInteger(n) || n < 2 || n % 2 !== 0) {
+    return { ok: false, error: "El número de grupos tiene que ser un número par (2, 4, 6…) para poder cruzarlos en el cuadrante final." };
+  }
+  return { ok: true, numeroGrupos: n };
+}
+
 router.post("/", requireAdmin, async (req, res) => {
-  const { nombre, descripcion, fechaInicio, fechaFin, insigniaUrl, visibilidad, modalidad, vueltas, numeroParticipantes, metodoSorteoParejas, afectaCalendario } = req.body;
+  const { nombre, descripcion, fechaInicio, fechaFin, insigniaUrl, visibilidad, modalidad, vueltas, numeroParticipantes, numeroGrupos, metodoSorteoParejas, afectaCalendario } = req.body;
   if (!nombre || !fechaInicio || !fechaFin || !numeroParticipantes) {
     return res.status(400).json({ error: "Faltan campos obligatorios" });
   }
   const modalidadesValidas = ["individual", "parejas_hechas", "parejas_ciegas"];
   const metodosValidos = ["AB", "ABC", "ABCD"];
+
+  const grupos = validarNumeroGrupos(numeroGrupos);
+  if (!grupos.ok) return res.status(400).json({ error: grupos.error });
+  if (grupos.numeroGrupos && Number(numeroParticipantes) < grupos.numeroGrupos * 2) {
+    return res.status(400).json({ error: `Con ${grupos.numeroGrupos} grupos hacen falta al menos ${grupos.numeroGrupos * 2} participantes (2 por grupo como mínimo).` });
+  }
+
   const liga = await prisma.ligaClub.create({
     data: {
       nombre,
@@ -87,6 +115,7 @@ router.post("/", requireAdmin, async (req, res) => {
       modalidad: modalidadesValidas.includes(modalidad) ? modalidad : "individual",
       vueltas: Number(vueltas) === 2 ? 2 : 1,
       numeroParticipantes: Number(numeroParticipantes),
+      numeroGrupos: grupos.numeroGrupos,
       metodoSorteoParejas: metodosValidos.includes(metodoSorteoParejas) ? metodoSorteoParejas : null,
       afectaCalendario: afectaCalendario !== undefined ? !!afectaCalendario : true,
     },
@@ -96,7 +125,15 @@ router.post("/", requireAdmin, async (req, res) => {
 
 router.put("/:id", requireAdmin, async (req, res) => {
   const { id } = req.params;
-  const { nombre, descripcion, fechaInicio, fechaFin, insigniaUrl, visibilidad, finalizado } = req.body;
+  const { nombre, descripcion, fechaInicio, fechaFin, insigniaUrl, visibilidad, finalizado, numeroGrupos } = req.body;
+
+  let numeroGruposData;
+  if (numeroGrupos !== undefined) {
+    const grupos = validarNumeroGrupos(numeroGrupos);
+    if (!grupos.ok) return res.status(400).json({ error: grupos.error });
+    numeroGruposData = grupos.numeroGrupos;
+  }
+
   try {
     const liga = await prisma.ligaClub.update({
       where: { id },
@@ -108,6 +145,7 @@ router.put("/:id", requireAdmin, async (req, res) => {
         insigniaUrl: insigniaUrl || null,
         visibilidad: visibilidad === "publico" ? "publico" : "privado",
         finalizado: finalizado !== undefined ? !!finalizado : undefined,
+        numeroGrupos: numeroGrupos !== undefined ? numeroGruposData : undefined,
       },
     });
     res.json(liga);
@@ -209,23 +247,70 @@ router.post("/:ligaId/sortear-parejas-grupos", requireAdmin, async (req, res) =>
   res.status(201).json(creadas);
 });
 
-// ---- Calendario (método del círculo: todos contra todos) ----
-
-router.post("/:ligaId/generar-calendario", requireAdmin, async (req, res) => {
+// POST /api/ligas-club/:ligaId/repartir-grupos - asigna el `grupo` (A, B, C…)
+// de cada participante ya apuntado a la liga. Solo tiene sentido si la liga
+// tiene `numeroGrupos` definido.
+//   - modo "auto": baraja a todos los participantes y los reparte "como se
+//     dan cartas" en los grupos, de forma que la diferencia de tamaño entre
+//     grupos sea como mucho de 1.
+//   - modo "manual": aplica las asignaciones indicadas en `asignaciones`
+//     ([{ participanteId, grupo }]), que tienen que cubrir a TODOS los
+//     participantes de la liga.
+router.post("/:ligaId/repartir-grupos", requireAdmin, async (req, res) => {
   const { ligaId } = req.params;
+  const { modo, asignaciones } = req.body;
+
   const liga = await prisma.ligaClub.findUnique({ where: { id: ligaId }, include: { participantes: true } });
   if (!liga) return res.status(404).json({ error: "Liga no encontrada" });
+  if (!liga.numeroGrupos) return res.status(400).json({ error: "Esta liga no tiene grupos configurados." });
 
-  const etiquetas = liga.participantes.map((p) => p.etiqueta);
-  if (etiquetas.length < 2) return res.status(400).json({ error: "Hacen falta al menos 2 participantes." });
-  if (etiquetas.length !== liga.numeroParticipantes) {
-    return res.status(400).json({
-      error: `Esta liga está pensada para ${liga.numeroParticipantes} participantes; ahora mismo hay ${etiquetas.length} apuntados.`,
-    });
+  const gruposValidos = letrasDeGrupos(liga.numeroGrupos);
+
+  if (modo === "auto") {
+    const participantes = [...liga.participantes];
+    for (let i = participantes.length - 1; i > 0; i--) {
+      const j = Math.floor(Math.random() * (i + 1));
+      [participantes[i], participantes[j]] = [participantes[j], participantes[i]];
+    }
+    await prisma.$transaction(
+      participantes.map((p, i) =>
+        prisma.participanteLiga.update({
+          where: { id: p.id },
+          data: { grupo: gruposValidos[i % gruposValidos.length] },
+        })
+      )
+    );
+  } else if (modo === "manual") {
+    if (!Array.isArray(asignaciones)) return res.status(400).json({ error: "Faltan las asignaciones." });
+    const idsLiga = new Set(liga.participantes.map((p) => p.id));
+    const idsAsignados = new Set(asignaciones.map((a) => a.participanteId));
+    for (const a of asignaciones) {
+      if (!idsLiga.has(a.participanteId)) return res.status(400).json({ error: "Hay un participante que no pertenece a esta liga." });
+      if (!gruposValidos.includes(a.grupo)) return res.status(400).json({ error: `Grupo inválido: ${a.grupo}` });
+    }
+    if (idsAsignados.size !== idsLiga.size) {
+      return res.status(400).json({ error: "Falta asignar grupo a algún participante." });
+    }
+    await prisma.$transaction(
+      asignaciones.map((a) =>
+        prisma.participanteLiga.update({ where: { id: a.participanteId }, data: { grupo: a.grupo } })
+      )
+    );
+  } else {
+    return res.status(400).json({ error: "Modo de reparto no válido (usa 'auto' o 'manual')." });
   }
 
-  await prisma.partidoLiga.deleteMany({ where: { ligaId } });
+  const ligaCompleta = await prisma.ligaClub.findUnique({ where: { id: ligaId }, include: includeCompleto });
+  res.json(ligaCompleta);
+});
 
+// ---- Calendario (método del círculo: todos contra todos) ----
+
+// Genera las jornadas de una sola "mini-liga" (una lista de etiquetas),
+// aplicando el número de vueltas indicado. Misma lógica de siempre (método
+// del círculo), extraída para poder aplicarla una vez por grupo cuando la
+// liga tiene grupos, y sobre todos los participantes cuando no los tiene.
+function generarJornadas(etiquetas, vueltas) {
   let lista = [...etiquetas];
   if (lista.length % 2 !== 0) lista.push(null); // hueco de descanso si son impares
   const n = lista.length;
@@ -247,22 +332,79 @@ router.post("/:ligaId/generar-calendario", requireAdmin, async (req, res) => {
     arr = [fijo, ...resto];
   }
 
-  let todasJornadas = jornadas;
-  if (liga.vueltas === 2) {
+  if (vueltas === 2) {
     const vueltaDos = jornadas.map((j) => j.map(([a, b]) => [b, a]));
-    todasJornadas = [...jornadas, ...vueltaDos];
+    return [...jornadas, ...vueltaDos];
+  }
+  return jornadas;
+}
+
+router.post("/:ligaId/generar-calendario", requireAdmin, async (req, res) => {
+  const { ligaId } = req.params;
+  const liga = await prisma.ligaClub.findUnique({ where: { id: ligaId }, include: { participantes: true } });
+  if (!liga) return res.status(404).json({ error: "Liga no encontrada" });
+
+  const etiquetas = liga.participantes.map((p) => p.etiqueta);
+  if (etiquetas.length < 2) return res.status(400).json({ error: "Hacen falta al menos 2 participantes." });
+  if (etiquetas.length !== liga.numeroParticipantes) {
+    return res.status(400).json({
+      error: `Esta liga está pensada para ${liga.numeroParticipantes} participantes; ahora mismo hay ${etiquetas.length} apuntados.`,
+    });
   }
 
+  // Con grupos: cada grupo juega su propio todos-contra-todos por separado.
+  // Sin grupos: como siempre, una única mini-liga con todo el mundo.
+  let gruposDeJuego; // [{ grupo: "A"|null, etiquetas: [...] }]
+  if (liga.numeroGrupos) {
+    const sinGrupo = liga.participantes.filter((p) => !p.grupo);
+    if (sinGrupo.length > 0) {
+      return res.status(400).json({
+        error: `${sinGrupo.length} participante(s) todavía no tienen grupo asignado. Repártelos en grupos antes de generar el calendario.`,
+      });
+    }
+    const letras = letrasDeGrupos(liga.numeroGrupos);
+    gruposDeJuego = letras
+      .map((g) => ({ grupo: g, etiquetas: liga.participantes.filter((p) => p.grupo === g).map((p) => p.etiqueta) }))
+      .filter((g) => g.etiquetas.length > 0);
+    const vacios = letras.filter((g) => !gruposDeJuego.some((gg) => gg.grupo === g));
+    if (vacios.length > 0) {
+      return res.status(400).json({ error: `El/los grupo(s) ${vacios.join(", ")} no tienen ningún participante.` });
+    }
+  } else {
+    gruposDeJuego = [{ grupo: null, etiquetas }];
+  }
+
+  await prisma.partidoLiga.deleteMany({ where: { ligaId } });
+
   const datos = [];
-  todasJornadas.forEach((partidos, jIdx) => {
-    partidos.forEach(([a, b], pIdx) => {
-      datos.push({ ligaId, jornada: jIdx + 1, posicion: pIdx, participante1: a, participante2: b });
+  for (const { grupo, etiquetas: etiquetasGrupo } of gruposDeJuego) {
+    const jornadas = generarJornadas(etiquetasGrupo, liga.vueltas);
+    jornadas.forEach((partidos, jIdx) => {
+      partidos.forEach(([a, b], pIdx) => {
+        datos.push({ ligaId, jornada: jIdx + 1, posicion: pIdx, participante1: a, participante2: b, grupo });
+      });
     });
-  });
+  }
   await prisma.partidoLiga.createMany({ data: datos });
 
   const ligaCompleta = await prisma.ligaClub.findUnique({ where: { id: ligaId }, include: includeCompleto });
   res.json(ligaCompleta);
+});
+
+// GET /api/ligas-club/:ligaId/clasificacion - clasificación calculada en el
+// servidor (con la cascada de desempate de lib/clasificacionLiga.js), ya
+// dividida por grupo si la liga los usa. Se expone como endpoint propio en
+// vez de dejar que cada pantalla (admin, página pública) recalcule su
+// propia versión simplificada, para que el desempate sea el mismo en todas
+// partes y no se pueda ver un orden distinto según desde dónde se mire.
+router.get("/:ligaId/clasificacion", async (req, res) => {
+  const { ligaId } = req.params;
+  const liga = await prisma.ligaClub.findUnique({
+    where: { id: ligaId },
+    include: { participantes: true, partidos: true },
+  });
+  if (!liga) return res.status(404).json({ error: "Liga no encontrada" });
+  res.json(clasificacionPorGrupos(liga));
 });
 
 // Avisa (Web Push/Telegram) a los jugadores del club implicados en un
@@ -388,6 +530,51 @@ router.post("/:ligaId/cuadrante-final", requireAdmin, async (req, res) => {
     where: { id: cuadrante.id },
     include: { partidos: { orderBy: [{ rama: "asc" }, { ronda: "asc" }, { posicion: "asc" }] } },
   });
+  res.status(201).json(cuadranteCompleto);
+});
+
+// POST /api/ligas-club/:ligaId/cuadrante-final-grupos - crea el cuadrante
+// final de una liga CON grupos, cruzando los grupos "de fuera hacia dentro"
+// (A-D, B-C…) y respetando la posición de cada uno dentro de su grupo — ver
+// lib/cruceGruposFinal.js. A diferencia de /cuadrante-final (que crea el
+// cuadrante vacío para sortearlo después con el endpoint genérico de
+// torneos), este además calcula y aplica el reparto de la ronda 1 en el
+// mismo paso, porque el tamaño del cuadrante depende del propio cálculo
+// (número de grupos × clasificados por grupo, redondeado a la potencia de
+// dos superior).
+router.post("/:ligaId/cuadrante-final-grupos", requireAdmin, async (req, res) => {
+  const { ligaId } = req.params;
+  const { nombre, tipoEliminacion, numClasificadosPorGrupo } = req.body;
+  const n = Number(numClasificadosPorGrupo);
+  if (!Number.isInteger(n) || n < 1) {
+    return res.status(400).json({ error: "Indica cuántos clasifican de cada grupo (1 o más)." });
+  }
+
+  const liga = await prisma.ligaClub.findUnique({
+    where: { id: ligaId },
+    include: { participantes: true, partidos: true },
+  });
+  if (!liga) return res.status(404).json({ error: "Liga no encontrada" });
+  if (!liga.numeroGrupos) return res.status(400).json({ error: "Esta liga no tiene grupos configurados." });
+
+  const { grupos: clasificacionGrupos } = clasificacionPorGrupos(liga);
+
+  let tamano, posiciones;
+  try {
+    ({ tamano, posiciones } = construirRondaUnoConGrupos(clasificacionGrupos, n));
+  } catch (err) {
+    return res.status(400).json({ error: err.message });
+  }
+
+  const tipo = tipoEliminacion === "doble" ? "doble" : "directa";
+  const cuadrante = await prisma.cuadrante.create({
+    data: { ligaId, nombre: nombre || "Cuadrante final", tamano, tipoEliminacion: tipo },
+  });
+
+  const partidos = generarPartidos(tamano, tipo);
+  await prisma.cuadroPartido.createMany({ data: partidos.map((p) => ({ ...p, cuadranteId: cuadrante.id })) });
+
+  const cuadranteCompleto = await aplicarPosicionesRonda1(cuadrante.id, posiciones);
   res.status(201).json(cuadranteCompleto);
 });
 

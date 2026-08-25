@@ -82,10 +82,26 @@ router.get("/directorio", requireAuth, async (_req, res) => {
   res.json(resultado);
 });
 
-// DELETE /api/jugadores/:id - borra un jugador (protegido)
+// DELETE /api/jugadores/:id - borra un jugador (protegido). Si pertenece a un
+// equipo del club o a la plantilla de una inscripción externa, la base de
+// datos rechaza el borrado (relación obligatoria) — antes eso se tragaba en
+// silencio y el admin recibía un "borrado" que no era cierto; ahora se
+// responde con un error explicando qué lo bloquea.
 router.delete("/:id", requireAdmin, async (req, res) => {
-  await prisma.jugador.delete({ where: { id: req.params.id } }).catch(() => {});
-  res.status(204).end();
+  try {
+    await prisma.jugador.delete({ where: { id: req.params.id } });
+    res.status(204).end();
+  } catch (err) {
+    if (err.code === "P2025") return res.status(204).end(); // ya no existía
+    if (err.code === "P2003") {
+      return res.status(409).json({
+        error:
+          "No se puede borrar: este jugador pertenece a un equipo del club o a la plantilla de una competición externa. Quítalo de ahí primero.",
+      });
+    }
+    console.error("Error borrando jugador:", err);
+    res.status(500).json({ error: "No se pudo borrar el jugador." });
+  }
 });
 
 export default router;

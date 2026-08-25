@@ -79,9 +79,22 @@ router.post("/plataformas", requireAdmin, async (req, res) => {
     res.status(409).json({ error: "Ya existe una plataforma con ese nombre" });
   }
 });
+// Si la plataforma tiene torneos/ligas dados de alta, la base de datos
+// rechaza el borrado — antes se tragaba en silencio (el frontend avisaba
+// "debe no tener torneos" pero, si pasaba, el admin no se enteraba de por
+// qué no funcionó); ahora se responde con un error explícito.
 router.delete("/plataformas/:id", requireAdmin, async (req, res) => {
-  await prisma.plataforma.delete({ where: { id: req.params.id } }).catch(() => {});
-  res.status(204).end();
+  try {
+    await prisma.plataforma.delete({ where: { id: req.params.id } });
+    res.status(204).end();
+  } catch (err) {
+    if (err.code === "P2025") return res.status(204).end();
+    if (err.code === "P2003") {
+      return res.status(409).json({ error: "No se puede borrar: esta plataforma tiene torneos/ligas dados de alta. Bórralos primero." });
+    }
+    console.error("Error borrando plataforma:", err);
+    res.status(500).json({ error: "No se pudo borrar la plataforma." });
+  }
 });
 
 // ---------- Torneos externos ----------

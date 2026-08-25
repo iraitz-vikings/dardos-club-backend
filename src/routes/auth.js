@@ -153,10 +153,33 @@ router.put("/cambiar-password", requireAuth, async (req, res) => {
   res.json({ mensaje: "Contraseña actualizada" });
 });
 
-// DELETE /api/auth/:id - rechaza/borra una cuenta pendiente, o elimina un socio (admin)
+// DELETE /api/auth/:id - rechaza/borra una cuenta pendiente, o elimina un socio (admin).
+// Si el socio tenía una ficha de Jugador vinculada, se desvincula en vez de
+// borrarla: el Jugador se queda, como si pasara a ser un invitado sin cuenta
+// — conserva su historial de torneos/ligas, capitanías de equipo y autoría
+// de contenido. Solo se borra el acceso (login/email). Si aun así el borrado
+// falla porque la cuenta tiene anuncios/noticias/fotos publicadas (autoría
+// obligatoria, sin desvincular posible), se avisa con un error claro en vez
+// de reventar con un 500 sin explicación.
 router.delete("/:id", requireAdmin, async (req, res) => {
-  await prisma.usuario.delete({ where: { id: req.params.id } });
-  res.status(204).end();
+  const { id } = req.params;
+  try {
+    const jugador = await prisma.jugador.findUnique({ where: { usuarioId: id } });
+    if (jugador) {
+      await prisma.jugador.update({ where: { id: jugador.id }, data: { usuarioId: null } });
+    }
+    await prisma.usuario.delete({ where: { id } });
+    res.status(204).end();
+  } catch (err) {
+    if (err.code === "P2025") return res.status(204).end();
+    if (err.code === "P2003") {
+      return res.status(409).json({
+        error: "No se puede borrar: esta cuenta tiene anuncios, noticias o fotos publicadas. Bórralos o reasígnalos primero.",
+      });
+    }
+    console.error("Error borrando usuario:", err);
+    res.status(500).json({ error: "No se pudo borrar la cuenta." });
+  }
 });
 
 // GET /api/auth/socios - lista completa de socios aprobados, para gestionar roles

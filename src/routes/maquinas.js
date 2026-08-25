@@ -29,9 +29,23 @@ router.post("/", requireAdmin, async (req, res) => {
   }
 });
 
+// Si la máquina está asignada a algún partido/enfrentamiento (aunque ya esté
+// jugado), la base de datos rechaza el borrado — antes se tragaba en
+// silencio; ahora se avisa con un error claro en vez de un 204 falso.
 router.delete("/:id", requireAdmin, async (req, res) => {
-  await prisma.maquina.delete({ where: { id: req.params.id } }).catch(() => {});
-  res.status(204).end();
+  try {
+    await prisma.maquina.delete({ where: { id: req.params.id } });
+    res.status(204).end();
+  } catch (err) {
+    if (err.code === "P2025") return res.status(204).end();
+    if (err.code === "P2003") {
+      return res.status(409).json({
+        error: "No se puede borrar: esta máquina está asignada a algún partido o enfrentamiento (aunque ya esté jugado).",
+      });
+    }
+    console.error("Error borrando máquina:", err);
+    res.status(500).json({ error: "No se pudo borrar la máquina." });
+  }
 });
 
 export default router;

@@ -355,6 +355,13 @@ model LigaClub {
   modalidad           String   @default("individual")
   vueltas             Int      @default(1)
   numeroParticipantes Int
+  // Número de grupos en los que se divide la liga para la fase de todos
+  // contra todos (round-robin dentro de cada grupo). `null` o `1` = sin
+  // grupos, comportamiento de siempre (un único grupo con todos los
+  // participantes). Si se define, tiene que ser un número par (>=2) para
+  // poder cruzar los grupos en el cuadrante final sin ambigüedad — ver
+  // lib/cruceGruposFinal.js.
+  numeroGrupos        Int?
   metodoSorteoParejas String?
   afectaCalendario Boolean  @default(true)
   finalizado       Boolean  @default(false)
@@ -375,6 +382,11 @@ model ParticipanteLiga {
   jugador1   Jugador? @relation("participanteLigaJugador1", fields: [jugador1Id], references: [id])
   jugador2Id String?
   jugador2   Jugador? @relation("participanteLigaJugador2", fields: [jugador2Id], references: [id])
+  // Grupo de liga (round-robin) al que pertenece: "A", "B"... `null` si la
+  // liga no usa grupos o si todavía no se le ha asignado uno. No confundir
+  // con el grupo de nivel (A/B/C/D) del sorteo de parejas ciegas — ese es
+  // un concepto aparte, transitorio, que nunca se guarda en este campo.
+  grupo      String?
   creadoEn   DateTime @default(now())
 
   @@unique([ligaId, etiqueta])
@@ -388,6 +400,10 @@ model PartidoLiga {
   posicion      Int
   participante1 String
   participante2 String
+  // Grupo de liga al que pertenece este enfrentamiento (mismo valor que el
+  // `grupo` de sus dos participantes en el momento de generar el
+  // calendario). `null` si la liga no usa grupos.
+  grupo         String?
   resultado     String?
   ganador       String?
   maquina       String?

@@ -496,6 +496,79 @@ router.post("/cuadrantes/:cuadranteId/sortear-parejas-grupos", requireAdmin, asy
   res.status(201).json(creadas);
 });
 
+// Aplica un reparto ya calculado de la ronda 1 (array `posiciones`, longitud
+// = tamaño del cuadrante, con el nombre en cada hueco o `null` para un
+// "bye") a un cuadrante ya creado: limpia cualquier sorteo anterior, coloca
+// nombres, resuelve los "bye" (avance automático a la ronda siguiente,
+// incluida la cascada al cuadro de perdedores si es doble eliminación) y
+// devuelve el cuadrante completo. Se extrae de lo que antes era el cuerpo
+// de /cuadrantes/:cuadranteId/sorteo para poder reutilizarlo tal cual desde
+// el cuadrante final por grupos de las ligas del club (ligasClub.js), que
+// calcula sus propias `posiciones` (cruce entre grupos) en vez de dejar que
+// el sorteo genérico las reparta al azar.
+export async function aplicarPosicionesRonda1(cuadranteId, posiciones) {
+  await prisma.cuadroPartido.updateMany({
+    where: { cuadranteId },
+    data: { jugador1: null, jugador2: null, ganador: null, resultado: null, enCurso: false },
+  });
+
+  const ronda1 = await prisma.cuadroPartido.findMany({
+    where: { cuadranteId, rama: "ganadores", ronda: 1 },
+    orderBy: { posicion: "asc" },
+  });
+
+  for (let i = 0; i < ronda1.length; i++) {
+    const partido = ronda1[i];
+    const jugador1 = posiciones[i * 2];
+    const jugador2 = posiciones[i * 2 + 1];
+    if (jugador1 && !jugador2) {
+      await prisma.cuadroPartido.update({
+        where: { id: partido.id },
+        data: { jugador1, jugador2: null, ganador: jugador1 },
+      });
+      if (partido.siguientePartidoGanadorId) {
+        const campo = partido.siguienteSlotGanador === 2 ? "jugador2" : "jugador1";
+        await prisma.cuadroPartido.update({
+          where: { id: partido.siguientePartidoGanadorId },
+          data: { [campo]: jugador1 },
+        });
+      }
+      if (partido.siguientePartidoPerdedorId) {
+        await intentarResolverBye(partido.siguientePartidoPerdedorId);
+      }
+    } else if (!jugador1 && jugador2) {
+      await prisma.cuadroPartido.update({
+        where: { id: partido.id },
+        data: { jugador1: jugador2, jugador2: null, ganador: jugador2 },
+      });
+      if (partido.siguientePartidoGanadorId) {
+        const campo = partido.siguienteSlotGanador === 2 ? "jugador2" : "jugador1";
+        await prisma.cuadroPartido.update({
+          where: { id: partido.siguientePartidoGanadorId },
+          data: { [campo]: jugador2 },
+        });
+      }
+      if (partido.siguientePartidoPerdedorId) {
+        await intentarResolverBye(partido.siguientePartidoPerdedorId);
+      }
+    } else {
+      await prisma.cuadroPartido.update({
+        where: { id: partido.id },
+        data: {
+          jugador1,
+          jugador2,
+          resultado: !jugador1 && !jugador2 ? "__BYE_DOBLE__" : undefined,
+        },
+      });
+    }
+  }
+
+  return prisma.cuadrante.findUnique({
+    where: { id: cuadranteId },
+    include: { partidos: { orderBy: [{ rama: "asc" }, { ronda: "asc" }, { posicion: "asc" }] } },
+  });
+}
+
 // POST /api/torneos-club/cuadrantes/:cuadranteId/sorteo - reparte la lista de
 // participantes en los enfrentamientos de la ronda 1 del cuadro de ganadores
 // (protegido). Las "cabezasDeSerie" (si se indican, en orden del mejor al peor) se
@@ -587,66 +660,7 @@ router.post("/cuadrantes/:cuadranteId/sorteo", requireAdmin, async (req, res) =>
 
   // Se limpia todo el cuadrante (nombres, ganadores, resultados) antes de aplicar el
   // sorteo nuevo, para no dejar datos de un sorteo anterior a medias.
-  await prisma.cuadroPartido.updateMany({
-    where: { cuadranteId },
-    data: { jugador1: null, jugador2: null, ganador: null, resultado: null, enCurso: false },
-  });
-
-  const ronda1 = await prisma.cuadroPartido.findMany({
-    where: { cuadranteId, rama: "ganadores", ronda: 1 },
-    orderBy: { posicion: "asc" },
-  });
-
-  for (let i = 0; i < ronda1.length; i++) {
-    const partido = ronda1[i];
-    const jugador1 = posiciones[i * 2];
-    const jugador2 = posiciones[i * 2 + 1];
-    if (jugador1 && !jugador2) {
-      await prisma.cuadroPartido.update({
-        where: { id: partido.id },
-        data: { jugador1, jugador2: null, ganador: jugador1 },
-      });
-      if (partido.siguientePartidoGanadorId) {
-        const campo = partido.siguienteSlotGanador === 2 ? "jugador2" : "jugador1";
-        await prisma.cuadroPartido.update({
-          where: { id: partido.siguientePartidoGanadorId },
-          data: { [campo]: jugador1 },
-        });
-      }
-      if (partido.siguientePartidoPerdedorId) {
-        await intentarResolverBye(partido.siguientePartidoPerdedorId);
-      }
-    } else if (!jugador1 && jugador2) {
-      await prisma.cuadroPartido.update({
-        where: { id: partido.id },
-        data: { jugador1: jugador2, jugador2: null, ganador: jugador2 },
-      });
-      if (partido.siguientePartidoGanadorId) {
-        const campo = partido.siguienteSlotGanador === 2 ? "jugador2" : "jugador1";
-        await prisma.cuadroPartido.update({
-          where: { id: partido.siguientePartidoGanadorId },
-          data: { [campo]: jugador2 },
-        });
-      }
-      if (partido.siguientePartidoPerdedorId) {
-        await intentarResolverBye(partido.siguientePartidoPerdedorId);
-      }
-    } else {
-        await prisma.cuadroPartido.update({
-          where: { id: partido.id },
-          data: {
-            jugador1,
-            jugador2,
-            resultado: !jugador1 && !jugador2 ? "__BYE_DOBLE__" : undefined,
-        },
-      });
-    }
-  }
-
-  const cuadranteCompleto = await prisma.cuadrante.findUnique({
-    where: { id: cuadranteId },
-    include: { partidos: { orderBy: [{ rama: "asc" }, { ronda: "asc" }, { posicion: "asc" }] } },
-  });
+  const cuadranteCompleto = await aplicarPosicionesRonda1(cuadranteId, posiciones);
   res.json(cuadranteCompleto);
 });
 

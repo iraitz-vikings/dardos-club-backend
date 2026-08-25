@@ -221,6 +221,10 @@ model Partido {
   maquina             Maquina? @relation(fields: [maquinaId], references: [id])
   origenActualizacion OrigenActualizacion @default(manual)
   ultimaActualizacion DateTime @updatedAt
+  // Marca si ya se ha mandado el recordatorio del día del partido (ver
+  // src/lib/recordatoriosPartidos.js, cron matutino en index.js) — evita
+  // avisar dos veces si el cron se ejecuta más de una vez el mismo día.
+  recordatorioEnviado Boolean  @default(false)
 }
 
 model NoticiaEvento {
@@ -287,6 +291,10 @@ model CuadroPartido {
   maquinaCalendarioId  String?
   maquinaCalendario    Maquina? @relation(fields: [maquinaCalendarioId], references: [id])
   confirmadoCalendario Boolean  @default(false)
+  // Marca si ya se ha mandado el recordatorio del día del partido (ver
+  // src/lib/recordatoriosPartidos.js, cron matutino en index.js) — evita
+  // avisar dos veces si el cron se ejecuta más de una vez el mismo día.
+  recordatorioEnviado  Boolean  @default(false)
 
   actualizadoEn DateTime @updatedAt
 }
@@ -421,6 +429,10 @@ model PartidoLiga {
   maquinaCalendarioId  String?
   maquinaCalendario    Maquina? @relation(fields: [maquinaCalendarioId], references: [id])
   confirmadoCalendario Boolean  @default(false)
+  // Marca si ya se ha mandado el recordatorio del día del partido (ver
+  // src/lib/recordatoriosPartidos.js, cron matutino en index.js) — evita
+  // avisar dos veces si el cron se ejecuta más de una vez el mismo día.
+  recordatorioEnviado  Boolean  @default(false)
 
   actualizadoEn DateTime @updatedAt
 }

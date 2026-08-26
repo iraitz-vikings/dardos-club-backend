@@ -75,6 +75,103 @@ router.get("/directorio", requireAuth, async (_req, res) => {
   res.json(resultado);
 });
 
+// Calcula el historial de torneos/ligas del club de un jugador dado su id.
+// Es la misma lógica que GET /api/perfil/historial (que solo puede consultar
+// el socio logueado sobre sí mismo), extraída aquí para poder parametrizarla
+// por jugadorId y así mostrar el palmarés de cualquier jugador del club desde
+// el directorio de "Jugadores del club" (ver GET /:id/historial más abajo).
+async function historialDeJugador(jugadorId) {
+  // borradoEn: null filtra los torneos/ligas en la papelera (ver
+  // src/lib/papelera.js): mientras no se purguen de verdad o se restauren,
+  // no deben aparecer en el palmarés de ningún jugador.
+  const participacionesTorneosRaw = await prisma.participanteCuadrante.findMany({
+    where: { OR: [{ jugador1Id: jugadorId }, { jugador2Id: jugadorId }] },
+    include: { cuadrante: { include: { torneoClub: true, liga: true } } },
+  });
+  const participacionesTorneos = participacionesTorneosRaw.filter(
+    (p) => !p.cuadrante.torneoClub?.borradoEn && !p.cuadrante.liga?.borradoEn
+  );
+
+  const cuadranteIds = [...new Set(participacionesTorneos.map((p) => p.cuadranteId))];
+  const etiquetasTorneos = [...new Set(participacionesTorneos.map((p) => p.etiqueta))];
+  const todosPartidosTorneos = cuadranteIds.length
+    ? await prisma.cuadroPartido.findMany({
+        where: {
+          cuadranteId: { in: cuadranteIds },
+          OR: [{ jugador1: { in: etiquetasTorneos } }, { jugador2: { in: etiquetasTorneos } }],
+        },
+        orderBy: [{ rama: "asc" }, { ronda: "asc" }],
+      })
+    : [];
+
+  const historialTorneos = participacionesTorneos.map((p) => {
+    const partidos = todosPartidosTorneos.filter(
+      (partido) => partido.cuadranteId === p.cuadranteId && (partido.jugador1 === p.etiqueta || partido.jugador2 === p.etiqueta)
+    );
+    return {
+      nombre: p.cuadrante.torneoClub?.nombre || (p.cuadrante.liga ? `${p.cuadrante.liga.nombre} (cuadrante final)` : "Torneo"),
+      cuadrante: p.cuadrante.nombre,
+      etiqueta: p.etiqueta,
+      partidos: partidos.map((partido) => ({
+        rama: partido.rama,
+        ronda: partido.ronda,
+        rival: partido.jugador1 === p.etiqueta ? partido.jugador2 : partido.jugador1,
+        resultado: partido.resultado,
+        ganado: partido.ganador ? partido.ganador === p.etiqueta : null,
+      })),
+    };
+  });
+
+  const participacionesLigasRaw = await prisma.participanteLiga.findMany({
+    where: { OR: [{ jugador1Id: jugadorId }, { jugador2Id: jugadorId }] },
+    include: { liga: true },
+  });
+  const participacionesLigas = participacionesLigasRaw.filter((p) => !p.liga?.borradoEn);
+
+  const ligaIds = [...new Set(participacionesLigas.map((p) => p.ligaId))];
+  const etiquetasLigas = [...new Set(participacionesLigas.map((p) => p.etiqueta))];
+  const todosPartidosLigas = ligaIds.length
+    ? await prisma.partidoLiga.findMany({
+        where: {
+          ligaId: { in: ligaIds },
+          OR: [{ participante1: { in: etiquetasLigas } }, { participante2: { in: etiquetasLigas } }],
+        },
+        orderBy: { jornada: "asc" },
+      })
+    : [];
+
+  const historialLigas = participacionesLigas.map((p) => {
+    const partidos = todosPartidosLigas.filter(
+      (partido) => partido.ligaId === p.ligaId && (partido.participante1 === p.etiqueta || partido.participante2 === p.etiqueta)
+    );
+    return {
+      nombre: p.liga.nombre,
+      etiqueta: p.etiqueta,
+      partidos: partidos.map((partido) => ({
+        jornada: partido.jornada,
+        rival: partido.participante1 === p.etiqueta ? partido.participante2 : partido.participante1,
+        resultado: partido.resultado,
+        ganado: partido.ganador ? partido.ganador === p.etiqueta : null,
+      })),
+    };
+  });
+
+  return { torneos: historialTorneos, ligas: historialLigas };
+}
+
+// GET /api/jugadores/:id/historial - palmarés (torneos y ligas del club en
+// los que ha participado) de un jugador cualquiera del directorio. Protegido
+// con requireAuth igual que /directorio: es información visible entre
+// socios, no pública en internet. Va antes de DELETE /:id a propósito, sin
+// que compartan método así que el orden no importa para el enrutado, pero se
+// deja aquí junto a la función que usa.
+router.get("/:id/historial", requireAuth, async (req, res) => {
+  const jugador = await prisma.jugador.findUnique({ where: { id: req.params.id } });
+  if (!jugador) return res.status(404).json({ error: "Jugador no encontrado" });
+  const historial = await historialDeJugador(jugador.id);
+  res.json(historial);
+});
+
 // DELETE /api/jugadores/:id - borra un jugador (protegido). Si pertenece a un
 // equipo del club o a la plantilla de una inscripción externa, la base de
 // datos rechaza el borrado (relación obligatoria) — antes eso se tragaba en

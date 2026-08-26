@@ -4,7 +4,23 @@
 // (/aviso/:token) y pulsa "Iniciar" en el bot — a partir de ahí el vínculo
 // es permanente (el Jugador invitado es un registro reutilizable entre
 // torneos, así que no hace falta repetir el check-in nunca más).
-import TelegramBot from "node-telegram-bot-api";
+//
+// node-telegram-bot-api v2 (2026-08-25): reescritura completa de la librería
+// sin compatibilidad con v1 (0.x/1.x), motivada por cerrar las
+// vulnerabilidades de sus dependencias legadas (request/form-data/qs/
+// tough-cookie) — v2 no tiene NINGUNA dependencia. Cambios de API relevantes
+// para este archivo: la clase se llama `Bot` (no `TelegramBot`), no acepta
+// `{ polling: true }` en el constructor — el polling se arranca aparte con
+// `bot.startPolling()`, que no resuelve hasta `bot.stop()` (se lanza sin
+// await, "fire and forget"); los comandos se registran con `bot.command()`
+// en vez de `bot.onText(regex)`, y el argumento tras el comando llega ya
+// separado en `ctx.match` (string, "" si no hay nada) en vez de tener que
+// sacarlo de un grupo de regex; los mensajes se mandan con `ctx.reply()`
+// dentro de un handler o con `bot.api.sendMessage({ chat_id, text })` fuera
+// de uno (antes `bot.sendMessage(chatId, texto)`); el evento
+// "polling_error" desaparece, ahora es la opción `onError` de
+// `startPolling()`.
+import { Bot } from "node-telegram-bot-api";
 import jwt from "jsonwebtoken";
 import { PrismaClient } from "@prisma/client";
 
@@ -24,15 +40,15 @@ export function iniciarBotTelegram() {
   }
   if (bot) return bot;
 
-  bot = new TelegramBot(token, { polling: true });
+  bot = new Bot(token);
 
-  bot.onText(/\/start(?:\s+(.+))?/, async (msg, match) => {
-    const chatId = msg.chat.id;
-    const tokenCheckIn = match?.[1]?.trim();
+  bot.command("start", async (ctx) => {
+    const chatId = ctx.chat?.id;
+    if (chatId === undefined) return;
+    const tokenCheckIn = (ctx.match || "").trim();
 
     if (!tokenCheckIn) {
-      bot.sendMessage(
-        chatId,
+      await ctx.reply(
         "¡Hola! Para activar tus avisos de partidos, abre el enlace personal que te ha dado el club (el que empieza por .../aviso/...)."
       );
       return;
@@ -42,47 +58,59 @@ export function iniciarBotTelegram() {
     try {
       payload = jwt.verify(tokenCheckIn, process.env.JWT_SECRET);
     } catch {
-      bot.sendMessage(chatId, "Ese enlace de avisos no es válido. Pide uno nuevo al club.");
+      await ctx.reply("Ese enlace de avisos no es válido. Pide uno nuevo al club.");
       return;
     }
     if (payload.tipo !== "checkin" || !payload.jugadorId) {
-      bot.sendMessage(chatId, "Ese enlace de avisos no es válido.");
+      await ctx.reply("Ese enlace de avisos no es válido.");
       return;
     }
 
     const jugador = await prisma.jugador.findUnique({ where: { id: payload.jugadorId } });
     if (!jugador) {
-      bot.sendMessage(chatId, "No se ha encontrado tu ficha de jugador. Contacta con el club.");
+      await ctx.reply("No se ha encontrado tu ficha de jugador. Contacta con el club.");
       return;
     }
 
     await prisma.suscripcionTelegram.upsert({
       where: { jugadorId: jugador.id },
-      update: { chatId: String(chatId), username: msg.chat.username || null },
-      create: { jugadorId: jugador.id, chatId: String(chatId), username: msg.chat.username || null },
+      update: { chatId: String(chatId), username: ctx.chat?.username || null },
+      create: { jugadorId: jugador.id, chatId: String(chatId), username: ctx.chat?.username || null },
     });
 
-    bot.sendMessage(chatId, `¡Listo, ${jugador.nombre}! A partir de ahora recibirás por aquí los avisos de tus partidos.`);
+    await ctx.reply(`¡Listo, ${jugador.nombre}! A partir de ahora recibirás por aquí los avisos de tus partidos.`);
   });
 
   // /parar - el propio invitado se desvincula de los avisos por Telegram,
   // sin depender del admin. Solo borra la SuscripcionTelegram (el Jugador se
   // mantiene intacto); si vuelve a abrir su enlace de avisos y pulsa
   // "Iniciar" de nuevo, se re-vincula sin problema (el enlace no caduca).
-  bot.onText(/\/parar/, async (msg) => {
-    const chatId = msg.chat.id;
+  bot.command("parar", async (ctx) => {
+    const chatId = ctx.chat?.id;
+    if (chatId === undefined) return;
     const sub = await prisma.suscripcionTelegram.findUnique({ where: { chatId: String(chatId) } });
     if (!sub) {
-      bot.sendMessage(chatId, "No tenías avisos activados por aquí.");
+      await ctx.reply("No tenías avisos activados por aquí.");
       return;
     }
     await prisma.suscripcionTelegram.delete({ where: { chatId: String(chatId) } });
-    bot.sendMessage(chatId, "Avisos desactivados. Si quieres volver a activarlos, abre de nuevo tu enlace personal del club.");
+    await ctx.reply("Avisos desactivados. Si quieres volver a activarlos, abre de nuevo tu enlace personal del club.");
   });
 
-  bot.on("polling_error", (err) => {
-    console.error("Error de polling del bot de Telegram:", err.message || err);
+  // Boundary de errores de los handlers de arriba (equivalente al try/catch
+  // implícito que traía v1): nunca para el bot, solo lo registra.
+  bot.catch((err, ctx) => {
+    console.error("Error en un handler del bot de Telegram:", err?.message || err, "update:", ctx?.update?.update_id);
   });
+
+  // startPolling() no resuelve hasta que se llama a bot.stop() — se lanza
+  // sin await (fire-and-forget) para no bloquear el arranque del servidor.
+  // onError sustituye al antiguo evento "polling_error".
+  bot
+    .startPolling(undefined, {
+      onError: (err) => console.error("Error de polling del bot de Telegram:", err?.message || err),
+    })
+    .catch((err) => console.error("El polling del bot de Telegram se detuvo con un error:", err?.message || err));
 
   console.log("Bot de Telegram iniciado (polling).");
   return bot;
@@ -96,7 +124,7 @@ export async function enviarTelegramAJugador(jugadorId, texto) {
   const sub = await prisma.suscripcionTelegram.findUnique({ where: { jugadorId } });
   if (!sub) return { enviado: false };
   try {
-    await bot.sendMessage(sub.chatId, texto);
+    await bot.api.sendMessage({ chat_id: sub.chatId, text: texto });
     return { enviado: true };
   } catch (err) {
     console.error(`Error enviando Telegram a jugador ${jugadorId}:`, err.message || err);

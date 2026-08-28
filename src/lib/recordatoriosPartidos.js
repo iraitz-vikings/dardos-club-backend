@@ -91,6 +91,12 @@ async function recordatoriosTorneosClub(rangoHoy) {
       await prisma.cuadroPartido.update({ where: { id: p.id }, data: { recordatorioEnviado: true } });
       continue;
     }
+    // Respeta el interruptor "notificaciones" del torneo/liga (ver
+    // schema.prisma) — se marca como enviado igualmente para no reintentar.
+    if (p.cuadrante.torneoClub?.notificaciones === false || p.cuadrante.liga?.notificaciones === false) {
+      await prisma.cuadroPartido.update({ where: { id: p.id }, data: { recordatorioEnviado: true } });
+      continue;
+    }
     const etiquetas = [p.jugador1, p.jugador2].filter(Boolean);
     if (etiquetas.length > 0) {
       const participantes = await prisma.participanteCuadrante.findMany({
@@ -122,6 +128,12 @@ async function recordatoriosLigasClub(rangoHoy) {
   let enviados = 0;
   for (const p of partidos) {
     if (p.liga?.borradoEn) {
+      await prisma.partidoLiga.update({ where: { id: p.id }, data: { recordatorioEnviado: true } });
+      continue;
+    }
+    // Respeta el interruptor "notificaciones" de la liga (ver
+    // schema.prisma) — se marca como enviado igualmente para no reintentar.
+    if (p.liga?.notificaciones === false) {
       await prisma.partidoLiga.update({ where: { id: p.id }, data: { recordatorioEnviado: true } });
       continue;
     }

@@ -104,7 +104,7 @@ function validarNumeroGrupos(valor) {
 }
 
 router.post("/", requireAdmin, async (req, res) => {
-  const { nombre, descripcion, fechaInicio, fechaFin, insigniaUrl, visibilidad, modalidad, vueltas, numeroParticipantes, numeroGrupos, metodoSorteoParejas, afectaCalendario } = req.body;
+  const { nombre, descripcion, fechaInicio, fechaFin, insigniaUrl, visibilidad, modalidad, vueltas, numeroParticipantes, numeroGrupos, metodoSorteoParejas, afectaCalendario, notificaciones } = req.body;
   if (!nombre || !fechaInicio || !fechaFin || !numeroParticipantes) {
     return res.status(400).json({ error: "Faltan campos obligatorios" });
   }
@@ -131,6 +131,7 @@ router.post("/", requireAdmin, async (req, res) => {
       numeroGrupos: grupos.numeroGrupos,
       metodoSorteoParejas: metodosValidos.includes(metodoSorteoParejas) ? metodoSorteoParejas : null,
       afectaCalendario: afectaCalendario !== undefined ? !!afectaCalendario : true,
+      notificaciones: notificaciones !== undefined ? !!notificaciones : true,
     },
   });
   res.status(201).json(liga);
@@ -138,7 +139,7 @@ router.post("/", requireAdmin, async (req, res) => {
 
 router.put("/:id", requireAdmin, async (req, res) => {
   const { id } = req.params;
-  const { nombre, descripcion, fechaInicio, fechaFin, insigniaUrl, visibilidad, finalizado, numeroGrupos } = req.body;
+  const { nombre, descripcion, fechaInicio, fechaFin, insigniaUrl, visibilidad, finalizado, numeroGrupos, notificaciones } = req.body;
 
   let numeroGruposData;
   if (numeroGrupos !== undefined) {
@@ -159,6 +160,7 @@ router.put("/:id", requireAdmin, async (req, res) => {
         visibilidad: visibilidad === "publico" ? "publico" : "privado",
         finalizado: finalizado !== undefined ? !!finalizado : undefined,
         numeroGrupos: numeroGrupos !== undefined ? numeroGruposData : undefined,
+        notificaciones: notificaciones !== undefined ? !!notificaciones : undefined,
       },
     });
     res.json(liga);
@@ -480,6 +482,8 @@ async function notificarPartidoDeLiga(partido, motivo = "programado") {
   ]);
   const jugadorIds = participantes.flatMap((p) => [p.jugador1Id, p.jugador2Id]).filter(Boolean);
   if (jugadorIds.length === 0) return;
+  // Respeta el interruptor "notificaciones" de la liga — ver schema.prisma.
+  if (liga && liga.notificaciones === false) return;
 
   const nombreLiga = liga?.nombre || "Liga del club";
   const enfrentamiento = `${partido.participante1 || "?"} vs ${partido.participante2 || "?"}`;

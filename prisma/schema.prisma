@@ -257,6 +257,12 @@ model TorneoClub {
   tipoEliminacion String   @default("directa")
   modalidad       String   @default("individual")
   afectaCalendario Boolean  @default(true)
+  // Si está a false, los avisos automáticos (partido programado, "empieza
+  // ahora" y el recordatorio del día) se omiten para los enfrentamientos de
+  // este torneo — se sigue marcando recordatorioEnviado igual para no
+  // reintentar. Pensado para torneos informales/de prueba donde no interesa
+  // molestar a los socios. Se decide al crear el torneo (ver POST /).
+  notificaciones   Boolean  @default(true)
   finalizado       Boolean  @default(false)
   // Borrado suave (papelera): null = activo; con fecha = en la papelera,
   // recuperable durante 7 días (ver src/lib/papelera.js) antes de que el
@@ -376,6 +382,12 @@ model LigaClub {
   numeroGrupos        Int?
   metodoSorteoParejas String?
   afectaCalendario Boolean  @default(true)
+  // Si está a false, los avisos automáticos (partido programado, "empieza
+  // ahora" y el recordatorio del día) se omiten para los enfrentamientos de
+  // esta liga — se sigue marcando recordatorioEnviado igual para no
+  // reintentar. Pensado para ligas informales/de prueba donde no interesa
+  // molestar a los socios. Se decide al crear la liga (ver POST /).
+  notificaciones   Boolean  @default(true)
   finalizado       Boolean  @default(false)
   // Borrado suave (papelera): null = activa; con fecha = en la papelera,
   // recuperable durante 7 días (ver src/lib/papelera.js) antes de que el

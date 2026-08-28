@@ -262,7 +262,7 @@ router.get("/:id", async (req, res) => {
 });
 
 router.post("/", requireAdmin, async (req, res) => {
-  const { nombre, descripcion, fechaInicio, fechaFin, insigniaUrl, visibilidad, numeroMaquinas, tipoEliminacion, modalidad, afectaCalendario } = req.body;
+  const { nombre, descripcion, fechaInicio, fechaFin, insigniaUrl, visibilidad, numeroMaquinas, tipoEliminacion, modalidad, afectaCalendario, notificaciones } = req.body;
   if (!nombre || !fechaInicio || !fechaFin) {
     return res.status(400).json({ error: "Faltan campos obligatorios" });
   }
@@ -279,6 +279,7 @@ router.post("/", requireAdmin, async (req, res) => {
       tipoEliminacion: tipoEliminacion === "doble" ? "doble" : "directa",
       modalidad: modalidadesValidas.includes(modalidad) ? modalidad : "individual",
       afectaCalendario: afectaCalendario !== undefined ? !!afectaCalendario : true,
+      notificaciones: notificaciones !== undefined ? !!notificaciones : true,
     },
   });
   res.status(201).json(torneo);
@@ -286,7 +287,7 @@ router.post("/", requireAdmin, async (req, res) => {
 
 router.put("/:id", requireAdmin, async (req, res) => {
   const { id } = req.params;
-  const { nombre, descripcion, fechaInicio, fechaFin, insigniaUrl, visibilidad, numeroMaquinas, tipoEliminacion, finalizado } = req.body;
+  const { nombre, descripcion, fechaInicio, fechaFin, insigniaUrl, visibilidad, numeroMaquinas, tipoEliminacion, finalizado, notificaciones } = req.body;
   try {
     const torneo = await prisma.torneoClub.update({
       where: { id },
@@ -300,6 +301,7 @@ router.put("/:id", requireAdmin, async (req, res) => {
         numeroMaquinas: numeroMaquinas !== undefined ? (numeroMaquinas ? Number(numeroMaquinas) : null) : undefined,
         tipoEliminacion: tipoEliminacion || undefined,
         finalizado: finalizado !== undefined ? !!finalizado : undefined,
+        notificaciones: notificaciones !== undefined ? !!notificaciones : undefined,
       },
     });
     res.json(torneo);
@@ -793,6 +795,10 @@ async function notificarPartidoDeCuadrante(partido, motivo = "programado") {
   ]);
   const jugadorIds = participantes.flatMap((p) => [p.jugador1Id, p.jugador2Id]).filter(Boolean);
   if (jugadorIds.length === 0) return;
+  // Respeta el interruptor "notificaciones" de la competición (torneo o
+  // liga del club) a la que pertenece este cuadrante — ver schema.prisma.
+  if (cuadrante?.torneoClub && cuadrante.torneoClub.notificaciones === false) return;
+  if (cuadrante?.liga && cuadrante.liga.notificaciones === false) return;
 
   const nombreCompeticion = cuadrante?.torneoClub?.nombre || cuadrante?.liga?.nombre || "Torneo del club";
   const enfrentamiento = `${partido.jugador1 || "?"} vs ${partido.jugador2 || "?"}`;

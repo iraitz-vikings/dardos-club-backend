@@ -118,11 +118,26 @@ export function iniciarBotTelegram() {
 
 // Manda un aviso al chat de Telegram vinculado a este jugador, si tiene
 // uno. No hace nada (sin error) si el jugador no ha hecho check-in todavía
-// o si el bot no está configurado.
-export async function enviarTelegramAJugador(jugadorId, texto) {
+// o si el bot no está configurado. Si se pasa `imagenUrl` (p.ej. las
+// imágenes de eliminación/campeón de un cuadrante, ver
+// src/routes/torneosClub.js) se manda como foto con el texto de pie
+// (sendPhoto); si el envío de la foto falla por lo que sea (URL no válida,
+// demasiado grande, etc.) se cae a mandar el texto solo, para no perder el
+// aviso entero por un problema con la imagen.
+export async function enviarTelegramAJugador(jugadorId, texto, imagenUrl) {
   if (!bot) return { enviado: false };
   const sub = await prisma.suscripcionTelegram.findUnique({ where: { jugadorId } });
   if (!sub) return { enviado: false };
+
+  if (imagenUrl) {
+    try {
+      await bot.api.sendPhoto({ chat_id: sub.chatId, photo: imagenUrl, caption: texto });
+      return { enviado: true };
+    } catch (err) {
+      console.error(`Error enviando foto de Telegram a jugador ${jugadorId}, se manda solo el texto:`, err.message || err);
+    }
+  }
+
   try {
     await bot.api.sendMessage({ chat_id: sub.chatId, text: texto });
     return { enviado: true };

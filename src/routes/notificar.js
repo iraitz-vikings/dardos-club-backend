@@ -7,15 +7,19 @@
 import { enviarPushAJugador } from "./webPush.js";
 import { enviarTelegramAJugador } from "./telegram.js";
 
-// opts: { titulo, cuerpo, url } — url es opcional, a dónde debería llevar
-// al pulsar el aviso (se usa en el payload del Web Push).
+// opts: { titulo, cuerpo, url, imagen } — url es opcional, a dónde debería
+// llevar al pulsar el aviso (se usa en el payload del Web Push). imagen es
+// opcional, una URL (Cloudinary) que se muestra dentro del propio aviso: en
+// Web Push como imagen grande (si el sistema operativo/navegador la soporta
+// — se degrada sin más si no), en Telegram mandando la foto con el texto
+// como pie en vez de un mensaje de solo texto.
 export async function notificarJugador(jugadorId, opts = {}) {
-  const { titulo, cuerpo, url } = opts;
+  const { titulo, cuerpo, url, imagen } = opts;
   const textoTelegram = [titulo, cuerpo].filter(Boolean).join("\n\n");
 
   const [push, telegram] = await Promise.all([
-    enviarPushAJugador(jugadorId, { titulo, cuerpo, url }),
-    enviarTelegramAJugador(jugadorId, textoTelegram),
+    enviarPushAJugador(jugadorId, { titulo, cuerpo, url, imagen }),
+    enviarTelegramAJugador(jugadorId, textoTelegram, imagen),
   ]);
 
   return { jugadorId, push, telegram };

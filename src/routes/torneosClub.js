@@ -299,7 +299,7 @@ router.get("/:id", async (req, res) => {
 });
 
 router.post("/", requireAdmin, async (req, res) => {
-  const { nombre, descripcion, fechaInicio, fechaFin, insigniaUrl, visibilidad, numeroMaquinas, tipoEliminacion, modalidad, afectaCalendario, notificaciones, modoJornadas, puntosPorPosicion } = req.body;
+  const { nombre, descripcion, fechaInicio, fechaFin, insigniaUrl, visibilidad, numeroMaquinas, tipoEliminacion, modalidad, afectaCalendario, notificaciones, modoJornadas, puntosPorPosicion, imagenEliminadoUrl, imagenCampeonUrl } = req.body;
   if (!nombre || !fechaInicio || !fechaFin) {
     return res.status(400).json({ error: "Faltan campos obligatorios" });
   }
@@ -321,6 +321,8 @@ router.post("/", requireAdmin, async (req, res) => {
       notificaciones: notificaciones !== undefined ? !!notificaciones : true,
       modoJornadas: !!modoJornadas,
       puntosPorPosicion: modoJornadas ? puntos.valor : undefined,
+      imagenEliminadoUrl: imagenEliminadoUrl || null,
+      imagenCampeonUrl: imagenCampeonUrl || null,
     },
   });
   res.status(201).json(torneo);
@@ -328,7 +330,7 @@ router.post("/", requireAdmin, async (req, res) => {
 
 router.put("/:id", requireAdmin, async (req, res) => {
   const { id } = req.params;
-  const { nombre, descripcion, fechaInicio, fechaFin, insigniaUrl, visibilidad, numeroMaquinas, tipoEliminacion, finalizado, notificaciones, modoJornadas, puntosPorPosicion } = req.body;
+  const { nombre, descripcion, fechaInicio, fechaFin, insigniaUrl, visibilidad, numeroMaquinas, tipoEliminacion, finalizado, notificaciones, modoJornadas, puntosPorPosicion, imagenEliminadoUrl, imagenCampeonUrl } = req.body;
   const puntos = validarPuntosPorPosicion(puntosPorPosicion);
   if (!puntos.ok) return res.status(400).json({ error: puntos.error });
   try {
@@ -347,6 +349,8 @@ router.put("/:id", requireAdmin, async (req, res) => {
         notificaciones: notificaciones !== undefined ? !!notificaciones : undefined,
         modoJornadas: modoJornadas !== undefined ? !!modoJornadas : undefined,
         puntosPorPosicion: puntosPorPosicion !== undefined ? puntos.valor : undefined,
+        imagenEliminadoUrl: imagenEliminadoUrl !== undefined ? imagenEliminadoUrl || null : undefined,
+        imagenCampeonUrl: imagenCampeonUrl !== undefined ? imagenCampeonUrl || null : undefined,
       },
     });
     res.json(torneo);
@@ -1008,6 +1012,103 @@ async function notificarPartidoDeCuadrante(partido, motivo = "programado") {
   });
 }
 
+// Determina, a partir de un partido recién resuelto (con ganador ya
+// asignado) y de la estructura del cuadro (siguientePartidoGanadorId /
+// siguientePartidoPerdedorId, ya usados por generarPartidos e
+// intentarResolverBye), si el perdedor queda eliminado del cuadrante y/o si
+// el ganador se proclama campeón. No distingue directa/doble: se basa solo
+// en la forma del grafo de este partido concreto, igual que hace
+// clasificacionCuadrante.js.
+//
+// - rama "perdedores": perder aquí siempre elimina (es la última oportunidad).
+// - cualquier otra rama sin siguientePartidoPerdedorId: también elimina (en
+//   "directa" el perdedor nunca tiene a dónde ir; en "ganadores"/"final" de
+//   doble eliminación, si no hay siguiente partido de perdedores es que ya
+//   no baja a ningún sitio, p.ej. la final).
+// - un partido sin siguientePartidoGanadorId es el último del cuadrante: su
+//   ganador es el campeón — EXCEPTO el caso especial de la gran final
+//   (rama "final", posición 0) cuando gana quien venía del cuadro de
+//   perdedores: ahí hace falta un partido decisivo (posición 1) antes de
+//   poder dar campeón, así que todavía no hay ni eliminado ni campeón.
+function analizarResultadoCuadrante(partido, jug1, jug2, ganador) {
+  const perdedor = ganador === jug1 ? jug2 : jug1;
+
+  if (partido.rama === "final" && partido.posicion === 0 && ganador === jug2) {
+    return { eliminado: null, campeon: null };
+  }
+
+  const perdedorEliminado = partido.rama === "perdedores" ? true : !partido.siguientePartidoPerdedorId;
+  const esPartidoDecisivo = !partido.siguientePartidoGanadorId;
+
+  return {
+    eliminado: perdedorEliminado && perdedor ? perdedor : null,
+    campeon: esPartidoDecisivo ? ganador : null,
+  };
+}
+
+// Busca los jugadorId (socio o invitado) enlazados a una etiqueta de
+// participante de un cuadrante concreto — mismo patrón que
+// notificarPartidoDeCuadrante, extraído aparte porque aquí solo hace falta
+// para un jugador (el eliminado o el campeón), no para los dos del partido.
+async function jugadorIdsDeEtiqueta(cuadranteId, etiqueta) {
+  if (!etiqueta) return [];
+  const participante = await prisma.participanteCuadrante.findFirst({
+    where: { cuadranteId, etiqueta },
+  });
+  if (!participante) return [];
+  return [participante.jugador1Id, participante.jugador2Id].filter(Boolean);
+}
+
+// Avisa al jugador eliminado de un cuadrante, con la imagen configurada en
+// el torneo/liga (imagenEliminadoUrl) si la hay — si no, el aviso se manda
+// igual, solo que sin imagen. Respeta el interruptor "notificaciones" igual
+// que el resto de avisos de cuadrante.
+async function notificarEliminacionCuadrante(partido, etiquetaEliminado) {
+  if (!etiquetaEliminado) return;
+  const cuadrante = await prisma.cuadrante.findUnique({
+    where: { id: partido.cuadranteId },
+    include: { torneoClub: true, liga: true },
+  });
+  if (cuadrante?.torneoClub && cuadrante.torneoClub.notificaciones === false) return;
+  if (cuadrante?.liga && cuadrante.liga.notificaciones === false) return;
+
+  const jugadorIds = await jugadorIdsDeEtiqueta(partido.cuadranteId, etiquetaEliminado);
+  if (jugadorIds.length === 0) return;
+
+  const nombreCompeticion = cuadrante?.torneoClub?.nombre || cuadrante?.liga?.nombre || "Torneo del club";
+  const imagen = cuadrante?.torneoClub?.imagenEliminadoUrl || cuadrante?.liga?.imagenEliminadoUrl || undefined;
+
+  await notificarJugadores(jugadorIds, {
+    titulo: `Eliminado: ${nombreCompeticion}`,
+    cuerpo: "Has quedado eliminado del cuadrante. ¡Gracias por participar!",
+    imagen,
+  });
+}
+
+// Avisa al campeón de un cuadrante, con la imagen configurada en el
+// torneo/liga (imagenCampeonUrl) si la hay.
+async function notificarCampeonCuadrante(partido, etiquetaCampeon) {
+  if (!etiquetaCampeon) return;
+  const cuadrante = await prisma.cuadrante.findUnique({
+    where: { id: partido.cuadranteId },
+    include: { torneoClub: true, liga: true },
+  });
+  if (cuadrante?.torneoClub && cuadrante.torneoClub.notificaciones === false) return;
+  if (cuadrante?.liga && cuadrante.liga.notificaciones === false) return;
+
+  const jugadorIds = await jugadorIdsDeEtiqueta(partido.cuadranteId, etiquetaCampeon);
+  if (jugadorIds.length === 0) return;
+
+  const nombreCompeticion = cuadrante?.torneoClub?.nombre || cuadrante?.liga?.nombre || "Torneo del club";
+  const imagen = cuadrante?.torneoClub?.imagenCampeonUrl || cuadrante?.liga?.imagenCampeonUrl || undefined;
+
+  await notificarJugadores(jugadorIds, {
+    titulo: `¡Campeón! ${nombreCompeticion}`,
+    cuerpo: "¡Enhorabuena, has ganado el cuadrante!",
+    imagen,
+  });
+}
+
 // PUT /api/torneos-club/partidos/:partidoId/calendario - programa (o desprograma)
 // un enfrentamiento del cuadro en el calendario general, con fecha y máquina
 router.put("/partidos/:partidoId/calendario", requireAdmin, async (req, res) => {
@@ -1089,6 +1190,23 @@ router.put("/partidos/:partidoId", requireAdmin, async (req, res) => {
     const jug1 = jugador1 !== undefined ? jugador1 : actual.jugador1;
     const jug2 = jugador2 !== undefined ? jugador2 : actual.jugador2;
     const perdedor = ganador === jug1 ? jug2 : jug1;
+
+    // Avisos de eliminación/campeón: solo en la transición a "con ganador"
+    // (no en cada edición posterior de un partido que ya lo tenía), igual
+    // que el resto de avisos de esta ruta.
+    if (!actual.ganador) {
+      const { eliminado, campeon } = analizarResultadoCuadrante(partido, jug1, jug2, ganador);
+      if (eliminado) {
+        notificarEliminacionCuadrante(partido, eliminado).catch((err) =>
+          console.error("Error notificando eliminación de cuadrante:", err.message || err)
+        );
+      }
+      if (campeon) {
+        notificarCampeonCuadrante(partido, campeon).catch((err) =>
+          console.error("Error notificando campeón de cuadrante:", err.message || err)
+        );
+      }
+    }
 
     if (partido.siguientePartidoGanadorId) {
       const campo = partido.siguienteSlotGanador === 2 ? "jugador2" : "jugador1";

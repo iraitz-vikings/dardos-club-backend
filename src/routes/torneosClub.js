@@ -3,12 +3,42 @@ import { PrismaClient } from "@prisma/client";
 import { randomUUID } from "crypto";
 import { requireAuth } from "./auth.js";
 import { sortearParejasPorGrupos, resolverNombresJugadores } from "../lib/sorteoParejasGrupos.js";
+import { calcularClasificacionCuadrante } from "../lib/clasificacionCuadrante.js";
 import { notificarJugadores } from "./notificar.js";
 import { diasRestantesPapelera } from "../lib/papelera.js";
 import { requireAdmin } from "../middleware/requireAdmin.js";
 
 const prisma = new PrismaClient();
 const router = Router();
+
+// Valida la tabla de puntos por posición del modo "por jornadas" (ver
+// TorneoClub.modoJornadas / puntosPorPosicion en schema.prisma). Se admite
+// `undefined`/vacío (torneo sin tabla todavía, o modo desactivado). Formato
+// esperado: [{ posicion: Int >= 1, puntos: Number >= 0 }, ...], sin
+// posiciones repetidas.
+function validarPuntosPorPosicion(valor) {
+  if (valor === undefined || valor === null || valor === "") return { ok: true, valor: null };
+  if (!Array.isArray(valor)) return { ok: false, error: "La tabla de puntos tiene que ser una lista de posiciones." };
+  const posicionesVistas = new Set();
+  const limpio = [];
+  for (const fila of valor) {
+    const posicion = Number(fila?.posicion);
+    const puntos = Number(fila?.puntos);
+    if (!Number.isInteger(posicion) || posicion < 1) {
+      return { ok: false, error: "Cada fila de la tabla de puntos necesita una posición válida (entero ≥ 1)." };
+    }
+    if (!Number.isFinite(puntos) || puntos < 0) {
+      return { ok: false, error: "Cada fila de la tabla de puntos necesita unos puntos válidos (número ≥ 0)." };
+    }
+    if (posicionesVistas.has(posicion)) {
+      return { ok: false, error: `La posición ${posicion} está repetida en la tabla de puntos.` };
+    }
+    posicionesVistas.add(posicion);
+    limpio.push({ posicion, puntos });
+  }
+  limpio.sort((a, b) => a.posicion - b.posicion);
+  return { ok: true, valor: limpio };
+}
 
 const includeCompleto = {
   cuadrantes: {
@@ -262,11 +292,13 @@ router.get("/:id", async (req, res) => {
 });
 
 router.post("/", requireAdmin, async (req, res) => {
-  const { nombre, descripcion, fechaInicio, fechaFin, insigniaUrl, visibilidad, numeroMaquinas, tipoEliminacion, modalidad, afectaCalendario, notificaciones } = req.body;
+  const { nombre, descripcion, fechaInicio, fechaFin, insigniaUrl, visibilidad, numeroMaquinas, tipoEliminacion, modalidad, afectaCalendario, notificaciones, modoJornadas, puntosPorPosicion } = req.body;
   if (!nombre || !fechaInicio || !fechaFin) {
     return res.status(400).json({ error: "Faltan campos obligatorios" });
   }
   const modalidadesValidas = ["individual", "parejas_hechas", "parejas_ciegas"];
+  const puntos = validarPuntosPorPosicion(puntosPorPosicion);
+  if (!puntos.ok) return res.status(400).json({ error: puntos.error });
   const torneo = await prisma.torneoClub.create({
     data: {
       nombre,
@@ -280,6 +312,8 @@ router.post("/", requireAdmin, async (req, res) => {
       modalidad: modalidadesValidas.includes(modalidad) ? modalidad : "individual",
       afectaCalendario: afectaCalendario !== undefined ? !!afectaCalendario : true,
       notificaciones: notificaciones !== undefined ? !!notificaciones : true,
+      modoJornadas: !!modoJornadas,
+      puntosPorPosicion: modoJornadas ? puntos.valor : undefined,
     },
   });
   res.status(201).json(torneo);
@@ -287,7 +321,9 @@ router.post("/", requireAdmin, async (req, res) => {
 
 router.put("/:id", requireAdmin, async (req, res) => {
   const { id } = req.params;
-  const { nombre, descripcion, fechaInicio, fechaFin, insigniaUrl, visibilidad, numeroMaquinas, tipoEliminacion, finalizado, notificaciones } = req.body;
+  const { nombre, descripcion, fechaInicio, fechaFin, insigniaUrl, visibilidad, numeroMaquinas, tipoEliminacion, finalizado, notificaciones, modoJornadas, puntosPorPosicion } = req.body;
+  const puntos = validarPuntosPorPosicion(puntosPorPosicion);
+  if (!puntos.ok) return res.status(400).json({ error: puntos.error });
   try {
     const torneo = await prisma.torneoClub.update({
       where: { id },
@@ -302,6 +338,8 @@ router.put("/:id", requireAdmin, async (req, res) => {
         tipoEliminacion: tipoEliminacion || undefined,
         finalizado: finalizado !== undefined ? !!finalizado : undefined,
         notificaciones: notificaciones !== undefined ? !!notificaciones : undefined,
+        modoJornadas: modoJornadas !== undefined ? !!modoJornadas : undefined,
+        puntosPorPosicion: puntosPorPosicion !== undefined ? puntos.valor : undefined,
       },
     });
     res.json(torneo);
@@ -764,8 +802,149 @@ router.delete("/cuadrantes/:cuadranteId", requireAdmin, async (req, res) => {
   const { cuadranteId } = req.params;
   await prisma.cuadroPartido.deleteMany({ where: { cuadranteId } });
   await prisma.participanteCuadrante.deleteMany({ where: { cuadranteId } });
+  await prisma.puntoJornada.deleteMany({ where: { cuadranteId } });
   await prisma.cuadrante.delete({ where: { id: cuadranteId } });
   res.status(204).end();
+});
+
+// PUT /api/torneos-club/cuadrantes/:cuadranteId/estado - cambia el estado
+// ("pendiente"/"activo"/"finalizado") de un cuadrante, para el modo "por
+// jornadas" (ver TorneoClub.modoJornadas). Puramente informativo/de
+// presentación: no bloquea ni desbloquea nada por sí solo.
+const ESTADOS_CUADRANTE = ["pendiente", "activo", "finalizado"];
+router.put("/cuadrantes/:cuadranteId/estado", requireAdmin, async (req, res) => {
+  const { cuadranteId } = req.params;
+  const { estado } = req.body;
+  if (!ESTADOS_CUADRANTE.includes(estado)) {
+    return res.status(400).json({ error: `Estado no válido. Tiene que ser uno de: ${ESTADOS_CUADRANTE.join(", ")}.` });
+  }
+  try {
+    const cuadrante = await prisma.cuadrante.update({ where: { id: cuadranteId }, data: { estado } });
+    res.json(cuadrante);
+  } catch {
+    res.status(404).json({ error: "Cuadrante no encontrado" });
+  }
+});
+
+// GET /api/torneos-club/cuadrantes/:cuadranteId/clasificacion - calcula (sin
+// guardar nada) la clasificación final del cuadrante por posición, para que
+// el admin la revise antes de repartir los puntos. Devuelve
+// { completo: false } si el cuadrante todavía no ha terminado.
+router.get("/cuadrantes/:cuadranteId/clasificacion", requireAdmin, async (req, res) => {
+  const { cuadranteId } = req.params;
+  const cuadrante = await prisma.cuadrante.findUnique({
+    where: { id: cuadranteId },
+    include: {
+      partidos: true,
+      participantes: { include: { jugador1: true, jugador2: true } },
+    },
+  });
+  if (!cuadrante) return res.status(404).json({ error: "Cuadrante no encontrado" });
+
+  const clasificacion = calcularClasificacionCuadrante(cuadrante);
+  if (!clasificacion) return res.json({ completo: false });
+  res.json({ completo: true, clasificacion });
+});
+
+// POST /api/torneos-club/cuadrantes/:cuadranteId/asignar-puntos - calcula la
+// clasificación del cuadrante y guarda los puntos (PuntoJornada) según la
+// tabla `puntosPorPosicion` del torneo. Repetible: vuelve a calcular y
+// sobreescribe (upsert por etiqueta). No cambia el estado del cuadrante —
+// eso se hace aparte con PUT .../estado.
+router.post("/cuadrantes/:cuadranteId/asignar-puntos", requireAdmin, async (req, res) => {
+  const { cuadranteId } = req.params;
+  const cuadrante = await prisma.cuadrante.findUnique({
+    where: { id: cuadranteId },
+    include: {
+      torneoClub: true,
+      partidos: true,
+      participantes: { include: { jugador1: true, jugador2: true } },
+    },
+  });
+  if (!cuadrante) return res.status(404).json({ error: "Cuadrante no encontrado" });
+  if (!cuadrante.torneoClub) return res.status(400).json({ error: "Este cuadrante no pertenece a un torneo del club." });
+  if (!cuadrante.torneoClub.modoJornadas) {
+    return res.status(400).json({ error: "Este torneo no tiene activado el modo \"por jornadas\"." });
+  }
+  const tablaPuntos = Array.isArray(cuadrante.torneoClub.puntosPorPosicion) ? cuadrante.torneoClub.puntosPorPosicion : [];
+  if (tablaPuntos.length === 0) {
+    return res.status(400).json({ error: "El torneo no tiene definida la tabla de puntos por posición." });
+  }
+
+  const clasificacion = calcularClasificacionCuadrante(cuadrante);
+  if (!clasificacion) {
+    return res.status(400).json({ error: "El cuadrante todavía no ha terminado: faltan partidos por jugar." });
+  }
+
+  const puntosPorPosicion = new Map(tablaPuntos.map((f) => [f.posicion, f.puntos]));
+  await prisma.$transaction(
+    clasificacion.map((c) =>
+      prisma.puntoJornada.upsert({
+        where: { cuadranteId_etiqueta: { cuadranteId, etiqueta: c.etiqueta } },
+        create: {
+          cuadranteId,
+          etiqueta: c.etiqueta,
+          jugador1Id: c.jugador1Id,
+          jugador2Id: c.jugador2Id,
+          posicion: c.posicion,
+          puntos: puntosPorPosicion.get(c.posicion) || 0,
+        },
+        update: {
+          jugador1Id: c.jugador1Id,
+          jugador2Id: c.jugador2Id,
+          posicion: c.posicion,
+          puntos: puntosPorPosicion.get(c.posicion) || 0,
+        },
+      })
+    )
+  );
+  await prisma.cuadrante.update({ where: { id: cuadranteId }, data: { puntosAsignados: true } });
+
+  res.json({ ok: true, clasificacion });
+});
+
+// GET /api/torneos-club/:id/clasificacion-general - suma los puntos de todos
+// los cuadrantes (jornadas) ya repartidos de un torneo "por jornadas", por
+// jugador del club (una pareja reparte los mismos puntos a los dos
+// jugadores). Pensado para elegir a los mejores de varias jornadas (p.ej.
+// selección de Euskadi). Los participantes sin jugadorId (nombre suelto, sin
+// ficha en el club) no se pueden sumar a nadie y se listan aparte.
+router.get("/:id/clasificacion-general", async (req, res) => {
+  const { id } = req.params;
+  const puntos = await prisma.puntoJornada.findMany({
+    where: { cuadrante: { torneoClubId: id } },
+    include: {
+      jugador1: true,
+      jugador2: true,
+      cuadrante: { select: { id: true, nombre: true } },
+    },
+  });
+
+  const porJugador = new Map();
+  const sinFicha = [];
+  for (const p of puntos) {
+    const jugadores = [p.jugador1, p.jugador2].filter(Boolean);
+    if (jugadores.length === 0) {
+      sinFicha.push({ etiqueta: p.etiqueta, cuadrante: p.cuadrante.nombre, posicion: p.posicion, puntos: p.puntos });
+      continue;
+    }
+    for (const j of jugadores) {
+      if (!porJugador.has(j.id)) {
+        porJugador.set(j.id, {
+          jugadorId: j.id,
+          nombre: j.apodo || j.nombre,
+          puntosTotales: 0,
+          jornadas: [],
+        });
+      }
+      const entrada = porJugador.get(j.id);
+      entrada.puntosTotales += p.puntos;
+      entrada.jornadas.push({ cuadrante: p.cuadrante.nombre, posicion: p.posicion, puntos: p.puntos });
+    }
+  }
+
+  const clasificacionGeneral = [...porJugador.values()].sort((a, b) => b.puntosTotales - a.puntosTotales);
+  res.json({ clasificacionGeneral, sinFicha });
 });
 
 // Avisa (Web Push y/o Telegram) a los jugadores del club implicados en un

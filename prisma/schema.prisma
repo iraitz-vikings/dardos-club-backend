@@ -64,6 +64,8 @@ model Jugador {
   idsFabricantes          JugadorFabricanteId[]
   suscripcionesPush       SuscripcionPush[]
   suscripcionTelegram     SuscripcionTelegram?
+  puntosJornadaComoJugador1 PuntoJornada[] @relation("puntoJornadaJugador1")
+  puntosJornadaComoJugador2 PuntoJornada[] @relation("puntoJornadaJugador2")
 }
 
 // Un dispositivo (navegador) de un socio con avisos activados. Un mismo
@@ -263,6 +265,19 @@ model TorneoClub {
   // reintentar. Pensado para torneos informales/de prueba donde no interesa
   // molestar a los socios. Se decide al crear el torneo (ver POST /).
   notificaciones   Boolean  @default(true)
+  // "Torneo por jornadas": cada Cuadrante de este torneo es una jornada
+  // independiente (p.ej. clasificatorias para la selección de Euskadi). A
+  // diferencia del torneo "clásico" de un solo cuadrante, aquí un mismo
+  // jugador puede apuntarse a varios cuadrantes del torneo (nunca hubo
+  // restricción real en el código para impedirlo, solo se aprovecha ahora),
+  // y cada cuadrante terminado reparte puntos según `puntosPorPosicion` que
+  // se suman entre jornadas (ver PuntoJornada y GET /:id/clasificacion-general).
+  modoJornadas     Boolean  @default(false)
+  // Tabla de puntos por posición para el modo "por jornadas", como lista de
+  // objetos `{ posicion, puntos }` (p.ej. [{"posicion":1,"puntos":20},
+  // {"posicion":2,"puntos":17}, ...]). Solo tiene sentido si modoJornadas
+  // está activo. Las posiciones sin entrada en la tabla no dan puntos.
+  puntosPorPosicion Json?
   finalizado       Boolean  @default(false)
   // Borrado suave (papelera): null = activo; con fecha = en la papelera,
   // recuperable durante 7 días (ver src/lib/papelera.js) antes de que el
@@ -356,10 +371,47 @@ model Cuadrante {
   tamano              Int
   tipoEliminacion     String
   metodoSorteoParejas String?
+  // Estado meramente informativo/de presentación (no bloquea nada por sí
+  // solo): "pendiente" (todavía no ha empezado a jugarse), "activo" (la
+  // jornada en juego — puede haber varias activas a la vez) o "finalizado".
+  // Se usa para ordenar y destacar en la UI de torneos "por jornadas" (ver
+  // TorneoClub.modoJornadas): los activos primero, los finalizados al final
+  // y colapsados. Se cambia a mano desde el admin (ver PUT
+  // /cuadrantes/:id/estado), no automáticamente al terminar los partidos.
+  estado              String   @default("pendiente")
+  // Si ya se ha ejecutado el reparto de puntos de este cuadrante (ver POST
+  // /cuadrantes/:id/asignar-puntos) — evita que se sumen dos veces por
+  // error si se repite la acción; repetirla vuelve a calcular y sobreescribe.
+  puntosAsignados     Boolean  @default(false)
   creadoEn            DateTime @default(now())
 
   partidos      CuadroPartido[]
   participantes ParticipanteCuadrante[]
+  puntosJornada PuntoJornada[]
+}
+
+// Puntos que un participante (jugador individual, o los dos de una pareja)
+// obtiene por su posición final en UN cuadrante concreto, en el modo "por
+// jornadas" de TorneoClub. Una fila por participante y cuadrante; sumando
+// estas filas entre todos los cuadrantes de un torneo se saca la
+// clasificación general (ver GET /torneos-club/:id/clasificacion-general).
+// Se genera con POST /cuadrantes/:id/asignar-puntos, a partir de la
+// clasificación calculada en src/lib/clasificacionCuadrante.js y la tabla
+// TorneoClub.puntosPorPosicion.
+model PuntoJornada {
+  id          String    @id @default(uuid())
+  cuadranteId String
+  cuadrante   Cuadrante @relation(fields: [cuadranteId], references: [id], onDelete: Cascade)
+  etiqueta    String
+  jugador1Id  String?
+  jugador1    Jugador?  @relation("puntoJornadaJugador1", fields: [jugador1Id], references: [id])
+  jugador2Id  String?
+  jugador2    Jugador?  @relation("puntoJornadaJugador2", fields: [jugador2Id], references: [id])
+  posicion    Int
+  puntos      Float
+  creadoEn    DateTime  @default(now())
+
+  @@unique([cuadranteId, etiqueta])
 }
 
 model LigaClub {

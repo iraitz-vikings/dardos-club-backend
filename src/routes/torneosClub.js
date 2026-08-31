@@ -46,6 +46,13 @@ const includeCompleto = {
     include: {
       partidos: { orderBy: [{ rama: "asc" }, { ronda: "asc" }, { posicion: "asc" }] },
       participantes: { include: { jugador1: true, jugador2: true }, orderBy: { creadoEn: "asc" } },
+      // Puntos ya asignados (ver POST /cuadrantes/:id/asignar-puntos) — se
+      // incluyen aquí para que la página pública del torneo pueda mostrar la
+      // clasificación oficial de cada jornada sin llamadas aparte. Solo
+      // aparece algo una vez el admin ha pulsado "Asignar puntos"; antes de
+      // eso la lista viene vacía (no se expone ningún cálculo "en vivo" sin
+      // confirmar al público).
+      puntosJornada: { orderBy: { posicion: "asc" } },
     },
   },
 };

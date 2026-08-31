@@ -282,8 +282,12 @@ model TorneoClub {
   // eliminación/campeón de los cuadrantes de este torneo — ver
   // analizarResultadoCuadrante en src/routes/torneosClub.js. Si están vacías
   // no se manda ninguna imagen (el aviso de texto sigue igual).
-  imagenEliminadoUrl String?
-  imagenCampeonUrl   String?
+  imagenEliminadoUrl  String?
+  imagenCampeonUrl    String?
+  // Imagen opcional (Cloudinary) para el aviso de bienvenida que recibe cada
+  // jugador al ser colocado en el cuadro tras el sorteo — ver
+  // notificarSorteoCuadrante en src/routes/torneosClub.js.
+  imagenBienvenidaUrl String?
   finalizado       Boolean  @default(false)
   // Borrado suave (papelera): null = activo; con fecha = en la papelera,
   // recuperable durante 7 días (ver src/lib/papelera.js) antes de que el
@@ -450,8 +454,12 @@ model LigaClub {
   // eliminación/campeón del cuadrante final de esta liga — ver
   // analizarResultadoCuadrante en src/routes/torneosClub.js. Si están vacías
   // no se manda ninguna imagen (el aviso de texto sigue igual).
-  imagenEliminadoUrl String?
-  imagenCampeonUrl   String?
+  imagenEliminadoUrl  String?
+  imagenCampeonUrl    String?
+  // Imagen opcional (Cloudinary) para el aviso de bienvenida que recibe cada
+  // jugador al ser colocado en el cuadrante final de esta liga tras el
+  // sorteo — ver notificarSorteoCuadrante en src/routes/torneosClub.js.
+  imagenBienvenidaUrl String?
   finalizado       Boolean  @default(false)
   // Borrado suave (papelera): null = activa; con fecha = en la papelera,
   // recuperable durante 7 días (ver src/lib/papelera.js) antes de que el

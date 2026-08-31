@@ -278,6 +278,12 @@ model TorneoClub {
   // {"posicion":2,"puntos":17}, ...]). Solo tiene sentido si modoJornadas
   // está activo. Las posiciones sin entrada en la tabla no dan puntos.
   puntosPorPosicion Json?
+  // Imágenes opcionales (Cloudinary) para los avisos automáticos de
+  // eliminación/campeón de los cuadrantes de este torneo — ver
+  // analizarResultadoCuadrante en src/routes/torneosClub.js. Si están vacías
+  // no se manda ninguna imagen (el aviso de texto sigue igual).
+  imagenEliminadoUrl String?
+  imagenCampeonUrl   String?
   finalizado       Boolean  @default(false)
   // Borrado suave (papelera): null = activo; con fecha = en la papelera,
   // recuperable durante 7 días (ver src/lib/papelera.js) antes de que el
@@ -440,6 +446,12 @@ model LigaClub {
   // reintentar. Pensado para ligas informales/de prueba donde no interesa
   // molestar a los socios. Se decide al crear la liga (ver POST /).
   notificaciones   Boolean  @default(true)
+  // Imágenes opcionales (Cloudinary) para los avisos automáticos de
+  // eliminación/campeón del cuadrante final de esta liga — ver
+  // analizarResultadoCuadrante en src/routes/torneosClub.js. Si están vacías
+  // no se manda ninguna imagen (el aviso de texto sigue igual).
+  imagenEliminadoUrl String?
+  imagenCampeonUrl   String?
   finalizado       Boolean  @default(false)
   // Borrado suave (papelera): null = activa; con fecha = en la papelera,
   // recuperable durante 7 días (ver src/lib/papelera.js) antes de que el

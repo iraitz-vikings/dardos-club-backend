@@ -104,7 +104,7 @@ function validarNumeroGrupos(valor) {
 }
 
 router.post("/", requireAdmin, async (req, res) => {
-  const { nombre, descripcion, fechaInicio, fechaFin, insigniaUrl, visibilidad, modalidad, vueltas, numeroParticipantes, numeroGrupos, metodoSorteoParejas, afectaCalendario, notificaciones, imagenEliminadoUrl, imagenCampeonUrl } = req.body;
+  const { nombre, descripcion, fechaInicio, fechaFin, insigniaUrl, visibilidad, modalidad, vueltas, numeroParticipantes, numeroGrupos, metodoSorteoParejas, afectaCalendario, notificaciones, imagenEliminadoUrl, imagenCampeonUrl, imagenBienvenidaUrl } = req.body;
   if (!nombre || !fechaInicio || !fechaFin || !numeroParticipantes) {
     return res.status(400).json({ error: "Faltan campos obligatorios" });
   }
@@ -134,6 +134,7 @@ router.post("/", requireAdmin, async (req, res) => {
       notificaciones: notificaciones !== undefined ? !!notificaciones : true,
       imagenEliminadoUrl: imagenEliminadoUrl || null,
       imagenCampeonUrl: imagenCampeonUrl || null,
+      imagenBienvenidaUrl: imagenBienvenidaUrl || null,
     },
   });
   res.status(201).json(liga);
@@ -141,7 +142,7 @@ router.post("/", requireAdmin, async (req, res) => {
 
 router.put("/:id", requireAdmin, async (req, res) => {
   const { id } = req.params;
-  const { nombre, descripcion, fechaInicio, fechaFin, insigniaUrl, visibilidad, finalizado, numeroGrupos, notificaciones, imagenEliminadoUrl, imagenCampeonUrl } = req.body;
+  const { nombre, descripcion, fechaInicio, fechaFin, insigniaUrl, visibilidad, finalizado, numeroGrupos, notificaciones, imagenEliminadoUrl, imagenCampeonUrl, imagenBienvenidaUrl } = req.body;
 
   let numeroGruposData;
   if (numeroGrupos !== undefined) {
@@ -165,6 +166,7 @@ router.put("/:id", requireAdmin, async (req, res) => {
         notificaciones: notificaciones !== undefined ? !!notificaciones : undefined,
         imagenEliminadoUrl: imagenEliminadoUrl !== undefined ? imagenEliminadoUrl || null : undefined,
         imagenCampeonUrl: imagenCampeonUrl !== undefined ? imagenCampeonUrl || null : undefined,
+        imagenBienvenidaUrl: imagenBienvenidaUrl !== undefined ? imagenBienvenidaUrl || null : undefined,
       },
     });
     res.json(liga);

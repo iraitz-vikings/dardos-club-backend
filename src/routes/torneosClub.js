@@ -299,7 +299,7 @@ router.get("/:id", async (req, res) => {
 });
 
 router.post("/", requireAdmin, async (req, res) => {
-  const { nombre, descripcion, fechaInicio, fechaFin, insigniaUrl, visibilidad, numeroMaquinas, tipoEliminacion, modalidad, afectaCalendario, notificaciones, modoJornadas, puntosPorPosicion, imagenEliminadoUrl, imagenCampeonUrl } = req.body;
+  const { nombre, descripcion, fechaInicio, fechaFin, insigniaUrl, visibilidad, numeroMaquinas, tipoEliminacion, modalidad, afectaCalendario, notificaciones, modoJornadas, puntosPorPosicion, imagenEliminadoUrl, imagenCampeonUrl, imagenBienvenidaUrl } = req.body;
   if (!nombre || !fechaInicio || !fechaFin) {
     return res.status(400).json({ error: "Faltan campos obligatorios" });
   }
@@ -323,6 +323,7 @@ router.post("/", requireAdmin, async (req, res) => {
       puntosPorPosicion: modoJornadas ? puntos.valor : undefined,
       imagenEliminadoUrl: imagenEliminadoUrl || null,
       imagenCampeonUrl: imagenCampeonUrl || null,
+      imagenBienvenidaUrl: imagenBienvenidaUrl || null,
     },
   });
   res.status(201).json(torneo);
@@ -330,7 +331,7 @@ router.post("/", requireAdmin, async (req, res) => {
 
 router.put("/:id", requireAdmin, async (req, res) => {
   const { id } = req.params;
-  const { nombre, descripcion, fechaInicio, fechaFin, insigniaUrl, visibilidad, numeroMaquinas, tipoEliminacion, finalizado, notificaciones, modoJornadas, puntosPorPosicion, imagenEliminadoUrl, imagenCampeonUrl } = req.body;
+  const { nombre, descripcion, fechaInicio, fechaFin, insigniaUrl, visibilidad, numeroMaquinas, tipoEliminacion, finalizado, notificaciones, modoJornadas, puntosPorPosicion, imagenEliminadoUrl, imagenCampeonUrl, imagenBienvenidaUrl } = req.body;
   const puntos = validarPuntosPorPosicion(puntosPorPosicion);
   if (!puntos.ok) return res.status(400).json({ error: puntos.error });
   try {
@@ -351,6 +352,7 @@ router.put("/:id", requireAdmin, async (req, res) => {
         puntosPorPosicion: puntosPorPosicion !== undefined ? puntos.valor : undefined,
         imagenEliminadoUrl: imagenEliminadoUrl !== undefined ? imagenEliminadoUrl || null : undefined,
         imagenCampeonUrl: imagenCampeonUrl !== undefined ? imagenCampeonUrl || null : undefined,
+        imagenBienvenidaUrl: imagenBienvenidaUrl !== undefined ? imagenBienvenidaUrl || null : undefined,
       },
     });
     res.json(torneo);
@@ -594,6 +596,47 @@ router.post("/cuadrantes/:cuadranteId/sortear-parejas-grupos", requireAdmin, asy
   res.status(201).json(creadas);
 });
 
+// Avisa a los jugadores recién colocados en un cuadrante tras un sorteo
+// ("¡ya estás en el cuadro!"), con la imagen de bienvenida configurada en el
+// torneo/liga (imagenBienvenidaUrl) si la hay, y un enlace a la página
+// pública del torneo/liga para que puedan seguir su progreso. Se llama
+// desde aplicarPosicionesRonda1, así que dispara tanto en el sorteo normal
+// de un cuadrante de torneo como en el cuadrante final (cruce de grupos) de
+// una liga — es el único sitio donde de verdad se "sortea" un cuadrante. Si
+// se repite el sorteo de un mismo cuadrante se vuelve a avisar a todos los
+// que queden en él: es una acción explícita del admin, no algo automático,
+// así que no hace falta guardar estado para no repetir el aviso.
+async function notificarSorteoCuadrante(cuadranteId, posiciones) {
+  const etiquetas = [...new Set((posiciones || []).filter(Boolean))];
+  if (etiquetas.length === 0) return;
+
+  const [participantes, cuadrante] = await Promise.all([
+    prisma.participanteCuadrante.findMany({ where: { cuadranteId, etiqueta: { in: etiquetas } } }),
+    prisma.cuadrante.findUnique({ where: { id: cuadranteId }, include: { torneoClub: true, liga: true } }),
+  ]);
+  const jugadorIds = [...new Set(participantes.flatMap((p) => [p.jugador1Id, p.jugador2Id]).filter(Boolean))];
+  if (jugadorIds.length === 0) return;
+  if (cuadrante?.torneoClub && cuadrante.torneoClub.notificaciones === false) return;
+  if (cuadrante?.liga && cuadrante.liga.notificaciones === false) return;
+
+  const nombreCompeticion = cuadrante?.torneoClub?.nombre || cuadrante?.liga?.nombre || "Torneo del club";
+  const imagen = cuadrante?.torneoClub?.imagenBienvenidaUrl || cuadrante?.liga?.imagenBienvenidaUrl || undefined;
+  const frontendUrl = (process.env.FRONTEND_URL || "").replace(/\/$/, "");
+  const rutaPublica = cuadrante?.torneoClub
+    ? `/torneo/${cuadrante.torneoClub.id}`
+    : cuadrante?.liga
+    ? `/liga/${cuadrante.liga.id}`
+    : null;
+  const url = frontendUrl && rutaPublica ? `${frontendUrl}${rutaPublica}` : undefined;
+
+  await notificarJugadores(jugadorIds, {
+    titulo: `¡Ya estás en el cuadro! ${nombreCompeticion}`,
+    cuerpo: "Se ha hecho el sorteo y ya tienes tu sitio en el cuadro. ¡Mucha suerte!",
+    imagen,
+    url,
+  });
+}
+
 // Aplica un reparto ya calculado de la ronda 1 (array `posiciones`, longitud
 // = tamaño del cuadrante, con el nombre en cada hueco o `null` para un
 // "bye") a un cuadrante ya creado: limpia cualquier sorteo anterior, coloca
@@ -660,6 +703,11 @@ export async function aplicarPosicionesRonda1(cuadranteId, posiciones) {
       });
     }
   }
+
+  // No bloquea la respuesta al admin si el envío falla o tarda.
+  notificarSorteoCuadrante(cuadranteId, posiciones).catch((err) =>
+    console.error("Error notificando sorteo de cuadrante:", err.message || err)
+  );
 
   return prisma.cuadrante.findUnique({
     where: { id: cuadranteId },

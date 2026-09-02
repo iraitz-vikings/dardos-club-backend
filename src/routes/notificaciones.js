@@ -89,6 +89,23 @@ router.get("/checkin/:token", async (req, res) => {
   });
 });
 
+// GET /api/notificaciones/telegram/estado - un socio consulta el estado de
+// sus PROPIOS avisos por Telegram (vinculado o no) y su enlace de check-in,
+// para poder activarlos él mismo desde "Mi perfil" — hasta ahora el check-in
+// de Telegram solo estaba disponible para invitados (el admin les generaba
+// el enlace a mano desde "Jugadores del club"); los socios solo tenían Web
+// Push. Hace falta sobre todo en iPhone, donde Safari no siempre puede
+// mostrar la imagen grande de los avisos (Telegram sí la muestra siempre).
+router.get("/telegram/estado", requireAuth, async (req, res) => {
+  const jugador = await prisma.jugador.findUnique({
+    where: { usuarioId: req.usuario.sub },
+    include: { suscripcionTelegram: true },
+  });
+  if (!jugador) return res.status(404).json({ error: "Tu cuenta no tiene una ficha de jugador asociada" });
+  const enlace = generarEnlaceCheckIn(jugador.id);
+  res.json({ telegramVinculado: !!jugador.suscripcionTelegram, urlTelegram: enlace.urlTelegram });
+});
+
 // GET /api/notificaciones/invitados/:jugadorId/enlace - el admin obtiene el
 // enlace de avisos de un invitado concreto, para copiárselo o enseñárselo
 // (panel "Jugadores del club").

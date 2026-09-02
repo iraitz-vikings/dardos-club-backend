@@ -6,6 +6,7 @@ import { sortearParejasPorGrupos, resolverNombresJugadores } from "../lib/sorteo
 import { calcularClasificacionCuadrante } from "../lib/clasificacionCuadrante.js";
 import { notificarJugadores } from "./notificar.js";
 import { diasRestantesPapelera } from "../lib/papelera.js";
+import { urlPublicaCuadrante } from "../lib/enlacesPublicos.js";
 import { requireAdmin } from "../middleware/requireAdmin.js";
 
 const prisma = new PrismaClient();
@@ -621,19 +622,12 @@ async function notificarSorteoCuadrante(cuadranteId, posiciones) {
 
   const nombreCompeticion = cuadrante?.torneoClub?.nombre || cuadrante?.liga?.nombre || "Torneo del club";
   const imagen = cuadrante?.torneoClub?.imagenBienvenidaUrl || cuadrante?.liga?.imagenBienvenidaUrl || undefined;
-  const frontendUrl = (process.env.FRONTEND_URL || "").replace(/\/$/, "");
-  const rutaPublica = cuadrante?.torneoClub
-    ? `/torneo/${cuadrante.torneoClub.id}`
-    : cuadrante?.liga
-    ? `/liga/${cuadrante.liga.id}`
-    : null;
-  const url = frontendUrl && rutaPublica ? `${frontendUrl}${rutaPublica}` : undefined;
 
   await notificarJugadores(jugadorIds, {
     titulo: `¡Ya estás en el cuadro! ${nombreCompeticion}`,
     cuerpo: "Se ha hecho el sorteo y ya tienes tu sitio en el cuadro. ¡Mucha suerte!",
     imagen,
-    url,
+    url: urlPublicaCuadrante(cuadrante),
   });
 }
 
@@ -1040,11 +1034,13 @@ async function notificarPartidoDeCuadrante(partido, motivo = "programado") {
 
   const nombreCompeticion = cuadrante?.torneoClub?.nombre || cuadrante?.liga?.nombre || "Torneo del club";
   const enfrentamiento = `${partido.jugador1 || "?"} vs ${partido.jugador2 || "?"}`;
+  const url = urlPublicaCuadrante(cuadrante);
 
   if (motivo === "en_curso") {
     await notificarJugadores(jugadorIds, {
       titulo: `¡Tu partido empieza ahora! ${nombreCompeticion}`,
       cuerpo: `${enfrentamiento}${partido.maquina ? ` en ${partido.maquina}` : ""}.`,
+      url,
     });
     return;
   }
@@ -1057,6 +1053,7 @@ async function notificarPartidoDeCuadrante(partido, motivo = "programado") {
     cuerpo: `${enfrentamiento}${fechaTexto ? ` el ${fechaTexto}` : ""}${
       partido.maquinaCalendario ? ` en ${partido.maquinaCalendario.nombre}` : ""
     }.`,
+    url,
   });
 }
 
@@ -1130,6 +1127,7 @@ async function notificarEliminacionCuadrante(partido, etiquetaEliminado) {
     titulo: `Eliminado: ${nombreCompeticion}`,
     cuerpo: "Has quedado eliminado del cuadrante. ¡Gracias por participar!",
     imagen,
+    url: urlPublicaCuadrante(cuadrante),
   });
 }
 
@@ -1154,6 +1152,7 @@ async function notificarCampeonCuadrante(partido, etiquetaCampeon) {
     titulo: `¡Campeón! ${nombreCompeticion}`,
     cuerpo: "¡Enhorabuena, has ganado el cuadrante!",
     imagen,
+    url: urlPublicaCuadrante(cuadrante),
   });
 }
 

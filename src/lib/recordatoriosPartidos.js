@@ -9,6 +9,7 @@
 // externas). Se llama desde el cron matutino de src/index.js.
 import { PrismaClient } from "@prisma/client";
 import { notificarJugadores } from "../routes/notificar.js";
+import { urlPublicaCuadrante, urlPublicaLiga } from "./enlacesPublicos.js";
 
 const prisma = new PrismaClient();
 
@@ -108,6 +109,7 @@ async function recordatoriosTorneosClub(rangoHoy) {
         await notificarJugadores(jugadorIds, {
           titulo: `Hoy juegas: ${nombreCompeticion}`,
           cuerpo: `${p.jugador1 || "?"} vs ${p.jugador2 || "?"} hoy a las ${textoHora(p.fechaCalendario)}.`,
+          url: urlPublicaCuadrante(p.cuadrante),
         });
         enviados++;
       }
@@ -148,6 +150,7 @@ async function recordatoriosLigasClub(rangoHoy) {
         await notificarJugadores(jugadorIds, {
           titulo: `Hoy juegas: ${nombreLiga}`,
           cuerpo: `${p.participante1 || "?"} vs ${p.participante2 || "?"} hoy a las ${textoHora(p.fechaCalendario)}.`,
+          url: urlPublicaLiga(p.ligaId),
         });
         enviados++;
       }

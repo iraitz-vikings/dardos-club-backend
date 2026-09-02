@@ -1,6 +1,5 @@
 import { Router } from "express";
 import { PrismaClient } from "@prisma/client";
-import jwt from "jsonwebtoken";
 import { requireAuth } from "./auth.js";
 import { vapidPublicKey } from "./webPush.js";
 import { generarEnlaceCheckIn } from "./telegram.js";
@@ -66,17 +65,12 @@ router.get("/push/estado", requireAuth, async (req, res) => {
 // invitado: valida el token y devuelve su nombre y si ya vinculó Telegram,
 // para que el frontend pueda mostrar el botón adecuado.
 router.get("/checkin/:token", async (req, res) => {
-  let payload;
-  try {
-    payload = jwt.verify(req.params.token, process.env.JWT_SECRET);
-  } catch {
-    return res.status(400).json({ error: "Este enlace de avisos no es válido o ha caducado." });
-  }
-  if (payload.tipo !== "checkin" || !payload.jugadorId) {
+  const checkIn = await prisma.telegramCheckIn.findUnique({ where: { token: req.params.token } });
+  if (!checkIn) {
     return res.status(400).json({ error: "Este enlace de avisos no es válido." });
   }
   const jugador = await prisma.jugador.findUnique({
-    where: { id: payload.jugadorId },
+    where: { id: checkIn.jugadorId },
     include: { suscripcionTelegram: true },
   });
   if (!jugador) return res.status(404).json({ error: "No se ha encontrado esta ficha de jugador." });
@@ -102,7 +96,7 @@ router.get("/telegram/estado", requireAuth, async (req, res) => {
     include: { suscripcionTelegram: true },
   });
   if (!jugador) return res.status(404).json({ error: "Tu cuenta no tiene una ficha de jugador asociada" });
-  const enlace = generarEnlaceCheckIn(jugador.id);
+  const enlace = await generarEnlaceCheckIn(jugador.id);
   res.json({ telegramVinculado: !!jugador.suscripcionTelegram, urlTelegram: enlace.urlTelegram });
 });
 
@@ -115,7 +109,7 @@ router.get("/invitados/:jugadorId/enlace", requireAdmin, async (req, res) => {
     include: { suscripcionTelegram: true },
   });
   if (!jugador) return res.status(404).json({ error: "Jugador no encontrado" });
-  const enlace = generarEnlaceCheckIn(jugador.id);
+  const enlace = await generarEnlaceCheckIn(jugador.id);
   res.json({ ...enlace, telegramVinculado: !!jugador.suscripcionTelegram });
 });
 

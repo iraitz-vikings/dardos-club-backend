@@ -64,6 +64,7 @@ model Jugador {
   idsFabricantes          JugadorFabricanteId[]
   suscripcionesPush       SuscripcionPush[]
   suscripcionTelegram     SuscripcionTelegram?
+  telegramCheckIn         TelegramCheckIn?
   puntosJornadaComoJugador1 PuntoJornada[] @relation("puntoJornadaJugador1")
   puntosJornadaComoJugador2 PuntoJornada[] @relation("puntoJornadaJugador2")
 }
@@ -99,6 +100,22 @@ model SuscripcionTelegram {
   chatId      String   @unique
   username    String?
   vinculadoEn DateTime @default(now())
+}
+
+// Token de check-in de Telegram: identifica a un Jugador para vincular su
+// chat cuando pulsa "Iniciar" en el bot (ver generarEnlaceCheckIn en
+// telegram.js). Antes se usaba directamente un JWT como parámetro `start`
+// del enlace, pero Telegram solo admite ahí letras, números, "_" y "-" (nada
+// de puntos) — un JWT ("cabecera.payload.firma") no es válido y el enlace
+// nunca llegaba a completar el check-in. Por eso ahora se genera un token
+// corto y opaco (base64url, mismo alfabeto que exige Telegram) y se guarda
+// aquí la relación token -> jugador. Un jugador solo tiene un token vigente
+// a la vez (se reutiliza/renueva, no se acumulan).
+model TelegramCheckIn {
+  token     String   @id
+  jugadorId String   @unique
+  jugador   Jugador  @relation(fields: [jugadorId], references: [id], onDelete: Cascade)
+  creadoEn  DateTime @default(now())
 }
 
 model Plataforma {

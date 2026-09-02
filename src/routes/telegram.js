@@ -21,7 +21,7 @@
 // "polling_error" desaparece, ahora es la opción `onError` de
 // `startPolling()`.
 import { Bot } from "node-telegram-bot-api";
-import jwt from "jsonwebtoken";
+import { randomBytes } from "crypto";
 import { PrismaClient } from "@prisma/client";
 
 const prisma = new PrismaClient();
@@ -54,19 +54,13 @@ export function iniciarBotTelegram() {
       return;
     }
 
-    let payload;
-    try {
-      payload = jwt.verify(tokenCheckIn, process.env.JWT_SECRET);
-    } catch {
+    const checkIn = await prisma.telegramCheckIn.findUnique({ where: { token: tokenCheckIn } });
+    if (!checkIn) {
       await ctx.reply("Ese enlace de avisos no es válido. Pide uno nuevo al club.");
       return;
     }
-    if (payload.tipo !== "checkin" || !payload.jugadorId) {
-      await ctx.reply("Ese enlace de avisos no es válido.");
-      return;
-    }
 
-    const jugador = await prisma.jugador.findUnique({ where: { id: payload.jugadorId } });
+    const jugador = await prisma.jugador.findUnique({ where: { id: checkIn.jugadorId } });
     if (!jugador) {
       await ctx.reply("No se ha encontrado tu ficha de jugador. Contacta con el club.");
       return;
@@ -148,17 +142,28 @@ export async function enviarTelegramAJugador(jugadorId, texto, imagenUrl) {
 }
 
 // Genera el enlace de check-in permanente de un jugador invitado: un token
-// firmado (sin caducidad, reutiliza JWT_SECRET) que identifica solo a ese
-// jugador. urlCheckIn es la página propia del club (explica qué es esto);
-// urlTelegram es el deep-link directo al bot con el token ya incluido
+// corto y opaco (base64url) que identifica solo a ese jugador, guardado en
+// TelegramCheckIn. Antes se usaba un JWT como token, pero el parámetro
+// `start` de los deep-links de Telegram solo admite letras, números, "_" y
+// "-" (nada de puntos) — un JWT ("cabecera.payload.firma") no es válido ahí
+// y el check-in nunca llegaba a completarse (ver comentario en
+// schema.prisma). Un jugador solo tiene un token vigente a la vez: si ya
+// tenía uno se reutiliza, no se genera uno nuevo en cada llamada (así el
+// enlace ya compartido/copiado antes sigue funcionando).
+// urlCheckIn es la página propia del club (explica qué es esto); urlTelegram
+// es el deep-link directo al bot con el token ya incluido
 // (t.me/<bot>?start=<token>), por si se prefiere compartir ese directamente.
-export function generarEnlaceCheckIn(jugadorId) {
-  const token = jwt.sign({ tipo: "checkin", jugadorId }, process.env.JWT_SECRET);
+export async function generarEnlaceCheckIn(jugadorId) {
+  let checkIn = await prisma.telegramCheckIn.findUnique({ where: { jugadorId } });
+  if (!checkIn) {
+    const token = randomBytes(24).toString("base64url");
+    checkIn = await prisma.telegramCheckIn.create({ data: { token, jugadorId } });
+  }
   const botUsername = process.env.TELEGRAM_BOT_USERNAME || null;
   const frontendUrl = (process.env.FRONTEND_URL || "").replace(/\/$/, "");
   return {
-    token,
-    urlCheckIn: frontendUrl ? `${frontendUrl}/aviso/${token}` : null,
-    urlTelegram: botUsername ? `https://t.me/${botUsername}?start=${token}` : null,
+    token: checkIn.token,
+    urlCheckIn: frontendUrl ? `${frontendUrl}/aviso/${checkIn.token}` : null,
+    urlTelegram: botUsername ? `https://t.me/${botUsername}?start=${checkIn.token}` : null,
   };
 }

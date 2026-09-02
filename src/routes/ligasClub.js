@@ -7,6 +7,7 @@ import { notificarJugadores } from "./notificar.js";
 import { clasificacionPorGrupos } from "../lib/clasificacionLiga.js";
 import { construirRondaUnoConGrupos } from "../lib/cruceGruposFinal.js";
 import { diasRestantesPapelera } from "../lib/papelera.js";
+import { urlPublicaLiga } from "../lib/enlacesPublicos.js";
 import { requireAdmin } from "../middleware/requireAdmin.js";
 
 // "A", "B", "C"... — nombres de grupo para `numeroGrupos` grupos.
@@ -493,11 +494,13 @@ async function notificarPartidoDeLiga(partido, motivo = "programado") {
 
   const nombreLiga = liga?.nombre || "Liga del club";
   const enfrentamiento = `${partido.participante1 || "?"} vs ${partido.participante2 || "?"}`;
+  const url = urlPublicaLiga(partido.ligaId);
 
   if (motivo === "en_curso") {
     await notificarJugadores(jugadorIds, {
       titulo: `¡Tu partido empieza ahora! ${nombreLiga}`,
       cuerpo: `${enfrentamiento}${partido.maquina ? ` en ${partido.maquina}` : ""}.`,
+      url,
     });
     return;
   }
@@ -510,6 +513,7 @@ async function notificarPartidoDeLiga(partido, motivo = "programado") {
     cuerpo: `${enfrentamiento}${fechaTexto ? ` el ${fechaTexto}` : ""}${
       partido.maquinaCalendario ? ` en ${partido.maquinaCalendario.nombre}` : ""
     }.`,
+    url,
   });
 }
 

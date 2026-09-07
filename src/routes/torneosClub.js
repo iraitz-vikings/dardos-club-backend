@@ -517,6 +517,49 @@ router.delete("/participantes/:id", requireAdmin, async (req, res) => {
   res.status(204).end();
 });
 
+// PUT /api/torneos-club/participantes/:id - vincula (o desvincula) un
+// participante ya apuntado a un jugador del club, SIN tocar su etiqueta —
+// la etiqueta es la que ya usa el cuadrante sorteado para identificarlo en
+// los enfrentamientos (CuadroPartido.jugador1/jugador2), así que cambiarla
+// rompería ese enlace. Pensado para corregir un alta hecha mal: un invitado
+// apuntado escribiendo su nombre a mano (sin ficha de jugador del club) que
+// luego se da de alta correctamente como invitado del club — se vincula
+// aquí a posteriori, sin tener que rehacer el sorteo ni reiniciar el
+// cuadrante. Si ese cuadrante ya tenía puntos asignados (PuntoJornada) para
+// esta etiqueta, se actualiza también esa fila para que la clasificación
+// general recoja el cambio sin tener que "Asignar puntos" otra vez.
+router.put("/participantes/:id", requireAdmin, async (req, res) => {
+  const { id } = req.params;
+  const { jugador1Id, jugador2Id } = req.body;
+
+  const actual = await prisma.participanteCuadrante.findUnique({ where: { id } });
+  if (!actual) return res.status(404).json({ error: "Participante no encontrado" });
+
+  if (jugador1Id) {
+    const j = await prisma.jugador.findUnique({ where: { id: jugador1Id } });
+    if (!j) return res.status(404).json({ error: "El primer jugador no existe" });
+  }
+  if (jugador2Id) {
+    const j = await prisma.jugador.findUnique({ where: { id: jugador2Id } });
+    if (!j) return res.status(404).json({ error: "El segundo jugador no existe" });
+  }
+
+  const participante = await prisma.participanteCuadrante.update({
+    where: { id },
+    data: {
+      jugador1Id: jugador1Id !== undefined ? jugador1Id || null : undefined,
+      jugador2Id: jugador2Id !== undefined ? jugador2Id || null : undefined,
+    },
+  });
+
+  await prisma.puntoJornada.updateMany({
+    where: { cuadranteId: actual.cuadranteId, etiqueta: actual.etiqueta },
+    data: { jugador1Id: participante.jugador1Id, jugador2Id: participante.jugador2Id },
+  });
+
+  res.json(participante);
+});
+
 // POST /api/torneos-club/cuadrantes/:cuadranteId/sortear-parejas - reparte al
 // azar una lista de jugadores individuales en parejas ("parejas ciegas"),
 // creando un participante por cada pareja resultante (protegido)
@@ -958,10 +1001,15 @@ router.post("/cuadrantes/:cuadranteId/asignar-puntos", requireAdmin, async (req,
 
 // GET /api/torneos-club/:id/clasificacion-general - suma los puntos de todos
 // los cuadrantes (jornadas) ya repartidos de un torneo "por jornadas", por
-// jugador del club (una pareja reparte los mismos puntos a los dos
-// jugadores). Pensado para elegir a los mejores de varias jornadas (p.ej.
-// selección de Euskadi). Los participantes sin jugadorId (nombre suelto, sin
-// ficha en el club) no se pueden sumar a nadie y se listan aparte.
+// jugador (una pareja reparte los mismos puntos a los dos jugadores).
+// Pensado para elegir a los mejores de varias jornadas (p.ej. selección de
+// Euskadi). Los participantes sin jugadorId (nombre suelto, apuntado a mano
+// sin ficha de jugador del club) SÍ cuentan en esta clasificación — antes se
+// excluían del todo ("no se pueden sumar a nadie"), pero un invitado suelto
+// de un torneo concreto también puede acumular puntos de varias jornadas
+// igual que cualquier jugador del club, así que se agrupan por su etiqueta
+// (nombre) en vez de por jugadorId y se marcan con `invitado: true` para que
+// el frontend pueda distinguirlos si quiere.
 router.get("/:id/clasificacion-general", async (req, res) => {
   const { id } = req.params;
   const puntos = await prisma.puntoJornada.findMany({
@@ -973,31 +1021,26 @@ router.get("/:id/clasificacion-general", async (req, res) => {
     },
   });
 
-  const porJugador = new Map();
-  const sinFicha = [];
+  const porEntrada = new Map();
   for (const p of puntos) {
     const jugadores = [p.jugador1, p.jugador2].filter(Boolean);
-    if (jugadores.length === 0) {
-      sinFicha.push({ etiqueta: p.etiqueta, cuadrante: p.cuadrante.nombre, posicion: p.posicion, puntos: p.puntos });
-      continue;
-    }
-    for (const j of jugadores) {
-      if (!porJugador.has(j.id)) {
-        porJugador.set(j.id, {
-          jugadorId: j.id,
-          nombre: j.apodo || j.nombre,
-          puntosTotales: 0,
-          jornadas: [],
-        });
+    const claves =
+      jugadores.length > 0
+        ? jugadores.map((j) => ({ clave: j.id, jugadorId: j.id, nombre: j.apodo || j.nombre, invitado: false }))
+        : [{ clave: `invitado:${p.etiqueta}`, jugadorId: null, nombre: p.etiqueta, invitado: true }];
+
+    for (const { clave, jugadorId, nombre, invitado } of claves) {
+      if (!porEntrada.has(clave)) {
+        porEntrada.set(clave, { jugadorId, nombre, invitado, puntosTotales: 0, jornadas: [] });
       }
-      const entrada = porJugador.get(j.id);
+      const entrada = porEntrada.get(clave);
       entrada.puntosTotales += p.puntos;
       entrada.jornadas.push({ cuadrante: p.cuadrante.nombre, posicion: p.posicion, puntos: p.puntos });
     }
   }
 
-  const clasificacionGeneral = [...porJugador.values()].sort((a, b) => b.puntosTotales - a.puntosTotales);
-  res.json({ clasificacionGeneral, sinFicha });
+  const clasificacionGeneral = [...porEntrada.values()].sort((a, b) => b.puntosTotales - a.puntosTotales);
+  res.json({ clasificacionGeneral });
 });
 
 // Avisa (Web Push y/o Telegram) a los jugadores del club implicados en un

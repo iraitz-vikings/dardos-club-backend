@@ -135,7 +135,16 @@ export function generarPartidos(tamano, tipoEliminacion) {
       rondaA[i].siguienteSlotGanador = 1;
     }
     if (g < k) {
-      const perdedoresWb = [...wbRondas[g]].reverse();
+      // Los perdedores de cada ronda del cuadro de ganadores "cruzan" de lado
+      // al entrar al cuadro de perdedores para evitar enfrentamientos
+      // repetidos recientes, pero ese cruce se ALTERNA ronda a ronda: la
+      // primera caída (WB ronda 1 -> LB ronda 1, gestionada aparte más
+      // arriba) no cruza, la segunda caída (g=1) sí cruza, la tercera (g=2)
+      // no debe cruzar, la cuarta (g=3) vuelve a cruzar, etc. Antes se
+      // invertía el orden (.reverse()) en todas las rondas por igual, lo que
+      // producía un cruce en la tercera caída cuando no debía cruzar.
+      const cruzar = g % 2 === 1;
+      const perdedoresWb = cruzar ? [...wbRondas[g]].reverse() : [...wbRondas[g]];
       for (let i = 0; i < rondaB.length; i++) {
         perdedoresWb[i].siguientePartidoPerdedorId = rondaB[i].id;
         perdedoresWb[i].siguienteSlotPerdedor = 2;
@@ -803,43 +812,48 @@ router.post("/cuadrantes/:cuadranteId/sorteo", requireAdmin, async (req, res) =>
     [noSembrados[i], noSembrados[j]] = [noSembrados[j], noSembrados[i]];
   }
 
-  // Posiciones (0-indexadas) del cuadro, tamaño = cuadrante.tamano. Las cabezas de
-  // serie ocupan posiciones fijas; el resto (participantes + huecos "bye") se reparte
-  // al azar en las posiciones restantes.
-  const orden = ordenSemillas(cuadrante.tamano);
+  // Posiciones (0-indexadas) del cuadro, tamaño = cuadrante.tamano. Se asignan por
+  // "rango" (1 = mejor, tamano = peor) usando la misma estructura recursiva de
+  // ordenSemillas que ya coloca las cabezas de serie sin que se crucen pronto:
+  //   1) Las cabezas de serie ocupan los rangos 1..N en ese orden, como siempre.
+  //   2) Los "bye" (huecos sin participante real) ocupan los rangos PEORES que
+  //      queden libres (tamano, tamano-1, ...). En la primera ronda cada rango
+  //      se empareja con su "espejo" (rango r contra rango tamano+1-r), así que
+  //      dar los rangos peores a los byes hace que emparejen contra los mejores
+  //      rangos disponibles — igual que en un sorteo real, donde los pases
+  //      directos "protegen" a las mejores cabezas de serie en vez de
+  //      amontonarse al azar en un lado del cuadro — y, por construcción
+  //      recursiva, quedan repartidos por las distintas mitades/cuartos del
+  //      cuadro en vez de agruparse. Como máximo hay tamano/2 byes (ya validado
+  //      más arriba), así que nunca puede haber dos byes en el mismo
+  //      enfrentamiento de la ronda 1: sus rangos espejo caen siempre entre los
+  //      mejores, que nunca son bye.
+  //   3) El resto de rangos libres (los mejores que quedan) se rellenan con los
+  //      no sembrados, ya barajados al azar entre ellos.
+  const orden = ordenSemillas(cuadrante.tamano); // orden[posición] = rango (1..tamano)
   const posiciones = new Array(cuadrante.tamano).fill(null);
+
+  const rangosOcupados = new Set();
   semillasValidas.forEach((nombre, i) => {
-    const pos = orden.indexOf(i + 1);
-    posiciones[pos] = nombre;
+    const rango = i + 1;
+    posiciones[orden.indexOf(rango)] = nombre;
+    rangosOcupados.add(rango);
   });
 
-  const pool = [...noSembrados, ...Array(byes).fill(null)];
-  for (let i = pool.length - 1; i > 0; i--) {
-    const j = Math.floor(Math.random() * (i + 1));
-    [pool[i], pool[j]] = [pool[j], pool[i]];
-  }
-  let cursorPool = 0;
-  for (let i = 0; i < posiciones.length; i++) {
-    if (posiciones[i] === null) posiciones[i] = pool[cursorPool++];
+  let byesRestantes = byes;
+  for (let rango = cuadrante.tamano; rango >= 1 && byesRestantes > 0; rango--) {
+    if (rangosOcupados.has(rango)) continue;
+    rangosOcupados.add(rango); // posiciones[orden.indexOf(rango)] queda en null: es el bye
+    byesRestantes--;
   }
 
-  // Ningún enfrentamiento puede tener dos "bye" a la vez: si ocurre, se intercambia
-  // con un participante real de otro enfrentamiento que no sea cabeza de serie.
-  for (let m = 0; m < numPartidosR1; m++) {
-    const a = m * 2, b = m * 2 + 1;
-    if (posiciones[a] === null && posiciones[b] === null) {
-      for (let m2 = 0; m2 < numPartidosR1; m2++) {
-        const c = m2 * 2, d = m2 * 2 + 1;
-        if (posiciones[c] !== null && posiciones[d] !== null && !semillasValidas.includes(posiciones[c])) {
-          [posiciones[a], posiciones[c]] = [posiciones[c], posiciones[a]];
-          break;
-        } else if (posiciones[c] !== null && posiciones[d] !== null && !semillasValidas.includes(posiciones[d])) {
-          [posiciones[a], posiciones[d]] = [posiciones[d], posiciones[a]];
-          break;
-        }
-      }
-    }
+  const rangosLibres = [];
+  for (let rango = 1; rango <= cuadrante.tamano; rango++) {
+    if (!rangosOcupados.has(rango)) rangosLibres.push(rango);
   }
+  rangosLibres.forEach((rango, i) => {
+    posiciones[orden.indexOf(rango)] = noSembrados[i];
+  });
 
   // Se limpia todo el cuadrante (nombres, ganadores, resultados) antes de aplicar el
   // sorteo nuevo, para no dejar datos de un sorteo anterior a medias.

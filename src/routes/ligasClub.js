@@ -553,13 +553,18 @@ router.put("/partidos/:partidoId", requireAdmin, async (req, res) => {
   const antes = await prisma.partidoLiga.findUnique({ where: { id: partidoId } });
   if (!antes) return res.status(404).json({ error: "Enfrentamiento no encontrado" });
   try {
+    // Al fijar un ganador real se limpia "en curso" en el mismo paso, igual
+    // que en el PUT de cuadrantes (torneosClub.js) — evita que un partido ya
+    // terminado se quede "ocupando" su máquina para el resto de la gestión.
+    const seFijaGanador = ganador !== undefined && !!ganador;
+    const enCursoFinal = seFijaGanador ? false : enCurso !== undefined ? !!enCurso : undefined;
     const partido = await prisma.partidoLiga.update({
       where: { id: partidoId },
       data: {
         resultado: resultado !== undefined ? resultado || null : undefined,
         ganador: ganador !== undefined ? ganador || null : undefined,
         maquina: maquina !== undefined ? maquina || null : undefined,
-        enCurso: enCurso !== undefined ? !!enCurso : undefined,
+        enCurso: enCursoFinal,
       },
     });
 

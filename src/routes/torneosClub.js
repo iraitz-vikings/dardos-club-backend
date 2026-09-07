@@ -1262,6 +1262,16 @@ router.put("/partidos/:partidoId", requireAdmin, async (req, res) => {
     }
   }
 
+  // Al fijar un ganador real (no al desmarcarlo con el botón "Ganó") se
+  // limpia "en curso" en el mismo paso, aunque el body no lo pida — antes
+  // había que acordarse de desmarcarlo a mano, y si no, el partido se quedaba
+  // colgado como "en curso" (con su máquina "ocupada") aunque ya estuviera
+  // terminado, lo que confundía la gestión de máquinas (dos partidos
+  // pareciendo ocupar la misma máquina a la vez, el banner "en directo" de
+  // la portada mostrando partidos ya acabados, etc.).
+  const seFijaGanador = ganador !== undefined && !!ganador;
+  const enCursoFinal = seFijaGanador ? false : enCurso !== undefined ? !!enCurso : undefined;
+
   const partido = await prisma.cuadroPartido.update({
     where: { id: partidoId },
     data: {
@@ -1270,7 +1280,7 @@ router.put("/partidos/:partidoId", requireAdmin, async (req, res) => {
       jugador2: jugador2 !== undefined ? jugador2 || null : undefined,
       resultado: resultado !== undefined ? resultado || null : undefined,
       ganador: ganador !== undefined ? ganador || null : undefined,
-      enCurso: enCurso !== undefined ? !!enCurso : undefined,
+      enCurso: enCursoFinal,
     },
   });
 

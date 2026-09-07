@@ -905,8 +905,14 @@ router.delete("/cuadrantes/:cuadranteId", requireAdmin, async (req, res) => {
 
 // PUT /api/torneos-club/cuadrantes/:cuadranteId/estado - cambia el estado
 // ("pendiente"/"activo"/"finalizado") de un cuadrante, para el modo "por
-// jornadas" (ver TorneoClub.modoJornadas). Puramente informativo/de
-// presentación: no bloquea ni desbloquea nada por sí solo.
+// jornadas" (ver TorneoClub.modoJornadas). Mayormente informativo/de
+// presentación (no bloquea ni desbloquea nada por sí solo), salvo un efecto
+// concreto al pasar a "finalizado": se limpia el flag `enCurso` de todos sus
+// partidos. Si un partido se quedó marcado "en curso" sin que nadie lo
+// desmarcase a mano al terminar la jornada, ese flag colgado seguía
+// apareciendo como partido en directo en sitios que no miran el estado del
+// cuadrante (p.ej. el banner "En directo" de la portada, ver LiveTicker.jsx)
+// incluso con el cuadrante ya dado por terminado.
 const ESTADOS_CUADRANTE = ["pendiente", "activo", "finalizado"];
 router.put("/cuadrantes/:cuadranteId/estado", requireAdmin, async (req, res) => {
   const { cuadranteId } = req.params;
@@ -916,6 +922,9 @@ router.put("/cuadrantes/:cuadranteId/estado", requireAdmin, async (req, res) => 
   }
   try {
     const cuadrante = await prisma.cuadrante.update({ where: { id: cuadranteId }, data: { estado } });
+    if (estado === "finalizado") {
+      await prisma.cuadroPartido.updateMany({ where: { cuadranteId, enCurso: true }, data: { enCurso: false } });
+    }
     res.json(cuadrante);
   } catch {
     res.status(404).json({ error: "Cuadrante no encontrado" });

@@ -208,6 +208,77 @@ async function historialDeJugador(jugadorId) {
   return { torneos: historialTorneos, ligas: historialLigas };
 }
 
+// Vacío por defecto de cada bloque de "Acero" (501/cricket), para que el
+// frontend siempre reciba números en vez de tener que comprobar null/undefined.
+function bloqueAceroVacio501() {
+  return {
+    partidosJugados: 0, partidosGanados: 0, legsJugados: 0, legsGanados: 0,
+    dardos: 0, puntos: 0, ppd: 0, media: 0,
+    visitas100: 0, visitas140: 0, visitas180: 0, mejorCheckout: 0,
+  };
+}
+function bloqueAceroVacioCricket() {
+  return { partidosJugados: 0, partidosGanados: 0, legsJugados: 0, legsGanados: 0, visitas: 0, marcas: 0, mpr: 0 };
+}
+
+// Agrega las estadísticas "Acero" (partidas de torneo/liga jugadas de verdad
+// con la herramienta de marcador — ver PartidaHerramienta y el plan
+// "herramienta-marcador-torneos-ligas" guardado en el proyecto, Slice 3+4/5)
+// de un jugador concreto. Solo cuentan las partidas FINALIZADAS: mientras un
+// partido está a medias no hay nada estable que promediar todavía. No se
+// filtra por torneo/liga: es la media de "toda la vida" del jugador con la
+// herramienta, igual que las medias de fabricante.
+//
+// Nunca entran aquí partidas del marcador libre (Marcadores.jsx, "jugar
+// solo"): esas no crean ninguna PartidaHerramienta, solo existen en la
+// pantalla mientras se juega. Por construcción, todo lo que hay en esta
+// tabla es de torneo o liga.
+async function estadisticasAceroDeJugador(jugadorId) {
+  const todas = await prisma.partidaHerramienta.findMany({ where: { finalizada: true } });
+  const partidas = todas.filter(
+    (p) => p.jugadoresId1.includes(jugadorId) || p.jugadoresId2.includes(jugadorId)
+  );
+
+  const stats501 = bloqueAceroVacio501();
+  const statsCricket = bloqueAceroVacioCricket();
+
+  for (const partida of partidas) {
+    const lado = partida.jugadoresId1.includes(jugadorId) ? 1 : 2;
+    const legsPropios = lado === 1 ? partida.legsGanados1 : partida.legsGanados2;
+    const legsRivales = lado === 1 ? partida.legsGanados2 : partida.legsGanados1;
+    const ganoElPartido = legsPropios > legsRivales;
+    const bloque = partida.juego === "cricket" ? statsCricket : stats501;
+
+    bloque.partidosJugados += 1;
+    if (ganoElPartido) bloque.partidosGanados += 1;
+
+    for (const leg of partida.legs) {
+      const propias = leg.estadisticas?.[jugadorId];
+      if (!propias) continue; // por si algún leg viejo no llegó a registrar a este jugador
+      bloque.legsJugados += 1;
+      if (leg.ladoGanador === lado) bloque.legsGanados += 1;
+
+      if (partida.juego === "cricket") {
+        statsCricket.visitas += propias.visitas || 0;
+        statsCricket.marcas += propias.marcas || 0;
+      } else {
+        stats501.dardos += propias.dardos || 0;
+        stats501.puntos += propias.puntos || 0;
+        stats501.visitas100 += propias.visitas100 || 0;
+        stats501.visitas140 += propias.visitas140 || 0;
+        stats501.visitas180 += propias.visitas180 || 0;
+        if (propias.checkout && propias.checkout > stats501.mejorCheckout) stats501.mejorCheckout = propias.checkout;
+      }
+    }
+  }
+
+  stats501.ppd = stats501.dardos > 0 ? Number((stats501.puntos / stats501.dardos).toFixed(2)) : 0;
+  stats501.media = Number((stats501.ppd * 3).toFixed(2));
+  statsCricket.mpr = statsCricket.visitas > 0 ? Number((statsCricket.marcas / statsCricket.visitas).toFixed(2)) : 0;
+
+  return { "501": stats501, cricket: statsCricket };
+}
+
 // GET /api/jugadores/:id/historial - palmarés (torneos y ligas del club en
 // los que ha participado) de un jugador cualquiera del directorio. Protegido
 // con requireAuth igual que /directorio: es información visible entre
@@ -219,6 +290,17 @@ router.get("/:id/historial", requireAuth, async (req, res) => {
   if (!jugador) return res.status(404).json({ error: "Jugador no encontrado" });
   const historial = await historialDeJugador(jugador.id);
   res.json(historial);
+});
+
+// GET /api/jugadores/:id/estadisticas-acero - medias de "Acero" (partidas de
+// torneo/liga jugadas con la herramienta de marcador) de un jugador
+// cualquiera del directorio. Mismo nivel de protección que /historial y
+// /directorio: visible entre socios, no pública en internet.
+router.get("/:id/estadisticas-acero", requireAuth, async (req, res) => {
+  const jugador = await prisma.jugador.findUnique({ where: { id: req.params.id } });
+  if (!jugador) return res.status(404).json({ error: "Jugador no encontrado" });
+  const estadisticas = await estadisticasAceroDeJugador(jugador.id);
+  res.json(estadisticas);
 });
 
 // DELETE /api/jugadores/:id - borra un jugador (protegido). Si pertenece a un

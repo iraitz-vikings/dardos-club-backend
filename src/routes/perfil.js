@@ -1,6 +1,8 @@
 import { Router } from "express";
 import { PrismaClient } from "@prisma/client";
+import bcrypt from "bcryptjs";
 import { requireAuth } from "./auth.js";
+import { pinValido } from "./jugadores.js";
 
 const prisma = new PrismaClient();
 const router = Router();
@@ -32,6 +34,7 @@ router.get("/", requireAuth, async (req, res) => {
     bio: jugador.bio,
     email: usuario.email,
     rol: usuario.rol,
+    tienePinPartidas: !!jugador.pinPartidasHash,
     idsFabricantes: idsFabricantes.map((i) => ({
       fabricanteId: i.fabricanteId,
       nombreFabricante: i.fabricante.nombre,
@@ -214,6 +217,22 @@ router.put("/", requireAuth, async (req, res) => {
   }
 
   res.json(actualizado);
+});
+
+// PUT /api/perfil/pin - el socio logueado se pone o cambia su propio PIN de
+// partidas (4 dígitos), el que usará luego para identificarse en la página
+// pública al jugar un partido de torneo/liga con la herramienta de marcador.
+// No hace falta repetir la contraseña: ya ha demostrado quién es con el JWT
+// de su sesión, igual que para el resto de cambios de "Mi perfil".
+router.put("/pin", requireAuth, async (req, res) => {
+  const { pin } = req.body;
+  if (!pinValido(pin)) {
+    return res.status(400).json({ error: "El PIN tiene que ser de 4 dígitos." });
+  }
+  const jugador = await obtenerOCrearJugador(req.usuario.sub);
+  const pinPartidasHash = await bcrypt.hash(pin, 10);
+  await prisma.jugador.update({ where: { id: jugador.id }, data: { pinPartidasHash } });
+  res.json({ ok: true });
 });
 
 export default router;

@@ -1,10 +1,19 @@
 import { Router } from "express";
 import { PrismaClient } from "@prisma/client";
+import bcrypt from "bcryptjs";
 import { requireAuth } from "./auth.js";
 import { requireAdmin } from "../middleware/requireAdmin.js";
 
 const prisma = new PrismaClient();
 const router = Router();
+
+// PIN de partidas: 4 dígitos exactos. Usado por jugadores.js (aquí, para que
+// el admin lo ponga a cualquier jugador) y por perfil.js (para que un socio
+// se lo cambie él mismo) — ver el comentario de `pinPartidasHash` en
+// schema.prisma para qué es y por qué es un secreto aparte de la contraseña.
+export function pinValido(pin) {
+  return typeof pin === "string" && /^\d{4}$/.test(pin);
+}
 
 // GET /api/jugadores - lista todos los jugadores del club (protegido), incluye
 // invitados sin cuenta de socio (usuarioId null)
@@ -13,7 +22,10 @@ router.get("/", requireAdmin, async (_req, res) => {
     include: { usuario: { select: { email: true } } },
     orderBy: { nombre: "asc" },
   });
-  res.json(jugadores);
+  // pinPartidasHash no sale nunca de aquí (es un hash, pero no hace falta
+  // mandarlo ni para eso): solo si tiene uno puesto, para que el admin sepa
+  // si tiene que "poner" o "cambiar" el PIN.
+  res.json(jugadores.map(({ pinPartidasHash, ...j }) => ({ ...j, tienePinPartidas: !!pinPartidasHash })));
 });
 
 // POST /api/jugadores - crea un jugador rápido (invitado, sin cuenta) (protegido)
@@ -46,6 +58,21 @@ router.put("/:id", requireAdmin, async (req, res) => {
     data: { nombre: nombre.trim(), ...(apodo !== undefined ? { apodo: apodo.trim() || null } : {}) },
   });
   res.json(actualizado);
+});
+
+// PUT /api/jugadores/:id/pin - el admin pone o cambia el PIN de partidas de
+// cualquier jugador (socio o invitado), p.ej. si se le ha olvidado. El socio
+// también puede cambiarse el suyo propio desde su perfil (ver PUT /api/perfil/pin).
+router.put("/:id/pin", requireAdmin, async (req, res) => {
+  const { pin } = req.body;
+  if (!pinValido(pin)) {
+    return res.status(400).json({ error: "El PIN tiene que ser de 4 dígitos." });
+  }
+  const jugador = await prisma.jugador.findUnique({ where: { id: req.params.id } });
+  if (!jugador) return res.status(404).json({ error: "Jugador no encontrado" });
+  const pinPartidasHash = await bcrypt.hash(pin, 10);
+  await prisma.jugador.update({ where: { id: jugador.id }, data: { pinPartidasHash } });
+  res.json({ ok: true });
 });
 
 // GET /api/jugadores/directorio - lista pública para socios logueados (sin datos

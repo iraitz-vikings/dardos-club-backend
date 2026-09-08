@@ -8,6 +8,7 @@ import { notificarJugadores } from "./notificar.js";
 import { diasRestantesPapelera } from "../lib/papelera.js";
 import { urlPublicaCuadrante } from "../lib/enlacesPublicos.js";
 import { requireAdmin } from "../middleware/requireAdmin.js";
+import { validarConfiguracionHerramienta } from "../lib/configuracionHerramienta.js";
 
 const prisma = new PrismaClient();
 const router = Router();
@@ -309,13 +310,15 @@ router.get("/:id", async (req, res) => {
 });
 
 router.post("/", requireAdmin, async (req, res) => {
-  const { nombre, descripcion, fechaInicio, fechaFin, insigniaUrl, visibilidad, numeroMaquinas, tipoEliminacion, modalidad, afectaCalendario, notificaciones, modoJornadas, puntosPorPosicion, imagenEliminadoUrl, imagenCampeonUrl, imagenBienvenidaUrl } = req.body;
+  const { nombre, descripcion, fechaInicio, fechaFin, insigniaUrl, visibilidad, numeroMaquinas, tipoEliminacion, modalidad, afectaCalendario, notificaciones, modoJornadas, puntosPorPosicion, imagenEliminadoUrl, imagenCampeonUrl, imagenBienvenidaUrl, configuracionHerramienta } = req.body;
   if (!nombre || !fechaInicio || !fechaFin) {
     return res.status(400).json({ error: "Faltan campos obligatorios" });
   }
   const modalidadesValidas = ["individual", "parejas_hechas", "parejas_ciegas"];
   const puntos = validarPuntosPorPosicion(puntosPorPosicion);
   if (!puntos.ok) return res.status(400).json({ error: puntos.error });
+  const herramienta = validarConfiguracionHerramienta(configuracionHerramienta);
+  if (!herramienta.ok) return res.status(400).json({ error: herramienta.error });
   const torneo = await prisma.torneoClub.create({
     data: {
       nombre,
@@ -334,6 +337,7 @@ router.post("/", requireAdmin, async (req, res) => {
       imagenEliminadoUrl: imagenEliminadoUrl || null,
       imagenCampeonUrl: imagenCampeonUrl || null,
       imagenBienvenidaUrl: imagenBienvenidaUrl || null,
+      configuracionHerramienta: herramienta.valor,
     },
   });
   res.status(201).json(torneo);
@@ -341,9 +345,11 @@ router.post("/", requireAdmin, async (req, res) => {
 
 router.put("/:id", requireAdmin, async (req, res) => {
   const { id } = req.params;
-  const { nombre, descripcion, fechaInicio, fechaFin, insigniaUrl, visibilidad, numeroMaquinas, tipoEliminacion, finalizado, notificaciones, modoJornadas, puntosPorPosicion, imagenEliminadoUrl, imagenCampeonUrl, imagenBienvenidaUrl } = req.body;
+  const { nombre, descripcion, fechaInicio, fechaFin, insigniaUrl, visibilidad, numeroMaquinas, tipoEliminacion, finalizado, notificaciones, modoJornadas, puntosPorPosicion, imagenEliminadoUrl, imagenCampeonUrl, imagenBienvenidaUrl, configuracionHerramienta } = req.body;
   const puntos = validarPuntosPorPosicion(puntosPorPosicion);
   if (!puntos.ok) return res.status(400).json({ error: puntos.error });
+  const herramienta = validarConfiguracionHerramienta(configuracionHerramienta);
+  if (!herramienta.ok) return res.status(400).json({ error: herramienta.error });
   try {
     const torneo = await prisma.torneoClub.update({
       where: { id },
@@ -363,6 +369,7 @@ router.put("/:id", requireAdmin, async (req, res) => {
         imagenEliminadoUrl: imagenEliminadoUrl !== undefined ? imagenEliminadoUrl || null : undefined,
         imagenCampeonUrl: imagenCampeonUrl !== undefined ? imagenCampeonUrl || null : undefined,
         imagenBienvenidaUrl: imagenBienvenidaUrl !== undefined ? imagenBienvenidaUrl || null : undefined,
+        configuracionHerramienta: configuracionHerramienta !== undefined ? herramienta.valor : undefined,
       },
     });
     res.json(torneo);

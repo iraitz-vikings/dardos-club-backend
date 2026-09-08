@@ -315,6 +315,12 @@ model TorneoClub {
   // notificarSorteoCuadrante en src/routes/torneosClub.js.
   imagenBienvenidaUrl String?
   finalizado       Boolean  @default(false)
+  // Configuración de la herramienta de marcador (501/Cricket) para jugar los
+  // partidos de este torneo desde la página pública en vez de que el admin
+  // meta el resultado a mano — ver src/lib/configuracionHerramienta.js para
+  // la forma exacta del JSON (activa/porDefecto/porRonda) y el plan guardado
+  // en el proyecto. null = todavía sin configurar (equivale a desactivada).
+  configuracionHerramienta Json?
   // Borrado suave (papelera): null = activo; con fecha = en la papelera,
   // recuperable durante 7 días (ver src/lib/papelera.js) antes de que el
   // cron nocturno lo purgue de verdad.
@@ -487,6 +493,11 @@ model LigaClub {
   // sorteo — ver notificarSorteoCuadrante en src/routes/torneosClub.js.
   imagenBienvenidaUrl String?
   finalizado       Boolean  @default(false)
+  // Configuración de la herramienta de marcador (501/Cricket) para jugar los
+  // partidos de esta liga desde la página pública en vez de que el admin
+  // meta el resultado a mano — mismo formato que en TorneoClub, ver
+  // src/lib/configuracionHerramienta.js. null = todavía sin configurar.
+  configuracionHerramienta Json?
   // Borrado suave (papelera): null = activa; con fecha = en la papelera,
   // recuperable durante 7 días (ver src/lib/papelera.js) antes de que el
   // cron nocturno la purgue de verdad.

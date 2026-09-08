@@ -30,6 +30,7 @@ import fabricantesRouter from "./routes/fabricantes.js";
 import competicionesExternasRouter from "./routes/competicionesExternas.js";
 import calendarioRouter from "./routes/calendario.js";
 import notificacionesRouter from "./routes/notificaciones.js";
+import partidasHerramientaRouter from "./routes/partidasHerramienta.js";
 
 const app = express();
 app.use(cors());
@@ -85,6 +86,10 @@ app.use("/api/notificaciones", notificacionesRouter);
 
 // Buscador global de la web (noticias, torneos, ligas)
 app.use("/api/buscar", buscarRouter);
+
+// Herramienta de marcador jugada desde la página pública (login con PIN,
+// partidos pendientes, jugar y aplicar el resultado) — ver src/routes/partidasHerramienta.js
+app.use("/api/partidas-herramienta", partidasHerramientaRouter);
 
 app.get("/api/health", (_req, res) => res.json({ ok: true }));
 

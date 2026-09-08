@@ -359,6 +359,10 @@ model CuadroPartido {
   // avisar dos veces si el cron se ejecuta más de una vez el mismo día.
   recordatorioEnviado  Boolean  @default(false)
 
+  // Partida jugada con la herramienta de marcador para este enfrentamiento
+  // concreto, si se ha usado — ver PartidaHerramienta.
+  partidaHerramienta PartidaHerramienta?
+
   actualizadoEn DateTime @updatedAt
 }
 
@@ -555,6 +559,67 @@ model PartidoLiga {
   // avisar dos veces si el cron se ejecuta más de una vez el mismo día.
   recordatorioEnviado  Boolean  @default(false)
 
+  // Partida jugada con la herramienta de marcador para este enfrentamiento
+  // concreto, si se ha usado — ver PartidaHerramienta.
+  partidaHerramienta PartidaHerramienta?
+
+  actualizadoEn DateTime @updatedAt
+}
+
+// Una partida jugada de verdad con la herramienta de marcador (diana/teclado)
+// desde la página pública, para un partido de torneo o de liga concreto —
+// ver src/routes/partidasHerramienta.js (Slice 3+4 del plan guardado en el
+// proyecto). Cuelga de un CuadroPartido (torneo, o cuadrante final de una
+// liga) o de un PartidoLiga (jornada de liga), nunca de los dos a la vez.
+// Solo existe una fila por partido real (@@unique en cada FK opcional): si
+// alguien reanuda la partida (recarga la página, cambia de dispositivo en
+// fases futuras) se seguirá jugando sobre la misma fila.
+//
+// Los jugadores/parejas se guardan tanto como etiqueta (para que, al
+// terminar, cuadre exactamente con jugador1/jugador2 o participante1/
+// participante2 del partido real) como por sus jugadorId (para poder sumar
+// las estadísticas al perfil de cada jugador concreto — pestaña "Acero" — y
+// para repartir correctamente los dardos de cada integrante en una pareja
+// con marcador compartido).
+model PartidaHerramienta {
+  id              String   @id @default(uuid())
+  cuadroPartidoId String?  @unique
+  cuadroPartido   CuadroPartido? @relation(fields: [cuadroPartidoId], references: [id])
+  partidoLigaId   String?  @unique
+  partidoLiga     PartidoLiga?   @relation(fields: [partidoLigaId], references: [id])
+
+  // Juego y reglas realmente usados en ESTA partida (ya resueltos a partir de
+  // configuracionParaRonda en el momento de crearla — ver
+  // src/lib/configuracionHerramienta.js). Si la configuración era "ambos",
+  // juego guarda el que se eligió al empezar a jugar, no "ambos".
+  juego       String
+  alMejorDe   Int
+  apertura    String?
+  cierre      String?
+  modoCricket String?
+
+  etiqueta1   String
+  etiqueta2   String
+  // IDs de Jugador de cada lado, y sus nombres para mostrar (apodo si tiene,
+  // si no el nombre) en el mismo orden — uno para individual, dos para
+  // pareja (marcador compartido, turnándose) — ver resolverParticipante en
+  // src/lib/partidasHerramienta.js. Se guardan ambos (no solo el id) para que
+  // la página de juego no tenga que resolver nombres aparte.
+  jugadoresId1 Json
+  jugadoresId2 Json
+  nombres1     Json
+  nombres2     Json
+
+  // Array de legs terminados: [{ numero, ladoGanador: 1|2, estadisticas: {
+  // [jugadorId]: {...} } }] — la forma exacta de "estadisticas" depende del
+  // juego (501: dardos/puntos/visitas100/visitas140/visitas180/checkout;
+  // cricket: visitas/marcas), ver src/lib/partidasHerramienta.js.
+  legs         Json     @default("[]")
+  legsGanados1 Int      @default(0)
+  legsGanados2 Int      @default(0)
+  finalizada   Boolean  @default(false)
+
+  creadoEn      DateTime @default(now())
   actualizadoEn DateTime @updatedAt
 }
 

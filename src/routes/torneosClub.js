@@ -1262,12 +1262,21 @@ router.put("/partidos/:partidoId/calendario", requireAdmin, async (req, res) => 
   }
 });
 
-router.put("/partidos/:partidoId", requireAdmin, async (req, res) => {
-  const { partidoId } = req.params;
-  const { maquina, jugador1, jugador2, resultado, ganador, enCurso } = req.body;
+// Aplica cambios (máquina, jugadores, resultado, ganador, en curso) a un
+// partido de cuadrante y resuelve todo lo que depende de ello: notificar al
+// jugador cuando empieza, avisos de eliminación/campeón, avance de
+// ganador/perdedor al siguiente partido (con resolución de byes en cascada) y
+// el caso especial de la gran final a doble eliminación. Se exporta para que
+// el flujo de la herramienta de marcador (ver src/routes/partidasHerramienta.js
+// — Slice 3+4) pueda llamar aquí en cuanto detecta que se ha alcanzado "al
+// mejor de N" en un partido jugado con la herramienta, en vez de duplicar o
+// desincronizar esta lógica respecto al PUT de administración de más abajo.
+// Devuelve el partido actualizado, o null si no existe.
+export async function aplicarResultadoCuadroPartido(partidoId, cambios) {
+  const { maquina, jugador1, jugador2, resultado, ganador, enCurso } = cambios;
 
   const actual = await prisma.cuadroPartido.findUnique({ where: { id: partidoId } });
-  if (!actual) return res.status(404).json({ error: "Enfrentamiento no encontrado" });
+  if (!actual) return null;
 
   if (enCurso) {
     const maquinaFinal = maquina !== undefined ? maquina : actual.maquina;
@@ -1390,6 +1399,13 @@ router.put("/partidos/:partidoId", requireAdmin, async (req, res) => {
     }
   }
 
+  return partido;
+}
+
+router.put("/partidos/:partidoId", requireAdmin, async (req, res) => {
+  const { partidoId } = req.params;
+  const partido = await aplicarResultadoCuadroPartido(partidoId, req.body);
+  if (!partido) return res.status(404).json({ error: "Enfrentamiento no encontrado" });
   res.json(partido);
 });
 

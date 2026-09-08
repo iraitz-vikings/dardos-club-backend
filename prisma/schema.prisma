@@ -52,6 +52,15 @@ model Jugador {
   bio       String?
   usuarioId String?  @unique
   usuario   Usuario? @relation(fields: [usuarioId], references: [id])
+  // PIN corto (4 dígitos) para identificarse en la página pública al jugar un
+  // partido de torneo/liga con la herramienta de marcador (ver
+  // src/routes/jugadores.js PUT /:id/pin y src/routes/perfil.js PUT /pin) —
+  // pensado para un dispositivo compartido junto a la diana, donde pedir la
+  // contraseña completa de socio no es práctico y los invitados ni siquiera
+  // tienen una. Nada que ver con Usuario.passwordHash: se guarda hasheado
+  // igual (bcrypt) aunque sea corto, pero es un secreto totalmente aparte.
+  // null significa que ese jugador todavía no se ha puesto uno.
+  pinPartidasHash String?
 
   equipos             EquipoJugador[]
   equiposCapitaneados EquipoTorneo[] @relation("capitan")

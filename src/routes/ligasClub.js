@@ -9,6 +9,7 @@ import { construirRondaUnoConGrupos } from "../lib/cruceGruposFinal.js";
 import { diasRestantesPapelera } from "../lib/papelera.js";
 import { urlPublicaLiga } from "../lib/enlacesPublicos.js";
 import { requireAdmin } from "../middleware/requireAdmin.js";
+import { validarConfiguracionHerramienta } from "../lib/configuracionHerramienta.js";
 
 // "A", "B", "C"... — nombres de grupo para `numeroGrupos` grupos.
 function letrasDeGrupos(numeroGrupos) {
@@ -105,7 +106,7 @@ function validarNumeroGrupos(valor) {
 }
 
 router.post("/", requireAdmin, async (req, res) => {
-  const { nombre, descripcion, fechaInicio, fechaFin, insigniaUrl, visibilidad, modalidad, vueltas, numeroParticipantes, numeroGrupos, metodoSorteoParejas, afectaCalendario, notificaciones, imagenEliminadoUrl, imagenCampeonUrl, imagenBienvenidaUrl } = req.body;
+  const { nombre, descripcion, fechaInicio, fechaFin, insigniaUrl, visibilidad, modalidad, vueltas, numeroParticipantes, numeroGrupos, metodoSorteoParejas, afectaCalendario, notificaciones, imagenEliminadoUrl, imagenCampeonUrl, imagenBienvenidaUrl, configuracionHerramienta } = req.body;
   if (!nombre || !fechaInicio || !fechaFin || !numeroParticipantes) {
     return res.status(400).json({ error: "Faltan campos obligatorios" });
   }
@@ -117,6 +118,8 @@ router.post("/", requireAdmin, async (req, res) => {
   if (grupos.numeroGrupos && Number(numeroParticipantes) < grupos.numeroGrupos * 2) {
     return res.status(400).json({ error: `Con ${grupos.numeroGrupos} grupos hacen falta al menos ${grupos.numeroGrupos * 2} participantes (2 por grupo como mínimo).` });
   }
+  const herramienta = validarConfiguracionHerramienta(configuracionHerramienta);
+  if (!herramienta.ok) return res.status(400).json({ error: herramienta.error });
 
   const liga = await prisma.ligaClub.create({
     data: {
@@ -136,6 +139,7 @@ router.post("/", requireAdmin, async (req, res) => {
       imagenEliminadoUrl: imagenEliminadoUrl || null,
       imagenCampeonUrl: imagenCampeonUrl || null,
       imagenBienvenidaUrl: imagenBienvenidaUrl || null,
+      configuracionHerramienta: herramienta.valor,
     },
   });
   res.status(201).json(liga);
@@ -143,7 +147,7 @@ router.post("/", requireAdmin, async (req, res) => {
 
 router.put("/:id", requireAdmin, async (req, res) => {
   const { id } = req.params;
-  const { nombre, descripcion, fechaInicio, fechaFin, insigniaUrl, visibilidad, finalizado, numeroGrupos, notificaciones, imagenEliminadoUrl, imagenCampeonUrl, imagenBienvenidaUrl } = req.body;
+  const { nombre, descripcion, fechaInicio, fechaFin, insigniaUrl, visibilidad, finalizado, numeroGrupos, notificaciones, imagenEliminadoUrl, imagenCampeonUrl, imagenBienvenidaUrl, configuracionHerramienta } = req.body;
 
   let numeroGruposData;
   if (numeroGrupos !== undefined) {
@@ -151,6 +155,8 @@ router.put("/:id", requireAdmin, async (req, res) => {
     if (!grupos.ok) return res.status(400).json({ error: grupos.error });
     numeroGruposData = grupos.numeroGrupos;
   }
+  const herramienta = validarConfiguracionHerramienta(configuracionHerramienta);
+  if (!herramienta.ok) return res.status(400).json({ error: herramienta.error });
 
   try {
     const liga = await prisma.ligaClub.update({
@@ -168,6 +174,7 @@ router.put("/:id", requireAdmin, async (req, res) => {
         imagenEliminadoUrl: imagenEliminadoUrl !== undefined ? imagenEliminadoUrl || null : undefined,
         imagenCampeonUrl: imagenCampeonUrl !== undefined ? imagenCampeonUrl || null : undefined,
         imagenBienvenidaUrl: imagenBienvenidaUrl !== undefined ? imagenBienvenidaUrl || null : undefined,
+        configuracionHerramienta: configuracionHerramienta !== undefined ? herramienta.valor : undefined,
       },
     });
     res.json(liga);

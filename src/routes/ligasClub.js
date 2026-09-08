@@ -554,11 +554,17 @@ router.put("/partidos/:partidoId/calendario", requireAdmin, async (req, res) => 
   }
 });
 
-router.put("/partidos/:partidoId", requireAdmin, async (req, res) => {
-  const { partidoId } = req.params;
-  const { resultado, ganador, maquina, enCurso } = req.body;
+// Aplica cambios (resultado, ganador, máquina, en curso) a un partido de
+// liga (jornada). Las ligas no tienen cuadro que avanzar, así que esto es
+// más simple que su equivalente de torneosClub.js — pero se exporta por la
+// misma razón: que el flujo de la herramienta de marcador (ver
+// src/routes/partidasHerramienta.js — Slice 3+4) pueda aplicar aquí el
+// resultado en cuanto se alcanza "al mejor de N", sin duplicar esta lógica.
+// Devuelve el partido actualizado, o null si no existe o si algo falla.
+export async function aplicarResultadoPartidoLiga(partidoId, cambios) {
+  const { resultado, ganador, maquina, enCurso } = cambios;
   const antes = await prisma.partidoLiga.findUnique({ where: { id: partidoId } });
-  if (!antes) return res.status(404).json({ error: "Enfrentamiento no encontrado" });
+  if (!antes) return null;
   try {
     // Al fijar un ganador real se limpia "en curso" en el mismo paso, igual
     // que en el PUT de cuadrantes (torneosClub.js) — evita que un partido ya
@@ -583,10 +589,17 @@ router.put("/partidos/:partidoId", requireAdmin, async (req, res) => {
       );
     }
 
-    res.json(partido);
+    return partido;
   } catch {
-    res.status(404).json({ error: "Enfrentamiento no encontrado" });
+    return null;
   }
+}
+
+router.put("/partidos/:partidoId", requireAdmin, async (req, res) => {
+  const { partidoId } = req.params;
+  const partido = await aplicarResultadoPartidoLiga(partidoId, req.body);
+  if (!partido) return res.status(404).json({ error: "Enfrentamiento no encontrado" });
+  res.json(partido);
 });
 
 // POST /api/ligas-club/:ligaId/cuadrante-final - crea el cuadrante final de una

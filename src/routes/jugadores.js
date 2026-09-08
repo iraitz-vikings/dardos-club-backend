@@ -26,6 +26,28 @@ router.post("/", requireAdmin, async (req, res) => {
   res.status(201).json(jugador);
 });
 
+// PUT /api/jugadores/:id - cambia el nombre (y opcionalmente el apodo) de un
+// invitado del club (protegido). Solo para invitados sin cuenta: el nombre
+// de un socio viene de su cuenta de usuario y se edita desde ahí, no aquí —
+// permitirlo desde este endpoint los desincronizaría (el nombre del socio se
+// usa también para el login/gestión de socios).
+router.put("/:id", requireAdmin, async (req, res) => {
+  const { nombre, apodo } = req.body;
+  if (!nombre || !nombre.trim()) {
+    return res.status(400).json({ error: "Falta el nombre" });
+  }
+  const jugador = await prisma.jugador.findUnique({ where: { id: req.params.id } });
+  if (!jugador) return res.status(404).json({ error: "Jugador no encontrado" });
+  if (jugador.usuarioId) {
+    return res.status(400).json({ error: "Este jugador es un socio: su nombre se cambia desde su cuenta, no aquí." });
+  }
+  const actualizado = await prisma.jugador.update({
+    where: { id: req.params.id },
+    data: { nombre: nombre.trim(), ...(apodo !== undefined ? { apodo: apodo.trim() || null } : {}) },
+  });
+  res.json(actualizado);
+});
+
 // GET /api/jugadores/directorio - lista pública para socios logueados (sin datos
 // sensibles como el email). Incluye las medias (MPR/PPD) de fabricante de cada
 // jugador para poder mostrarlas al hacer clic en su perfil; se omite

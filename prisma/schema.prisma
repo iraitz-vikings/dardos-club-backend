@@ -321,6 +321,11 @@ model TorneoClub {
   // la forma exacta del JSON (activa/porDefecto/porRonda) y el plan guardado
   // en el proyecto. null = todavía sin configurar (equivale a desactivada).
   configuracionHerramienta Json?
+  // Enlace de YouTube de la retransmisión en directo de este torneo, si se
+  // está emitiendo — ver src/lib/videoDirecto.js. null = no hay nada en
+  // directo ahora mismo. Se muestra embebido en la página pública del
+  // torneo y, si además es público (`visibilidad`), también en la portada.
+  videoDirectoUrl String?
   // Borrado suave (papelera): null = activo; con fecha = en la papelera,
   // recuperable durante 7 días (ver src/lib/papelera.js) antes de que el
   // cron nocturno lo purgue de verdad.
@@ -502,6 +507,11 @@ model LigaClub {
   // meta el resultado a mano — mismo formato que en TorneoClub, ver
   // src/lib/configuracionHerramienta.js. null = todavía sin configurar.
   configuracionHerramienta Json?
+  // Enlace de YouTube de la retransmisión en directo de esta liga (o de su
+  // cuadrante final), si se está emitiendo — ver src/lib/videoDirecto.js.
+  // null = no hay nada en directo ahora mismo. Se muestra embebido en la
+  // página pública de la liga y, si además es pública, también en la portada.
+  videoDirectoUrl String?
   // Borrado suave (papelera): null = activa; con fecha = en la papelera,
   // recuperable durante 7 días (ver src/lib/papelera.js) antes de que el
   // cron nocturno la purgue de verdad.

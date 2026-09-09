@@ -9,6 +9,7 @@ import { diasRestantesPapelera } from "../lib/papelera.js";
 import { urlPublicaCuadrante } from "../lib/enlacesPublicos.js";
 import { requireAdmin } from "../middleware/requireAdmin.js";
 import { validarConfiguracionHerramienta } from "../lib/configuracionHerramienta.js";
+import { validarVideoDirectoUrl } from "../lib/videoDirecto.js";
 
 const prisma = new PrismaClient();
 const router = Router();
@@ -310,7 +311,7 @@ router.get("/:id", async (req, res) => {
 });
 
 router.post("/", requireAdmin, async (req, res) => {
-  const { nombre, descripcion, fechaInicio, fechaFin, insigniaUrl, visibilidad, numeroMaquinas, tipoEliminacion, modalidad, afectaCalendario, notificaciones, modoJornadas, puntosPorPosicion, imagenEliminadoUrl, imagenCampeonUrl, imagenBienvenidaUrl, configuracionHerramienta } = req.body;
+  const { nombre, descripcion, fechaInicio, fechaFin, insigniaUrl, visibilidad, numeroMaquinas, tipoEliminacion, modalidad, afectaCalendario, notificaciones, modoJornadas, puntosPorPosicion, imagenEliminadoUrl, imagenCampeonUrl, imagenBienvenidaUrl, configuracionHerramienta, videoDirectoUrl } = req.body;
   if (!nombre || !fechaInicio || !fechaFin) {
     return res.status(400).json({ error: "Faltan campos obligatorios" });
   }
@@ -319,6 +320,8 @@ router.post("/", requireAdmin, async (req, res) => {
   if (!puntos.ok) return res.status(400).json({ error: puntos.error });
   const herramienta = validarConfiguracionHerramienta(configuracionHerramienta);
   if (!herramienta.ok) return res.status(400).json({ error: herramienta.error });
+  const video = validarVideoDirectoUrl(videoDirectoUrl);
+  if (!video.ok) return res.status(400).json({ error: video.error });
   const torneo = await prisma.torneoClub.create({
     data: {
       nombre,
@@ -338,6 +341,7 @@ router.post("/", requireAdmin, async (req, res) => {
       imagenCampeonUrl: imagenCampeonUrl || null,
       imagenBienvenidaUrl: imagenBienvenidaUrl || null,
       configuracionHerramienta: herramienta.valor,
+      videoDirectoUrl: video.valor,
     },
   });
   res.status(201).json(torneo);
@@ -345,11 +349,13 @@ router.post("/", requireAdmin, async (req, res) => {
 
 router.put("/:id", requireAdmin, async (req, res) => {
   const { id } = req.params;
-  const { nombre, descripcion, fechaInicio, fechaFin, insigniaUrl, visibilidad, numeroMaquinas, tipoEliminacion, finalizado, notificaciones, modoJornadas, puntosPorPosicion, imagenEliminadoUrl, imagenCampeonUrl, imagenBienvenidaUrl, configuracionHerramienta } = req.body;
+  const { nombre, descripcion, fechaInicio, fechaFin, insigniaUrl, visibilidad, numeroMaquinas, tipoEliminacion, finalizado, notificaciones, modoJornadas, puntosPorPosicion, imagenEliminadoUrl, imagenCampeonUrl, imagenBienvenidaUrl, configuracionHerramienta, videoDirectoUrl } = req.body;
   const puntos = validarPuntosPorPosicion(puntosPorPosicion);
   if (!puntos.ok) return res.status(400).json({ error: puntos.error });
   const herramienta = validarConfiguracionHerramienta(configuracionHerramienta);
   if (!herramienta.ok) return res.status(400).json({ error: herramienta.error });
+  const video = validarVideoDirectoUrl(videoDirectoUrl);
+  if (!video.ok) return res.status(400).json({ error: video.error });
   try {
     const torneo = await prisma.torneoClub.update({
       where: { id },
@@ -370,6 +376,7 @@ router.put("/:id", requireAdmin, async (req, res) => {
         imagenCampeonUrl: imagenCampeonUrl !== undefined ? imagenCampeonUrl || null : undefined,
         imagenBienvenidaUrl: imagenBienvenidaUrl !== undefined ? imagenBienvenidaUrl || null : undefined,
         configuracionHerramienta: configuracionHerramienta !== undefined ? herramienta.valor : undefined,
+        videoDirectoUrl: videoDirectoUrl !== undefined ? video.valor : undefined,
       },
     });
     res.json(torneo);

@@ -10,6 +10,7 @@ import {
 } from "../lib/partidasHerramienta.js";
 import { aplicarResultadoCuadroPartido } from "./torneosClub.js";
 import { aplicarResultadoPartidoLiga } from "./ligasClub.js";
+import { pinValido } from "./jugadores.js";
 
 // Flujo público de juego con la herramienta de marcador (Slice 3+4 del plan
 // "herramienta-marcador-torneos-ligas", guardado en el proyecto): un jugador
@@ -50,16 +51,43 @@ function requireJugadorPartida(req, res, next) {
 }
 
 // GET /api/partidas-herramienta/jugadores - lista pública (sin datos
-// sensibles) de los jugadores que ya tienen PIN de partidas puesto, para el
-// selector de "¿quién eres?" al iniciar sesión. Los que todavía no se han
-// puesto uno no aparecen: no podrían identificarse igualmente (ver Slice 1).
+// sensibles) de TODOS los jugadores del club, para el selector de "¿quién
+// eres?" al iniciar sesión — incluye `tienePinPartidas` para que el
+// frontend sepa si tiene que pedir el PIN existente o dejarle elegir uno
+// nuevo (ver POST /pin más abajo). Antes solo salían los que ya tenían PIN
+// puesto, así que la primera vez alguien no aparecía en la lista y no había
+// forma de arrancar sin pasar antes por el admin o el perfil — bug
+// reportado por Iraitz el 2026-09-09.
 router.get("/jugadores", async (_req, res) => {
   const jugadores = await prisma.jugador.findMany({
-    where: { pinPartidasHash: { not: null } },
-    select: { id: true, nombre: true, apodo: true },
+    select: { id: true, nombre: true, apodo: true, pinPartidasHash: true },
     orderBy: { nombre: "asc" },
   });
-  res.json(jugadores);
+  res.json(jugadores.map(({ pinPartidasHash, ...j }) => ({ ...j, tienePinPartidas: !!pinPartidasHash })));
+});
+
+// POST /api/partidas-herramienta/pin - un jugador que todavía no tiene PIN
+// de partidas se pone uno él mismo, la primera vez que intenta entrar a la
+// herramienta (sin esto había que pedirle a un admin que se lo pusiera
+// antes desde AdminJugadores.jsx, o que el propio socio fuera a su perfil).
+// Si ya tiene uno puesto, no se puede cambiar por aquí (para eso está el
+// admin o el perfil, que si requieren sesión de socio) — solo sirve para la
+// puesta en marcha inicial. loginLimiter por IP, igual que /login.
+router.post("/pin", loginLimiter, async (req, res) => {
+  const { jugadorId, pin } = req.body;
+  if (!jugadorId || !pinValido(pin)) {
+    return res.status(400).json({ error: "Elige quién eres y un PIN de 4 dígitos." });
+  }
+  const jugador = await prisma.jugador.findUnique({ where: { id: jugadorId } });
+  if (!jugador) return res.status(404).json({ error: "Jugador no encontrado" });
+  if (jugador.pinPartidasHash) {
+    return res.status(409).json({
+      error: "Ese jugador ya tiene un PIN puesto. Si no os acordáis, un admin puede cambiarlo, o el propio socio desde su perfil.",
+    });
+  }
+  const pinPartidasHash = await bcrypt.hash(pin, 10);
+  const actualizado = await prisma.jugador.update({ where: { id: jugador.id }, data: { pinPartidasHash } });
+  res.status(201).json({ token: firmarTokenPartida(actualizado), jugador: { id: actualizado.id, nombre: actualizado.apodo || actualizado.nombre } });
 });
 
 // POST /api/partidas-herramienta/login - identificación con PIN (no es un

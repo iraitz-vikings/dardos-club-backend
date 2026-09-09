@@ -41,6 +41,11 @@ router.get("/", requireAuth, async (req, res) => {
     include: { maquinaCalendario: true, liga: true },
   });
 
+  const manuales = await prisma.eventoCalendario.findMany({
+    where: { fecha: rango },
+    include: { maquina: true },
+  });
+
   const eventos = [
     ...externos.map((p) => ({
       id: `ext-${p.id}`,
@@ -62,6 +67,13 @@ router.get("/", requireAuth, async (req, res) => {
       maquina: p.maquinaCalendario?.nombre || null,
       titulo: `${p.participante1} vs ${p.participante2}`,
       competicion: p.liga.nombre,
+    })),
+    ...manuales.map((e) => ({
+      id: `man-${e.id}`,
+      fecha: e.fecha,
+      maquina: e.maquina?.nombre || null,
+      titulo: e.titulo,
+      competicion: "Evento",
     })),
   ];
 

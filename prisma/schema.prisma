@@ -690,9 +690,25 @@ model Maquina {
   nombre   String    @unique
   creadoEn DateTime  @default(now())
 
-  partidos       Partido[]
-  cuadroPartidos CuadroPartido[]
-  partidosLiga   PartidoLiga[]
+  partidos          Partido[]
+  cuadroPartidos    CuadroPartido[]
+  partidosLiga      PartidoLiga[]
+  eventosCalendario EventoCalendario[]
+}
+
+// Evento suelto en el calendario del club (GET /api/calendario, ver
+// routes/calendario.js), puesto a mano por el admin — a diferencia de los
+// demás eventos del calendario (partidos de torneo/liga/competición externa),
+// este no viene de ningún partido: sirve para reservar una máquina para algo
+// que no es una partida (mantenimiento, quedada, exhibición...). Pedido por
+// Iraitz, 2026-09-09.
+model EventoCalendario {
+  id        String   @id @default(uuid())
+  maquinaId String
+  maquina   Maquina  @relation(fields: [maquinaId], references: [id])
+  fecha     DateTime
+  titulo    String
+  creadoEn  DateTime @default(now())
 }
 
 // Fabricante de dianas/máquinas electrónicas (ej: DARTSLIVE, Granboard...) en

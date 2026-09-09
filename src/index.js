@@ -29,6 +29,7 @@ import maquinasRouter from "./routes/maquinas.js";
 import fabricantesRouter from "./routes/fabricantes.js";
 import competicionesExternasRouter from "./routes/competicionesExternas.js";
 import calendarioRouter from "./routes/calendario.js";
+import eventosCalendarioRouter from "./routes/eventosCalendario.js";
 import notificacionesRouter from "./routes/notificaciones.js";
 import partidasHerramientaRouter from "./routes/partidasHerramienta.js";
 
@@ -80,6 +81,7 @@ app.use("/api/fabricantes", fabricantesRouter);
 app.use("/api/competiciones-externas", competicionesExternasRouter);
 
 app.use("/api/calendario", calendarioRouter);
+app.use("/api/eventos-calendario", eventosCalendarioRouter);
 
 // Avisos por Web Push (socios) y Telegram (invitados)
 app.use("/api/notificaciones", notificacionesRouter);

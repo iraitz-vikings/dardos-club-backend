@@ -403,9 +403,19 @@ function generarJornadas(etiquetas, vueltas) {
   for (let j = 0; j < n - 1; j++) {
     const partidos = [];
     for (let i = 0; i < mitad; i++) {
-      const a = arr[i];
-      const b = arr[n - 1 - i];
-      if (a !== null && b !== null) partidos.push([a, b]);
+      let a = arr[i];
+      let b = arr[n - 1 - i];
+      if (a !== null && b !== null) {
+        // Con el método del círculo tal cual, el participante fijo (arr[0])
+        // siempre cae del mismo lado del emparejamiento, así que jugaría
+        // todos sus partidos "en casa" en la primera vuelta y todos "fuera"
+        // en la segunda. Se sortea quién queda primero en cada
+        // enfrentamiento para que no salga ese patrón. La segunda vuelta
+        // (más abajo) sigue invirtiendo cada partido respecto a esta, así
+        // que cada pareja se sigue enfrentando una vez de cada lado.
+        if (Math.random() < 0.5) [a, b] = [b, a];
+        partidos.push([a, b]);
+      }
     }
     jornadas.push(partidos);
     const fijo = arr[0];

@@ -14,14 +14,18 @@
 //   1. Puntos totales.
 //   2. Enfrentamiento directo (solo entre los empatados en el punto 1):
 //      mini-tabla de puntos usando SOLO los partidos jugados entre ellos.
-//   3. Partidas ganadas totales (no la diferencia, el total).
+//   3. Diferencia de partidas (legs) totales: partidasGanadas - partidasPerdidas.
+//      (Antes se usaba el total absoluto de partidas ganadas, sin restar las
+//      perdidas — a petición de Iraitz, 2026-09-14: el criterio real de
+//      desempate en dardos es la diferencia, no el bruto de partidas ganadas.)
 //   4. Si después de todo eso siguen empatados (empate circular: A gana a
 //      B, B gana a C, C gana a A — el enfrentamiento directo no lo puede
-//      resolver matemáticamente), se marca `empateSinResolver: true` en
-//      esas filas y se ordenan alfabéticamente entre sí SOLO para que el
-//      resultado sea reproducible (misma entrada → misma salida siempre),
-//      no como un criterio deportivo. La UI de admin debe mostrar ese caso
-//      con claridad en vez de esconderlo.
+//      resolver matemáticamente, y además tienen la misma diferencia de
+//      partidas), se marca `empateSinResolver: true` en esas filas y se
+//      ordenan alfabéticamente entre sí SOLO para que el resultado sea
+//      reproducible (misma entrada → misma salida siempre), no como un
+//      criterio deportivo. La UI de admin debe mostrar ese caso con
+//      claridad en vez de esconderlo.
 
 function parseResultado(resultado) {
   if (!resultado) return null;
@@ -135,13 +139,14 @@ function desempatar(empatados, todosLosPartidos) {
       resultado.push(sub[0]);
       continue;
     }
-    // 3) Partidas ganadas totales (no la diferencia: el total absoluto).
-    const porPartidasGanadas = [...sub].sort((a, b) => b.partidasGanadas - a.partidasGanadas);
+    // 3) Diferencia de partidas (legs) totales: partidasGanadas - partidasPerdidas.
+    const diferencia = (f) => f.partidasGanadas - f.partidasPerdidas;
+    const porDiferencia = [...sub].sort((a, b) => diferencia(b) - diferencia(a));
     let i = 0;
-    while (i < porPartidasGanadas.length) {
+    while (i < porDiferencia.length) {
       let j = i + 1;
-      while (j < porPartidasGanadas.length && porPartidasGanadas[j].partidasGanadas === porPartidasGanadas[i].partidasGanadas) j++;
-      const bloque = porPartidasGanadas.slice(i, j);
+      while (j < porDiferencia.length && diferencia(porDiferencia[j]) === diferencia(porDiferencia[i])) j++;
+      const bloque = porDiferencia.slice(i, j);
       if (bloque.length > 1) {
         // 4) Empate sin resolver: se marca y se ordena alfabéticamente solo
         // para que el resultado sea reproducible, nunca como criterio real.

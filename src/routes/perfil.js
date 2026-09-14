@@ -12,7 +12,7 @@ async function obtenerOCrearJugador(usuarioId) {
   if (!jugador) {
     const usuario = await prisma.usuario.findUnique({ where: { id: usuarioId } });
     jugador = await prisma.jugador.create({
-      data: { nombre: usuario?.nombre || "Socio", usuarioId },
+      data: { nombre: usuario?.nombre || "Miembro", usuarioId },
     });
   }
   return jugador;

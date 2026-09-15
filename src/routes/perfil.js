@@ -35,6 +35,7 @@ router.get("/", requireAuth, async (req, res) => {
     email: usuario.email,
     rol: usuario.rol,
     tienePinPartidas: !!jugador.pinPartidasHash,
+    idiomaAvisos: jugador.idiomaAvisos,
     idsFabricantes: idsFabricantes.map((i) => ({
       fabricanteId: i.fabricanteId,
       nombreFabricante: i.fabricante.nombre,
@@ -148,9 +149,18 @@ router.get("/historial", requireAuth, async (req, res) => {
   res.json({ torneos: historialTorneos, ligas: historialLigas });
 });
 
+// Idiomas admitidos para los avisos (Web Push/Telegram) — igual que el
+// selector de idioma de la web (Nav.jsx), pero es un dato aparte: uno es de
+// navegación (localStorage) y el otro de a quién avisar en qué idioma (base
+// de datos). Ver comentario de Jugador.idiomaAvisos en schema.prisma.
+const IDIOMAS_AVISOS_VALIDOS = ["es", "eu", "fr"];
+
 // PUT /api/perfil - el socio edita su propio perfil
 router.put("/", requireAuth, async (req, res) => {
-  const { apodo, avatarUrl, bio, idsFabricantes } = req.body;
+  const { apodo, avatarUrl, bio, idiomaAvisos, idsFabricantes } = req.body;
+  if (idiomaAvisos !== undefined && !IDIOMAS_AVISOS_VALIDOS.includes(idiomaAvisos)) {
+    return res.status(400).json({ error: "Idioma de avisos no válido." });
+  }
   const jugador = await obtenerOCrearJugador(req.usuario.sub);
   const actualizado = await prisma.jugador.update({
     where: { id: jugador.id },
@@ -158,6 +168,7 @@ router.put("/", requireAuth, async (req, res) => {
       apodo: apodo !== undefined ? apodo || null : undefined,
       avatarUrl: avatarUrl !== undefined ? avatarUrl || null : undefined,
       bio: bio !== undefined ? bio || null : undefined,
+      idiomaAvisos: idiomaAvisos !== undefined ? idiomaAvisos : undefined,
     },
   });
 

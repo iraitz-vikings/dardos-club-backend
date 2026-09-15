@@ -59,6 +59,18 @@ model Jugador {
   // (GET /api/jugadores/directorio la filtra), pero sí en el panel de admin,
   // para poder gestionarla/borrarla igual que cualquier otra ficha.
   oculto Boolean @default(false)
+  // Idioma en el que quiere recibir los avisos (Web Push / Telegram) de
+  // partidos, eliminación, campeón, etc. — independiente del idioma que cada
+  // uno tenga elegido navegando por la web (ese es solo de UI, por
+  // localStorage, no se guarda en la base de datos). "es" por defecto. Lo
+  // elige el propio socio en "Mi perfil"; un invitado lo elige en su página
+  // de check-in de Telegram (/aviso/:token) antes de vincular su chat — así
+  // un invitado extranjero (p.ej. de Francia, en el Open) puede recibir sus
+  // avisos en su idioma aunque el club gestione todo en castellano. Solo
+  // tiene efecto en los avisos que llevan texto por idioma (ver
+  // resolverTexto en notificar.js) — los que solo tienen versión en
+  // castellano se siguen mandando en castellano para todo el mundo.
+  idiomaAvisos String @default("es")
   // PIN corto (4 dígitos) para identificarse en la página pública al jugar un
   // partido de torneo/liga con la herramienta de marcador (ver
   // src/routes/jugadores.js PUT /:id/pin y src/routes/perfil.js PUT /pin) —

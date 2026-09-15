@@ -79,8 +79,29 @@ router.get("/checkin/:token", async (req, res) => {
   res.json({
     nombre: jugador.nombre,
     telegramVinculado: !!jugador.suscripcionTelegram,
+    idiomaAvisos: jugador.idiomaAvisos,
     urlTelegram: botUsername ? `https://t.me/${botUsername}?start=${req.params.token}` : null,
   });
+});
+
+// PUT /api/notificaciones/checkin/:token/idioma - un invitado (sin cuenta,
+// identificado solo por el token de su enlace de check-in — no hace falta
+// más porque el token en sí ya es el secreto) elige en qué idioma quiere
+// recibir sus avisos de Telegram. Pensado sobre todo para invitados
+// extranjeros puntuales (p.ej. jugadores de Francia en el Open, ver
+// POST /participantes/:id/invitado-telegram en torneosClub.js), que así
+// pueden recibir sus avisos en su idioma aunque el club gestione todo en
+// castellano — ver Jugador.idiomaAvisos en schema.prisma.
+router.put("/checkin/:token/idioma", async (req, res) => {
+  const IDIOMAS_VALIDOS = ["es", "eu", "fr"];
+  const { idioma } = req.body || {};
+  if (!IDIOMAS_VALIDOS.includes(idioma)) {
+    return res.status(400).json({ error: "Idioma no válido." });
+  }
+  const checkIn = await prisma.telegramCheckIn.findUnique({ where: { token: req.params.token } });
+  if (!checkIn) return res.status(400).json({ error: "Este enlace de avisos no es válido." });
+  await prisma.jugador.update({ where: { id: checkIn.jugadorId }, data: { idiomaAvisos: idioma } });
+  res.json({ ok: true });
 });
 
 // GET /api/notificaciones/telegram/estado - un socio consulta el estado de

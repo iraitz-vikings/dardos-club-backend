@@ -735,8 +735,16 @@ async function notificarSorteoCuadrante(cuadranteId, posiciones) {
   const imagen = cuadrante?.torneoClub?.imagenBienvenidaUrl || cuadrante?.liga?.imagenBienvenidaUrl || undefined;
 
   await notificarJugadores(jugadorIds, {
-    titulo: `¡Ya estás en el cuadro! ${nombreCompeticion}`,
-    cuerpo: "Se ha hecho el sorteo y ya tienes tu sitio en el cuadro. ¡Mucha suerte!",
+    titulo: {
+      es: `¡Ya estás en el cuadro! ${nombreCompeticion}`,
+      eu: `Jada koadroan zaude! ${nombreCompeticion}`,
+      fr: `Tu es dans le tableau ! ${nombreCompeticion}`,
+    },
+    cuerpo: {
+      es: "Se ha hecho el sorteo y ya tienes tu sitio en el cuadro. ¡Mucha suerte!",
+      eu: "Zozketa egin da eta jada baduzu zure lekua koadroan. Zorte on!",
+      fr: "Le tirage au sort a eu lieu et tu as déjà ta place dans le tableau. Bonne chance !",
+    },
     imagen,
     url: urlPublicaCuadrante(cuadrante),
   });
@@ -1163,8 +1171,16 @@ async function notificarPartidoDeCuadrante(partido, motivo = "programado") {
 
   if (motivo === "en_curso") {
     await notificarJugadores(jugadorIds, {
-      titulo: `¡Tu partido empieza ahora! ${nombreCompeticion}`,
-      cuerpo: `${enfrentamiento}${partido.maquina ? ` en ${partido.maquina}` : ""}.`,
+      titulo: {
+        es: `¡Tu partido empieza ahora! ${nombreCompeticion}`,
+        eu: `Zure partida orain hasten da! ${nombreCompeticion}`,
+        fr: `Ton match commence maintenant ! ${nombreCompeticion}`,
+      },
+      cuerpo: {
+        es: `${enfrentamiento}${partido.maquina ? ` en ${partido.maquina}` : ""}.`,
+        eu: `${enfrentamiento}${partido.maquina ? ` (${partido.maquina} makinan)` : ""}.`,
+        fr: `${enfrentamiento}${partido.maquina ? ` sur ${partido.maquina}` : ""}.`,
+      },
       url,
     });
     return;
@@ -1174,10 +1190,22 @@ async function notificarPartidoDeCuadrante(partido, motivo = "programado") {
     ? new Date(partido.fechaCalendario).toLocaleDateString("es-ES", { day: "2-digit", month: "2-digit" })
     : null;
   await notificarJugadores(jugadorIds, {
-    titulo: `Partido programado: ${nombreCompeticion}`,
-    cuerpo: `${enfrentamiento}${fechaTexto ? ` el ${fechaTexto}` : ""}${
-      partido.maquinaCalendario ? ` en ${partido.maquinaCalendario.nombre}` : ""
-    }.`,
+    titulo: {
+      es: `Partido programado: ${nombreCompeticion}`,
+      eu: `Partida programatuta: ${nombreCompeticion}`,
+      fr: `Match programmé : ${nombreCompeticion}`,
+    },
+    cuerpo: {
+      es: `${enfrentamiento}${fechaTexto ? ` el ${fechaTexto}` : ""}${
+        partido.maquinaCalendario ? ` en ${partido.maquinaCalendario.nombre}` : ""
+      }.`,
+      eu: `${enfrentamiento}${fechaTexto ? ` (${fechaTexto})` : ""}${
+        partido.maquinaCalendario ? ` — ${partido.maquinaCalendario.nombre} makina` : ""
+      }.`,
+      fr: `${enfrentamiento}${fechaTexto ? ` le ${fechaTexto}` : ""}${
+        partido.maquinaCalendario ? ` sur ${partido.maquinaCalendario.nombre}` : ""
+      }.`,
+    },
     url,
   });
 }
@@ -1249,8 +1277,16 @@ async function notificarEliminacionCuadrante(partido, etiquetaEliminado) {
   const imagen = cuadrante?.torneoClub?.imagenEliminadoUrl || cuadrante?.liga?.imagenEliminadoUrl || undefined;
 
   await notificarJugadores(jugadorIds, {
-    titulo: `Eliminado: ${nombreCompeticion}`,
-    cuerpo: "Has quedado eliminado del cuadrante. ¡Gracias por participar!",
+    titulo: {
+      es: `Eliminado: ${nombreCompeticion}`,
+      eu: `Kanporatuta: ${nombreCompeticion}`,
+      fr: `Éliminé : ${nombreCompeticion}`,
+    },
+    cuerpo: {
+      es: "Has quedado eliminado del cuadrante. ¡Gracias por participar!",
+      eu: "Koadrotik kanporatuta zaude. Eskerrik asko parte hartzeagatik!",
+      fr: "Tu as été éliminé du tableau. Merci d'avoir participé !",
+    },
     imagen,
     url: urlPublicaCuadrante(cuadrante),
   });
@@ -1274,8 +1310,16 @@ async function notificarCampeonCuadrante(partido, etiquetaCampeon) {
   const imagen = cuadrante?.torneoClub?.imagenCampeonUrl || cuadrante?.liga?.imagenCampeonUrl || undefined;
 
   await notificarJugadores(jugadorIds, {
-    titulo: `¡Campeón! ${nombreCompeticion}`,
-    cuerpo: "¡Enhorabuena, has ganado el cuadrante!",
+    titulo: {
+      es: `¡Campeón! ${nombreCompeticion}`,
+      eu: `Txapelduna! ${nombreCompeticion}`,
+      fr: `Champion ! ${nombreCompeticion}`,
+    },
+    cuerpo: {
+      es: "¡Enhorabuena, has ganado el cuadrante!",
+      eu: "Zorionak, koadroa irabazi duzu!",
+      fr: "Félicitations, tu as remporté le tableau !",
+    },
     imagen,
     url: urlPublicaCuadrante(cuadrante),
   });

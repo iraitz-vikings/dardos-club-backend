@@ -83,6 +83,11 @@ router.put("/:id/pin", requireAdmin, async (req, res) => {
 // para enseñarlo a otros socios).
 router.get("/directorio", requireAuth, async (_req, res) => {
   const jugadores = await prisma.jugador.findMany({
+    // oculto: fichas de invitados puntuales de torneo creadas solo para
+    // activarles avisos de Telegram (ver POST
+    // /participantes/:id/invitado-telegram en torneosClub.js) — no son
+    // jugadores "del club" de verdad, así que no salen en este listado.
+    where: { oculto: false },
     orderBy: { nombre: "asc" },
     select: {
       id: true,

@@ -11,6 +11,7 @@ import { urlPublicaLiga } from "../lib/enlacesPublicos.js";
 import { requireAdmin } from "../middleware/requireAdmin.js";
 import { validarConfiguracionHerramienta } from "../lib/configuracionHerramienta.js";
 import { validarVideoDirectoUrl } from "../lib/videoDirecto.js";
+import { validarMensajesAvisos } from "../lib/mensajesAvisos.js";
 
 // "A", "B", "C"... — nombres de grupo para `numeroGrupos` grupos.
 function letrasDeGrupos(numeroGrupos) {
@@ -107,7 +108,7 @@ function validarNumeroGrupos(valor) {
 }
 
 router.post("/", requireAdmin, async (req, res) => {
-  const { nombre, descripcion, fechaInicio, fechaFin, insigniaUrl, visibilidad, modalidad, vueltas, numeroParticipantes, numeroGrupos, metodoSorteoParejas, afectaCalendario, notificaciones, imagenEliminadoUrl, imagenCampeonUrl, imagenBienvenidaUrl, configuracionHerramienta, videoDirectoUrl } = req.body;
+  const { nombre, descripcion, fechaInicio, fechaFin, insigniaUrl, visibilidad, modalidad, vueltas, numeroParticipantes, numeroGrupos, metodoSorteoParejas, afectaCalendario, notificaciones, imagenEliminadoUrl, imagenCampeonUrl, imagenBienvenidaUrl, configuracionHerramienta, videoDirectoUrl, mensajesAvisos } = req.body;
   if (!nombre || !fechaInicio || !fechaFin || !numeroParticipantes) {
     return res.status(400).json({ error: "Faltan campos obligatorios" });
   }
@@ -123,6 +124,8 @@ router.post("/", requireAdmin, async (req, res) => {
   if (!herramienta.ok) return res.status(400).json({ error: herramienta.error });
   const video = validarVideoDirectoUrl(videoDirectoUrl);
   if (!video.ok) return res.status(400).json({ error: video.error });
+  const mensajes = validarMensajesAvisos(mensajesAvisos);
+  if (!mensajes.ok) return res.status(400).json({ error: mensajes.error });
 
   const liga = await prisma.ligaClub.create({
     data: {
@@ -144,6 +147,7 @@ router.post("/", requireAdmin, async (req, res) => {
       imagenBienvenidaUrl: imagenBienvenidaUrl || null,
       configuracionHerramienta: herramienta.valor,
       videoDirectoUrl: video.valor,
+      mensajesAvisos: mensajes.valor,
     },
   });
   res.status(201).json(liga);
@@ -151,7 +155,7 @@ router.post("/", requireAdmin, async (req, res) => {
 
 router.put("/:id", requireAdmin, async (req, res) => {
   const { id } = req.params;
-  const { nombre, descripcion, fechaInicio, fechaFin, insigniaUrl, visibilidad, finalizado, numeroGrupos, notificaciones, imagenEliminadoUrl, imagenCampeonUrl, imagenBienvenidaUrl, configuracionHerramienta, videoDirectoUrl } = req.body;
+  const { nombre, descripcion, fechaInicio, fechaFin, insigniaUrl, visibilidad, finalizado, numeroGrupos, notificaciones, imagenEliminadoUrl, imagenCampeonUrl, imagenBienvenidaUrl, configuracionHerramienta, videoDirectoUrl, mensajesAvisos } = req.body;
 
   let numeroGruposData;
   if (numeroGrupos !== undefined) {
@@ -163,6 +167,8 @@ router.put("/:id", requireAdmin, async (req, res) => {
   if (!herramienta.ok) return res.status(400).json({ error: herramienta.error });
   const video = validarVideoDirectoUrl(videoDirectoUrl);
   if (!video.ok) return res.status(400).json({ error: video.error });
+  const mensajes = validarMensajesAvisos(mensajesAvisos);
+  if (!mensajes.ok) return res.status(400).json({ error: mensajes.error });
 
   try {
     const liga = await prisma.ligaClub.update({
@@ -182,6 +188,7 @@ router.put("/:id", requireAdmin, async (req, res) => {
         imagenBienvenidaUrl: imagenBienvenidaUrl !== undefined ? imagenBienvenidaUrl || null : undefined,
         configuracionHerramienta: configuracionHerramienta !== undefined ? herramienta.valor : undefined,
         videoDirectoUrl: videoDirectoUrl !== undefined ? video.valor : undefined,
+        mensajesAvisos: mensajesAvisos !== undefined ? mensajes.valor : undefined,
       },
     });
     res.json(liga);

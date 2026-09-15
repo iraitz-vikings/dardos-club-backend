@@ -9,6 +9,7 @@ import { diasRestantesPapelera } from "../lib/papelera.js";
 import { urlPublicaCuadrante } from "../lib/enlacesPublicos.js";
 import { requireAdmin } from "../middleware/requireAdmin.js";
 import { validarConfiguracionHerramienta } from "../lib/configuracionHerramienta.js";
+import { validarMensajesAvisos, resolverMensaje } from "../lib/mensajesAvisos.js";
 import { validarVideoDirectoUrl } from "../lib/videoDirecto.js";
 import { generarEnlaceCheckIn } from "./telegram.js";
 
@@ -312,7 +313,7 @@ router.get("/:id", async (req, res) => {
 });
 
 router.post("/", requireAdmin, async (req, res) => {
-  const { nombre, descripcion, fechaInicio, fechaFin, insigniaUrl, visibilidad, numeroMaquinas, tipoEliminacion, modalidad, afectaCalendario, notificaciones, modoJornadas, puntosPorPosicion, imagenEliminadoUrl, imagenCampeonUrl, imagenBienvenidaUrl, configuracionHerramienta, videoDirectoUrl } = req.body;
+  const { nombre, descripcion, fechaInicio, fechaFin, insigniaUrl, visibilidad, numeroMaquinas, tipoEliminacion, modalidad, afectaCalendario, notificaciones, modoJornadas, puntosPorPosicion, imagenEliminadoUrl, imagenCampeonUrl, imagenBienvenidaUrl, configuracionHerramienta, videoDirectoUrl, mensajesAvisos } = req.body;
   if (!nombre || !fechaInicio || !fechaFin) {
     return res.status(400).json({ error: "Faltan campos obligatorios" });
   }
@@ -323,6 +324,8 @@ router.post("/", requireAdmin, async (req, res) => {
   if (!herramienta.ok) return res.status(400).json({ error: herramienta.error });
   const video = validarVideoDirectoUrl(videoDirectoUrl);
   if (!video.ok) return res.status(400).json({ error: video.error });
+  const mensajes = validarMensajesAvisos(mensajesAvisos);
+  if (!mensajes.ok) return res.status(400).json({ error: mensajes.error });
   const torneo = await prisma.torneoClub.create({
     data: {
       nombre,
@@ -343,6 +346,7 @@ router.post("/", requireAdmin, async (req, res) => {
       imagenBienvenidaUrl: imagenBienvenidaUrl || null,
       configuracionHerramienta: herramienta.valor,
       videoDirectoUrl: video.valor,
+      mensajesAvisos: mensajes.valor,
     },
   });
   res.status(201).json(torneo);
@@ -350,13 +354,15 @@ router.post("/", requireAdmin, async (req, res) => {
 
 router.put("/:id", requireAdmin, async (req, res) => {
   const { id } = req.params;
-  const { nombre, descripcion, fechaInicio, fechaFin, insigniaUrl, visibilidad, numeroMaquinas, tipoEliminacion, finalizado, notificaciones, modoJornadas, puntosPorPosicion, imagenEliminadoUrl, imagenCampeonUrl, imagenBienvenidaUrl, configuracionHerramienta, videoDirectoUrl } = req.body;
+  const { nombre, descripcion, fechaInicio, fechaFin, insigniaUrl, visibilidad, numeroMaquinas, tipoEliminacion, finalizado, notificaciones, modoJornadas, puntosPorPosicion, imagenEliminadoUrl, imagenCampeonUrl, imagenBienvenidaUrl, configuracionHerramienta, videoDirectoUrl, mensajesAvisos } = req.body;
   const puntos = validarPuntosPorPosicion(puntosPorPosicion);
   if (!puntos.ok) return res.status(400).json({ error: puntos.error });
   const herramienta = validarConfiguracionHerramienta(configuracionHerramienta);
   if (!herramienta.ok) return res.status(400).json({ error: herramienta.error });
   const video = validarVideoDirectoUrl(videoDirectoUrl);
   if (!video.ok) return res.status(400).json({ error: video.error });
+  const mensajes = validarMensajesAvisos(mensajesAvisos);
+  if (!mensajes.ok) return res.status(400).json({ error: mensajes.error });
   try {
     const torneo = await prisma.torneoClub.update({
       where: { id },
@@ -378,6 +384,7 @@ router.put("/:id", requireAdmin, async (req, res) => {
         imagenBienvenidaUrl: imagenBienvenidaUrl !== undefined ? imagenBienvenidaUrl || null : undefined,
         configuracionHerramienta: configuracionHerramienta !== undefined ? herramienta.valor : undefined,
         videoDirectoUrl: videoDirectoUrl !== undefined ? video.valor : undefined,
+        mensajesAvisos: mensajesAvisos !== undefined ? mensajes.valor : undefined,
       },
     });
     res.json(torneo);
@@ -733,18 +740,24 @@ async function notificarSorteoCuadrante(cuadranteId, posiciones) {
 
   const nombreCompeticion = cuadrante?.torneoClub?.nombre || cuadrante?.liga?.nombre || "Torneo del club";
   const imagen = cuadrante?.torneoClub?.imagenBienvenidaUrl || cuadrante?.liga?.imagenBienvenidaUrl || undefined;
+  const mensajesAvisos = cuadrante?.torneoClub?.mensajesAvisos || cuadrante?.liga?.mensajesAvisos;
 
-  await notificarJugadores(jugadorIds, {
+  const mensaje = resolverMensaje(mensajesAvisos, "bienvenida", {
     titulo: {
-      es: `¡Ya estás en el cuadro! ${nombreCompeticion}`,
-      eu: `Jada koadroan zaude! ${nombreCompeticion}`,
-      fr: `Tu es dans le tableau ! ${nombreCompeticion}`,
+      es: `¡Ya estás en el cuadro! {competicion}`,
+      eu: `Jada koadroan zaude! {competicion}`,
+      fr: `Tu es dans le tableau ! {competicion}`,
     },
     cuerpo: {
       es: "Se ha hecho el sorteo y ya tienes tu sitio en el cuadro. ¡Mucha suerte!",
       eu: "Zozketa egin da eta jada baduzu zure lekua koadroan. Zorte on!",
       fr: "Le tirage au sort a eu lieu et tu as déjà ta place dans le tableau. Bonne chance !",
     },
+  }, { competicion: nombreCompeticion });
+
+  await notificarJugadores(jugadorIds, {
+    titulo: mensaje.titulo,
+    cuerpo: mensaje.cuerpo,
     imagen,
     url: urlPublicaCuadrante(cuadrante),
   });
@@ -1168,19 +1181,30 @@ async function notificarPartidoDeCuadrante(partido, motivo = "programado") {
   const nombreCompeticion = cuadrante?.torneoClub?.nombre || cuadrante?.liga?.nombre || "Torneo del club";
   const enfrentamiento = `${partido.jugador1 || "?"} vs ${partido.jugador2 || "?"}`;
   const url = urlPublicaCuadrante(cuadrante);
+  const mensajesAvisos = cuadrante?.torneoClub?.mensajesAvisos || cuadrante?.liga?.mensajesAvisos;
 
   if (motivo === "en_curso") {
-    await notificarJugadores(jugadorIds, {
+    const mensaje = resolverMensaje(mensajesAvisos, "enCurso", {
       titulo: {
-        es: `¡Tu partido empieza ahora! ${nombreCompeticion}`,
-        eu: `Zure partida orain hasten da! ${nombreCompeticion}`,
-        fr: `Ton match commence maintenant ! ${nombreCompeticion}`,
+        es: `¡Tu partido empieza ahora! {competicion}`,
+        eu: `Zure partida orain hasten da! {competicion}`,
+        fr: `Ton match commence maintenant ! {competicion}`,
       },
       cuerpo: {
-        es: `${enfrentamiento}${partido.maquina ? ` en ${partido.maquina}` : ""}.`,
-        eu: `${enfrentamiento}${partido.maquina ? ` (${partido.maquina} makinan)` : ""}.`,
-        fr: `${enfrentamiento}${partido.maquina ? ` sur ${partido.maquina}` : ""}.`,
+        es: `{enfrentamiento}{maquina}.`,
+        eu: `{enfrentamiento}{maquina}.`,
+        fr: `{enfrentamiento}{maquina}.`,
       },
+    }, {
+      competicion: nombreCompeticion,
+      enfrentamiento,
+      maquina: partido.maquina
+        ? { es: ` en ${partido.maquina}`, eu: ` (${partido.maquina} makinan)`, fr: ` sur ${partido.maquina}` }
+        : "",
+    });
+    await notificarJugadores(jugadorIds, {
+      titulo: mensaje.titulo,
+      cuerpo: mensaje.cuerpo,
       url,
     });
     return;
@@ -1189,23 +1213,34 @@ async function notificarPartidoDeCuadrante(partido, motivo = "programado") {
   const fechaTexto = partido.fechaCalendario
     ? new Date(partido.fechaCalendario).toLocaleDateString("es-ES", { day: "2-digit", month: "2-digit" })
     : null;
-  await notificarJugadores(jugadorIds, {
+  const mensaje = resolverMensaje(mensajesAvisos, "programado", {
     titulo: {
-      es: `Partido programado: ${nombreCompeticion}`,
-      eu: `Partida programatuta: ${nombreCompeticion}`,
-      fr: `Match programmé : ${nombreCompeticion}`,
+      es: `Partido programado: {competicion}`,
+      eu: `Partida programatuta: {competicion}`,
+      fr: `Match programmé : {competicion}`,
     },
     cuerpo: {
-      es: `${enfrentamiento}${fechaTexto ? ` el ${fechaTexto}` : ""}${
-        partido.maquinaCalendario ? ` en ${partido.maquinaCalendario.nombre}` : ""
-      }.`,
-      eu: `${enfrentamiento}${fechaTexto ? ` (${fechaTexto})` : ""}${
-        partido.maquinaCalendario ? ` — ${partido.maquinaCalendario.nombre} makina` : ""
-      }.`,
-      fr: `${enfrentamiento}${fechaTexto ? ` le ${fechaTexto}` : ""}${
-        partido.maquinaCalendario ? ` sur ${partido.maquinaCalendario.nombre}` : ""
-      }.`,
+      es: `{enfrentamiento}{fecha}{maquina}.`,
+      eu: `{enfrentamiento}{fecha}{maquina}.`,
+      fr: `{enfrentamiento}{fecha}{maquina}.`,
     },
+  }, {
+    competicion: nombreCompeticion,
+    enfrentamiento,
+    fecha: fechaTexto
+      ? { es: ` el ${fechaTexto}`, eu: ` (${fechaTexto})`, fr: ` le ${fechaTexto}` }
+      : "",
+    maquina: partido.maquinaCalendario
+      ? {
+          es: ` en ${partido.maquinaCalendario.nombre}`,
+          eu: ` — ${partido.maquinaCalendario.nombre} makina`,
+          fr: ` sur ${partido.maquinaCalendario.nombre}`,
+        }
+      : "",
+  });
+  await notificarJugadores(jugadorIds, {
+    titulo: mensaje.titulo,
+    cuerpo: mensaje.cuerpo,
     url,
   });
 }
@@ -1275,18 +1310,24 @@ async function notificarEliminacionCuadrante(partido, etiquetaEliminado) {
 
   const nombreCompeticion = cuadrante?.torneoClub?.nombre || cuadrante?.liga?.nombre || "Torneo del club";
   const imagen = cuadrante?.torneoClub?.imagenEliminadoUrl || cuadrante?.liga?.imagenEliminadoUrl || undefined;
+  const mensajesAvisos = cuadrante?.torneoClub?.mensajesAvisos || cuadrante?.liga?.mensajesAvisos;
 
-  await notificarJugadores(jugadorIds, {
+  const mensaje = resolverMensaje(mensajesAvisos, "eliminado", {
     titulo: {
-      es: `Eliminado: ${nombreCompeticion}`,
-      eu: `Kanporatuta: ${nombreCompeticion}`,
-      fr: `Éliminé : ${nombreCompeticion}`,
+      es: `Eliminado: {competicion}`,
+      eu: `Kanporatuta: {competicion}`,
+      fr: `Éliminé : {competicion}`,
     },
     cuerpo: {
       es: "Has quedado eliminado del cuadrante. ¡Gracias por participar!",
       eu: "Koadrotik kanporatuta zaude. Eskerrik asko parte hartzeagatik!",
       fr: "Tu as été éliminé du tableau. Merci d'avoir participé !",
     },
+  }, { competicion: nombreCompeticion });
+
+  await notificarJugadores(jugadorIds, {
+    titulo: mensaje.titulo,
+    cuerpo: mensaje.cuerpo,
     imagen,
     url: urlPublicaCuadrante(cuadrante),
   });
@@ -1308,18 +1349,24 @@ async function notificarCampeonCuadrante(partido, etiquetaCampeon) {
 
   const nombreCompeticion = cuadrante?.torneoClub?.nombre || cuadrante?.liga?.nombre || "Torneo del club";
   const imagen = cuadrante?.torneoClub?.imagenCampeonUrl || cuadrante?.liga?.imagenCampeonUrl || undefined;
+  const mensajesAvisos = cuadrante?.torneoClub?.mensajesAvisos || cuadrante?.liga?.mensajesAvisos;
 
-  await notificarJugadores(jugadorIds, {
+  const mensaje = resolverMensaje(mensajesAvisos, "campeon", {
     titulo: {
-      es: `¡Campeón! ${nombreCompeticion}`,
-      eu: `Txapelduna! ${nombreCompeticion}`,
-      fr: `Champion ! ${nombreCompeticion}`,
+      es: `¡Campeón! {competicion}`,
+      eu: `Txapelduna! {competicion}`,
+      fr: `Champion ! {competicion}`,
     },
     cuerpo: {
       es: "¡Enhorabuena, has ganado el cuadrante!",
       eu: "Zorionak, koadroa irabazi duzu!",
       fr: "Félicitations, tu as remporté le tableau !",
     },
+  }, { competicion: nombreCompeticion });
+
+  await notificarJugadores(jugadorIds, {
+    titulo: mensaje.titulo,
+    cuerpo: mensaje.cuerpo,
     imagen,
     url: urlPublicaCuadrante(cuadrante),
   });

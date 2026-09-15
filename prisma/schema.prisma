@@ -333,6 +333,12 @@ model TorneoClub {
   // jugador al ser colocado en el cuadro tras el sorteo — ver
   // notificarSorteoCuadrante en src/routes/torneosClub.js.
   imagenBienvenidaUrl String?
+  // Mensajes personalizables (opcionales) de los avisos automáticos de este
+  // torneo — sobreescriben, en el idioma que se rellene, el texto por
+  // defecto de bienvenida/en curso/programado/eliminado/campeón. Ver
+  // src/lib/mensajesAvisos.js para la forma exacta del JSON y cómo se
+  // resuelve junto con notificarJugador (idioma del jugador).
+  mensajesAvisos Json?
   finalizado       Boolean  @default(false)
   // Configuración de la herramienta de marcador (501/Cricket) para jugar los
   // partidos de este torneo desde la página pública en vez de que el admin
@@ -520,6 +526,9 @@ model LigaClub {
   // jugador al ser colocado en el cuadrante final de esta liga tras el
   // sorteo — ver notificarSorteoCuadrante en src/routes/torneosClub.js.
   imagenBienvenidaUrl String?
+  // Mensajes personalizables (opcionales) de los avisos automáticos de esta
+  // liga — mismo formato que en TorneoClub, ver src/lib/mensajesAvisos.js.
+  mensajesAvisos Json?
   finalizado       Boolean  @default(false)
   // Configuración de la herramienta de marcador (501/Cricket) para jugar los
   // partidos de esta liga desde la página pública en vez de que el admin

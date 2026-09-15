@@ -4,8 +4,22 @@
 // por ahí. Un jugador puede no tener ningún canal activo todavía (no ha
 // pasado por "Mi perfil" o no ha hecho el check-in de Telegram) — en ese
 // caso simplemente no se le manda nada, no es un error.
+import { PrismaClient } from "@prisma/client";
 import { enviarPushAJugador } from "./webPush.js";
 import { enviarTelegramAJugador } from "./telegram.js";
+
+const prisma = new PrismaClient();
+
+// titulo/cuerpo pueden ser un string (igual para todo el mundo, como hasta
+// ahora) o un objeto { es, eu, fr, ... } con una versión por idioma — en ese
+// caso se elige la del idioma de avisos del jugador (Jugador.idiomaAvisos,
+// ver "Mi perfil" para socios y la página de check-in para invitados), con
+// "es" como reserva si ese idioma no tiene versión propia (igual que el
+// resto de la web, ver i18n.jsx del frontend).
+function resolverTexto(campo, idioma) {
+  if (campo == null || typeof campo === "string") return campo;
+  return campo[idioma] || campo.es || Object.values(campo).find(Boolean) || "";
+}
 
 // opts: { titulo, cuerpo, url, imagen } — url es opcional, a dónde debería
 // llevar al pulsar el aviso: en Web Push se usa en el payload (se abre esa
@@ -16,7 +30,12 @@ import { enviarTelegramAJugador } from "./telegram.js";
 // la soporta — se degrada sin más si no), en Telegram mandando la foto con
 // el texto como pie en vez de un mensaje de solo texto.
 export async function notificarJugador(jugadorId, opts = {}) {
-  const { titulo, cuerpo, url, imagen } = opts;
+  const jugador = await prisma.jugador.findUnique({ where: { id: jugadorId }, select: { idiomaAvisos: true } });
+  const idioma = jugador?.idiomaAvisos || "es";
+
+  const titulo = resolverTexto(opts.titulo, idioma);
+  const cuerpo = resolverTexto(opts.cuerpo, idioma);
+  const { url, imagen } = opts;
   const textoTelegram = [titulo, cuerpo, url].filter(Boolean).join("\n\n");
 
   const [push, telegram] = await Promise.all([

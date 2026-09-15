@@ -10,6 +10,7 @@ import { urlPublicaCuadrante } from "../lib/enlacesPublicos.js";
 import { requireAdmin } from "../middleware/requireAdmin.js";
 import { validarConfiguracionHerramienta } from "../lib/configuracionHerramienta.js";
 import { validarVideoDirectoUrl } from "../lib/videoDirecto.js";
+import { generarEnlaceCheckIn } from "./telegram.js";
 
 const prisma = new PrismaClient();
 const router = Router();
@@ -581,6 +582,50 @@ router.put("/participantes/:id", requireAdmin, async (req, res) => {
   });
 
   res.json(participante);
+});
+
+// POST /api/torneos-club/participantes/:id/invitado-telegram - da de alta
+// avisos de Telegram para un invitado PUNTUAL de este torneo (apuntado a
+// mano, sin ficha de jugador del club, y que no la va a tener: si fuera a
+// repetir sería mejor darlo de alta como invitado normal del club desde
+// "Jugadores del club"). En un solo paso: crea una ficha de Jugador oculta
+// (no sale en el listado público, ver GET /api/jugadores/directorio),
+// vincula el hueco del participante a esa ficha (igual que el PUT de
+// arriba) y genera su enlace de check-in de Telegram — así el admin no
+// tiene que crear el jugador a mano, ir a "Jugadores del club" y volver.
+// `lado` indica qué hueco vincular ("jugador1" por defecto, o "jugador2" en
+// una pareja donde el primero ya tiene ficha); body opcional { lado, nombre }
+// — `nombre` por si se quiere afinar el de la ficha (p.ej. una de las dos
+// mitades de una etiqueta de pareja "Fulano / Mengano"), si no se manda se
+// usa la etiqueta del participante tal cual.
+router.post("/participantes/:id/invitado-telegram", requireAdmin, async (req, res) => {
+  const { id } = req.params;
+  const lado = req.body?.lado === "jugador2" ? "jugador2" : "jugador1";
+  const campoId = lado === "jugador2" ? "jugador2Id" : "jugador1Id";
+
+  const actual = await prisma.participanteCuadrante.findUnique({ where: { id } });
+  if (!actual) return res.status(404).json({ error: "Participante no encontrado" });
+  if (actual[campoId]) {
+    return res.status(400).json({ error: "Ese hueco ya está vinculado a un jugador." });
+  }
+
+  const nombre = (req.body?.nombre || actual.etiqueta).trim();
+  if (!nombre) return res.status(400).json({ error: "Falta el nombre del invitado." });
+
+  const jugador = await prisma.jugador.create({ data: { nombre, oculto: true } });
+
+  const participante = await prisma.participanteCuadrante.update({
+    where: { id },
+    data: { [campoId]: jugador.id },
+  });
+
+  await prisma.puntoJornada.updateMany({
+    where: { cuadranteId: actual.cuadranteId, etiqueta: actual.etiqueta },
+    data: { jugador1Id: participante.jugador1Id, jugador2Id: participante.jugador2Id },
+  });
+
+  const enlace = await generarEnlaceCheckIn(jugador.id);
+  res.status(201).json({ participante, jugador, ...enlace });
 });
 
 // POST /api/torneos-club/cuadrantes/:cuadranteId/sortear-parejas - reparte al

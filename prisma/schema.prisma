@@ -382,6 +382,19 @@ model CuadroPartido {
   resultado String?
   ganador  String?
   enCurso  Boolean @default(false)
+  // Temporizador de partidos (ver TorneoClub.temporizadorActivo/
+  // temporizadorMinutos): cuándo se marcó "en curso" por última vez — null
+  // si no está en curso. Junto con el temporizador del torneo permite
+  // calcular en el frontend cuánto tiempo le queda al jugador para
+  // presentarse (admin: pestaña Cuadrantes). Se limpia (junto con
+  // partidoIniciado) cada vez que el partido deja de estar "en curso" —
+  // ver aplicarResultadoCuadroPartido en src/routes/torneosClub.js.
+  enCursoDesde DateTime?
+  // Si el jugador ya se ha presentado a jugar (botón "Empezado" en el
+  // admin) — para el aviso visual del temporizador: deja de parpadear/
+  // contar aunque el partido siga "en curso". Se resetea a false cada vez
+  // que el partido se vuelve a marcar "en curso" (nuevo uso de la máquina).
+  partidoIniciado Boolean @default(false)
 
   siguientePartidoGanadorId String?
   siguienteSlotGanador Int?

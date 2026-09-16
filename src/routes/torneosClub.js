@@ -802,7 +802,7 @@ async function notificarSorteoCuadrante(cuadranteId, posiciones) {
 export async function aplicarPosicionesRonda1(cuadranteId, posiciones) {
   await prisma.cuadroPartido.updateMany({
     where: { cuadranteId },
-    data: { jugador1: null, jugador2: null, ganador: null, resultado: null, enCurso: false },
+    data: { jugador1: null, jugador2: null, ganador: null, resultado: null, enCurso: false, enCursoDesde: null, partidoIniciado: false },
   });
 
   const ronda1 = await prisma.cuadroPartido.findMany({
@@ -983,7 +983,7 @@ router.post("/cuadrantes/:cuadranteId/reiniciar", requireAdmin, async (req, res)
   // pase automático se mantiene).
   await prisma.cuadroPartido.updateMany({
     where: { cuadranteId, id: { notIn: bye.map((p) => p.id) } },
-    data: { ganador: null, resultado: null, enCurso: false },
+    data: { ganador: null, resultado: null, enCurso: false, enCursoDesde: null, partidoIniciado: false },
   });
   // Vacía los nombres en todo lo que no sea la ronda 1 del cuadro de ganadores
   // (esos nombres se rellenaban solos al avanzar, así que hay que borrarlos).
@@ -1043,7 +1043,7 @@ router.put("/cuadrantes/:cuadranteId/estado", requireAdmin, async (req, res) => 
   try {
     const cuadrante = await prisma.cuadrante.update({ where: { id: cuadranteId }, data: { estado } });
     if (estado === "finalizado") {
-      await prisma.cuadroPartido.updateMany({ where: { cuadranteId, enCurso: true }, data: { enCurso: false } });
+      await prisma.cuadroPartido.updateMany({ where: { cuadranteId, enCurso: true }, data: { enCurso: false, enCursoDesde: null, partidoIniciado: false } });
     }
     res.json(cuadrante);
   } catch {
@@ -1457,7 +1457,7 @@ router.put("/partidos/:partidoId/calendario", requireAdmin, async (req, res) => 
 // desincronizar esta lógica respecto al PUT de administración de más abajo.
 // Devuelve el partido actualizado, o null si no existe.
 export async function aplicarResultadoCuadroPartido(partidoId, cambios) {
-  const { maquina, jugador1, jugador2, resultado, ganador, enCurso } = cambios;
+  const { maquina, jugador1, jugador2, resultado, ganador, enCurso, iniciado } = cambios;
 
   const actual = await prisma.cuadroPartido.findUnique({ where: { id: partidoId } });
   if (!actual) return null;
@@ -1471,7 +1471,7 @@ export async function aplicarResultadoCuadroPartido(partidoId, cambios) {
       });
       await prisma.cuadroPartido.updateMany({
         where: { id: { in: hermanos.map((h) => h.id) } },
-        data: { enCurso: false },
+        data: { enCurso: false, enCursoDesde: null, partidoIniciado: false },
       });
     }
   }
@@ -1486,6 +1486,29 @@ export async function aplicarResultadoCuadroPartido(partidoId, cambios) {
   const seFijaGanador = ganador !== undefined && !!ganador;
   const enCursoFinal = seFijaGanador ? false : enCurso !== undefined ? !!enCurso : undefined;
 
+  // Temporizador de partidos (ver TorneoClub.temporizadorActivo/Minutos):
+  // `enCursoDesde` marca cuándo se activó el partido por última vez, para
+  // que el admin pueda calcular en el frontend cuánto tiempo queda. Se fija
+  // al pasar de no-en-curso a en-curso, y se limpia al salir de "en curso"
+  // (por el botón, por fijar ganador, o por quedar desplazado al marcar otro
+  // partido en la misma máquina, ya cubierto arriba). `partidoIniciado`
+  // (botón "Empezado" del admin) para el parpadeo del aviso aunque el
+  // partido siga "en curso" — se resetea a false en cualquiera de esas
+  // transiciones, para que un uso posterior de la máquina vuelva a contar.
+  let enCursoDesdeFinal;
+  if (enCursoFinal === true && !actual.enCurso) {
+    enCursoDesdeFinal = new Date();
+  } else if (enCursoFinal === false && actual.enCurso) {
+    enCursoDesdeFinal = null;
+  } else {
+    enCursoDesdeFinal = undefined;
+  }
+  const partidoIniciadoFinal = iniciado !== undefined
+    ? !!iniciado
+    : enCursoDesdeFinal !== undefined
+      ? false
+      : undefined;
+
   const partido = await prisma.cuadroPartido.update({
     where: { id: partidoId },
     data: {
@@ -1495,6 +1518,8 @@ export async function aplicarResultadoCuadroPartido(partidoId, cambios) {
       resultado: resultado !== undefined ? resultado || null : undefined,
       ganador: ganador !== undefined ? ganador || null : undefined,
       enCurso: enCursoFinal,
+      enCursoDesde: enCursoDesdeFinal,
+      partidoIniciado: partidoIniciadoFinal,
     },
   });
 

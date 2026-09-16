@@ -23,7 +23,7 @@
 // Placeholders disponibles en cada tipo (se sustituyen tal cual, ver
 // `sustituir` más abajo — el admin los escribe literalmente entre llaves):
 //   bienvenida: {competicion}
-//   enCurso:    {competicion} {enfrentamiento} {maquina}
+//   enCurso:    {competicion} {enfrentamiento} {maquina} {minutos}
 //   programado: {competicion} {enfrentamiento} {fecha} {maquina}
 //   eliminado:  {competicion}
 //   campeon:    {competicion}

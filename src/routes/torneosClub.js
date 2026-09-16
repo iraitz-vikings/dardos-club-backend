@@ -45,6 +45,19 @@ function validarPuntosPorPosicion(valor) {
   return { ok: true, valor: limpio };
 }
 
+// Valida el temporizador de partidos de un torneo (ver
+// TorneoClub.temporizadorActivo/temporizadorMinutos en schema.prisma): si
+// `activo` es true hacen falta unos minutos válidos (entero >= 1); si es
+// false los minutos se ignoran y se guardan como null.
+function validarTemporizadorMinutos(activo, minutos) {
+  if (!activo) return { ok: true, valor: null };
+  const n = Number(minutos);
+  if (!Number.isInteger(n) || n < 1) {
+    return { ok: false, error: "Indica un número de minutos válido (entero ≥ 1) para el temporizador de partidos." };
+  }
+  return { ok: true, valor: n };
+}
+
 const includeCompleto = {
   cuadrantes: {
     orderBy: { creadoEn: "asc" },
@@ -313,7 +326,7 @@ router.get("/:id", async (req, res) => {
 });
 
 router.post("/", requireAdmin, async (req, res) => {
-  const { nombre, descripcion, fechaInicio, fechaFin, insigniaUrl, visibilidad, numeroMaquinas, tipoEliminacion, modalidad, afectaCalendario, notificaciones, modoJornadas, puntosPorPosicion, imagenEliminadoUrl, imagenCampeonUrl, imagenBienvenidaUrl, configuracionHerramienta, videoDirectoUrl, mensajesAvisos } = req.body;
+  const { nombre, descripcion, fechaInicio, fechaFin, insigniaUrl, visibilidad, numeroMaquinas, tipoEliminacion, modalidad, afectaCalendario, notificaciones, temporizadorActivo, temporizadorMinutos, modoJornadas, puntosPorPosicion, imagenEliminadoUrl, imagenCampeonUrl, imagenBienvenidaUrl, configuracionHerramienta, videoDirectoUrl, mensajesAvisos } = req.body;
   if (!nombre || !fechaInicio || !fechaFin) {
     return res.status(400).json({ error: "Faltan campos obligatorios" });
   }
@@ -326,6 +339,8 @@ router.post("/", requireAdmin, async (req, res) => {
   if (!video.ok) return res.status(400).json({ error: video.error });
   const mensajes = validarMensajesAvisos(mensajesAvisos);
   if (!mensajes.ok) return res.status(400).json({ error: mensajes.error });
+  const temporizador = validarTemporizadorMinutos(temporizadorActivo, temporizadorMinutos);
+  if (!temporizador.ok) return res.status(400).json({ error: temporizador.error });
   const torneo = await prisma.torneoClub.create({
     data: {
       nombre,
@@ -339,6 +354,8 @@ router.post("/", requireAdmin, async (req, res) => {
       modalidad: modalidadesValidas.includes(modalidad) ? modalidad : "individual",
       afectaCalendario: afectaCalendario !== undefined ? !!afectaCalendario : true,
       notificaciones: notificaciones !== undefined ? !!notificaciones : true,
+      temporizadorActivo: !!temporizadorActivo,
+      temporizadorMinutos: temporizador.valor,
       modoJornadas: !!modoJornadas,
       puntosPorPosicion: modoJornadas ? puntos.valor : undefined,
       imagenEliminadoUrl: imagenEliminadoUrl || null,
@@ -354,7 +371,7 @@ router.post("/", requireAdmin, async (req, res) => {
 
 router.put("/:id", requireAdmin, async (req, res) => {
   const { id } = req.params;
-  const { nombre, descripcion, fechaInicio, fechaFin, insigniaUrl, visibilidad, numeroMaquinas, tipoEliminacion, finalizado, notificaciones, modoJornadas, puntosPorPosicion, imagenEliminadoUrl, imagenCampeonUrl, imagenBienvenidaUrl, configuracionHerramienta, videoDirectoUrl, mensajesAvisos } = req.body;
+  const { nombre, descripcion, fechaInicio, fechaFin, insigniaUrl, visibilidad, numeroMaquinas, tipoEliminacion, finalizado, notificaciones, temporizadorActivo, temporizadorMinutos, modoJornadas, puntosPorPosicion, imagenEliminadoUrl, imagenCampeonUrl, imagenBienvenidaUrl, configuracionHerramienta, videoDirectoUrl, mensajesAvisos } = req.body;
   const puntos = validarPuntosPorPosicion(puntosPorPosicion);
   if (!puntos.ok) return res.status(400).json({ error: puntos.error });
   const herramienta = validarConfiguracionHerramienta(configuracionHerramienta);
@@ -363,6 +380,13 @@ router.put("/:id", requireAdmin, async (req, res) => {
   if (!video.ok) return res.status(400).json({ error: video.error });
   const mensajes = validarMensajesAvisos(mensajesAvisos);
   if (!mensajes.ok) return res.status(400).json({ error: mensajes.error });
+  // El temporizador solo se valida/toca si el PUT trae `temporizadorActivo`
+  // explícito (mismo patrón que `notificaciones`): si no viene, se deja tal
+  // cual está en la base de datos.
+  const temporizador = temporizadorActivo !== undefined
+    ? validarTemporizadorMinutos(!!temporizadorActivo, temporizadorMinutos)
+    : { ok: true, valor: undefined };
+  if (!temporizador.ok) return res.status(400).json({ error: temporizador.error });
   try {
     const torneo = await prisma.torneoClub.update({
       where: { id },
@@ -377,6 +401,8 @@ router.put("/:id", requireAdmin, async (req, res) => {
         tipoEliminacion: tipoEliminacion || undefined,
         finalizado: finalizado !== undefined ? !!finalizado : undefined,
         notificaciones: notificaciones !== undefined ? !!notificaciones : undefined,
+        temporizadorActivo: temporizadorActivo !== undefined ? !!temporizadorActivo : undefined,
+        temporizadorMinutos: temporizadorActivo !== undefined ? temporizador.valor : undefined,
         modoJornadas: modoJornadas !== undefined ? !!modoJornadas : undefined,
         puntosPorPosicion: puntosPorPosicion !== undefined ? puntos.valor : undefined,
         imagenEliminadoUrl: imagenEliminadoUrl !== undefined ? imagenEliminadoUrl || null : undefined,
@@ -1184,6 +1210,14 @@ async function notificarPartidoDeCuadrante(partido, motivo = "programado") {
   const mensajesAvisos = cuadrante?.torneoClub?.mensajesAvisos || cuadrante?.liga?.mensajesAvisos;
 
   if (motivo === "en_curso") {
+    // Temporizador de partidos (ver TorneoClub.temporizadorActivo/
+    // temporizadorMinutos en schema.prisma): si está activo para este
+    // torneo, se añade al aviso cuántos minutos tiene el jugador para
+    // presentarse a jugar. Solo se aplica a cuadrantes de torneo (no de
+    // liga) porque el temporizador solo existe en TorneoClub.
+    const minutosTemporizador = cuadrante?.torneoClub?.temporizadorActivo
+      ? cuadrante.torneoClub.temporizadorMinutos
+      : null;
     const mensaje = resolverMensaje(mensajesAvisos, "enCurso", {
       titulo: {
         es: `¡Tu partido empieza ahora! {competicion}`,
@@ -1191,15 +1225,22 @@ async function notificarPartidoDeCuadrante(partido, motivo = "programado") {
         fr: `Ton match commence maintenant ! {competicion}`,
       },
       cuerpo: {
-        es: `{enfrentamiento}{maquina}.`,
-        eu: `{enfrentamiento}{maquina}.`,
-        fr: `{enfrentamiento}{maquina}.`,
+        es: `{enfrentamiento}{maquina}.{minutos}`,
+        eu: `{enfrentamiento}{maquina}.{minutos}`,
+        fr: `{enfrentamiento}{maquina}.{minutos}`,
       },
     }, {
       competicion: nombreCompeticion,
       enfrentamiento,
       maquina: partido.maquina
         ? { es: ` en ${partido.maquina}`, eu: ` (${partido.maquina} makinan)`, fr: ` sur ${partido.maquina}` }
+        : "",
+      minutos: minutosTemporizador
+        ? {
+            es: ` Tienes ${minutosTemporizador} min para empezar.`,
+            eu: ` ${minutosTemporizador} min dituzu hasteko.`,
+            fr: ` Tu as ${minutosTemporizador} min pour commencer.`,
+          }
         : "",
     });
     await notificarJugadores(jugadorIds, {

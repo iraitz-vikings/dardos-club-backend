@@ -310,6 +310,14 @@ model TorneoClub {
   // reintentar. Pensado para torneos informales/de prueba donde no interesa
   // molestar a los socios. Se decide al crear el torneo (ver POST /).
   notificaciones   Boolean  @default(true)
+  // Temporizador de partidos: si está activo, cada enfrentamiento marcado
+  // "en curso" (ver CuadroPartido.enCurso) tiene un plazo máximo en minutos
+  // para empezar a jugarse desde que se activa. El aviso automático de
+  // "empieza ahora" (ver notificarPartidoDeCuadrante, motivo "en_curso" en
+  // src/routes/torneosClub.js) informa de esos minutos con el placeholder
+  // {minutos}. Puramente informativo — no bloquea ni cierra nada solo.
+  temporizadorActivo  Boolean @default(false)
+  temporizadorMinutos Int?
   // "Torneo por jornadas": cada Cuadrante de este torneo es una jornada
   // independiente (p.ej. clasificatorias para la selección de Euskadi). A
   // diferencia del torneo "clásico" de un solo cuadrante, aquí un mismo

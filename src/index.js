@@ -35,7 +35,14 @@ import partidasHerramientaRouter from "./routes/partidasHerramienta.js";
 
 const app = express();
 app.use(cors());
-app.use(express.json());
+// Límite subido de 100kb (por defecto de Express) a 5mb: algunas rutas de
+// admin (torneos/ligas del club) construían su PUT mandando el objeto
+// completo ya cargado en el frontend (incluidos cuadrantes/partidos
+// anidados) para no pisar campos no tocados — en un torneo grande eso podía
+// superar el límite por defecto y el guardado fallaba con un error genérico
+// sin explicación (2026-09-16). Esas rutas ahora mandan solo lo que cambia,
+// pero este límite se sube igualmente como red de seguridad.
+app.use(express.json({ limit: "5mb" }));
 
 // Web pública
 app.use("/api/noticias", noticiasRouter);

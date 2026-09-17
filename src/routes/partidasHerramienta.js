@@ -212,6 +212,53 @@ router.post("/amistosa", requireAuth, async (req, res) => {
   res.status(201).json(formatearPartida(creada));
 });
 
+// GET /api/partidas-herramienta/mis-amistosos - amistosos (pendientes o ya
+// jugados) en los que participa el socio logueado, para poder gestionarlos
+// desde la Zona de miembros (ver DELETE /:id más abajo). Sesión de socio, no
+// PIN: un amigo sin cuenta no tiene esta pantalla, solo puede jugar. Va
+// ANTES de GET /:id a propósito (si no, Express lo confundiría con un id).
+router.get("/mis-amistosos", requireAuth, async (req, res) => {
+  const jugador = await prisma.jugador.findUnique({ where: { usuarioId: req.usuario.sub } });
+  if (!jugador) return res.json([]);
+  const todas = await prisma.partidaHerramienta.findMany({ where: { amistosa: true }, orderBy: { creadoEn: "desc" } });
+  const mias = todas.filter((p) => p.jugadoresId1.includes(jugador.id) || p.jugadoresId2.includes(jugador.id));
+  res.json(
+    mias.map((p) => ({
+      id: p.id,
+      juego: p.juego,
+      alMejorDe: p.alMejorDe,
+      etiqueta1: p.etiqueta1,
+      etiqueta2: p.etiqueta2,
+      legsGanados1: p.legsGanados1,
+      legsGanados2: p.legsGanados2,
+      finalizada: p.finalizada,
+      creadoEn: p.creadoEn,
+    }))
+  );
+});
+
+// DELETE /api/partidas-herramienta/:id - borra un amistoso (pedido de
+// Iraitz, 2026-09-17). Solo amistosos: un partido real de torneo/liga sigue
+// el flujo normal del cuadro/jornada, nunca se borra por aquí. Sesión de
+// socio y ser uno de los dos participantes. Borrado directo, sin papelera —
+// a diferencia de un torneo/liga, un amistoso no tiene nada colgando (ni
+// cuadros, ni historial de terceros), así que ese resguardo no hace falta
+// aquí. Si estaba finalizado, sus estadísticas dejan de contar en "Acero"
+// (se recalcula al vuelo a partir de las `PartidaHerramienta` que queden).
+router.delete("/:id", requireAuth, async (req, res) => {
+  const jugador = await prisma.jugador.findUnique({ where: { usuarioId: req.usuario.sub } });
+  if (!jugador) return res.status(403).json({ error: "Tu cuenta de socio no tiene una ficha de jugador vinculada." });
+  const partida = await prisma.partidaHerramienta.findUnique({ where: { id: req.params.id } });
+  if (!partida) return res.status(204).end();
+  if (!partida.amistosa) {
+    return res.status(400).json({ error: "Esto no es un amistoso: los partidos de torneo/liga no se borran desde aquí." });
+  }
+  const esParticipante = partida.jugadoresId1.includes(jugador.id) || partida.jugadoresId2.includes(jugador.id);
+  if (!esParticipante) return res.status(403).json({ error: "No eres parte de este amistoso." });
+  await prisma.partidaHerramienta.delete({ where: { id: partida.id } });
+  res.status(204).end();
+});
+
 // POST /api/partidas-herramienta/iniciar - crea (o recupera, si ya existía)
 // la PartidaHerramienta de un partido pendiente concreto. body: { tipo:
 // "cuadrante"|"jornada", partidoId, juegoElegido? } — juegoElegido solo hace

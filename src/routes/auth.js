@@ -93,6 +93,25 @@ router.post("/login", loginLimiter, async (req, res) => {
   });
 });
 
+// GET /api/auth/me - datos actuales del socio logueado, tal cual están en la
+// base de datos. El frontend los usa para refrescar el usuario al cargar la
+// página: si se queda solo con el usuario cacheado en localStorage desde el
+// login, un reset de contraseña hecho por un admin mientras el socio ya
+// tenía sesión abierta (token de 30 días) nunca le llegaría a pedir el
+// cambio, porque debeCambiarPassword se quedaría con el valor viejo hasta
+// que volviera a hacer login por su cuenta.
+router.get("/me", requireAuth, async (req, res) => {
+  const usuario = await prisma.usuario.findUnique({ where: { id: req.usuario.sub } });
+  if (!usuario) return res.status(401).json({ error: "Cuenta no encontrada" });
+  res.json({
+    id: usuario.id,
+    nombre: usuario.nombre,
+    email: usuario.email,
+    rol: usuario.rol,
+    debeCambiarPassword: usuario.debeCambiarPassword,
+  });
+});
+
 // GET /api/auth/pendientes - lista de cuentas por aprobar (admin)
 router.get("/pendientes", requireAdmin, async (_req, res) => {
   const pendientes = await prisma.usuario.findMany({

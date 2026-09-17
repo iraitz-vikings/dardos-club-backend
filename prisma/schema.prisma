@@ -678,6 +678,25 @@ model PartidaHerramienta {
   legsGanados2 Int      @default(0)
   finalizada   Boolean  @default(false)
 
+  // Partido amistoso (plan "partido-amistoso-remoto", guardado en el
+  // proyecto): cuadroPartidoId y partidoLigaId van ambos null, no cuelga de
+  // ningún torneo/liga real. Se marca con este booleano explícito (en vez de
+  // inferirlo de que ambas FK sean null) para poder filtrar/listar sin
+  // ambigüedad. jugadoresId1/jugadoresId2 llevan un único jugadorId cada uno
+  // (los amistosos son siempre 1 contra 1, no hay parejas).
+  amistosa Boolean @default(false)
+
+  // Estado de la visita en curso (solo relevante para partidas remotas,
+  // jugadas desde dos dispositivos distintos — hoy únicamente los
+  // amistosos): lo que hasta ahora vivía solo en el estado de React de
+  // JuegoHerramienta.jsx (turno de quién es, dardos ya tirados de esta
+  // visita, restante al empezar la visita, etc.) se persiste aquí cada vez
+  // que cambia, para que el dispositivo del rival pueda reconstruir el
+  // tablero haciendo polling. Forma exacta depende del juego (501/cricket),
+  // igual que "legs". Null cuando no hay ninguna visita a medias (partida
+  // sin empezar, o entre visita y visita).
+  visitaEnCurso Json?
+
   creadoEn      DateTime @default(now())
   actualizadoEn DateTime @updatedAt
 }

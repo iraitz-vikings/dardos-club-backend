@@ -9,10 +9,12 @@ import {
   resolverParticipante,
 } from "../lib/partidasHerramienta.js";
 import { limpiarConfigJuego } from "../lib/configuracionHerramienta.js";
+import { urlPublicaAmistoso } from "../lib/enlacesPublicos.js";
 import { aplicarResultadoCuadroPartido } from "./torneosClub.js";
 import { aplicarResultadoPartidoLiga } from "./ligasClub.js";
 import { pinValido } from "./jugadores.js";
 import { requireAuth } from "./auth.js";
+import { notificarJugador } from "./notificar.js";
 
 // Flujo público de juego con la herramienta de marcador (Slice 3+4 del plan
 // "herramienta-marcador-torneos-ligas", guardado en el proyecto): un jugador
@@ -194,6 +196,19 @@ router.post("/amistosa", requireAuth, async (req, res) => {
       nombres2: [rival.apodo || rival.nombre],
     },
   });
+
+  // Aviso al rival (Web Push y/o Telegram, según lo que tenga activado — si
+  // no tiene nada, notificarJugador no manda nada y no falla, ver
+  // notificar.js). El enlace lleva directo a /partidas con esta partida ya
+  // identificada, para que tras meter el PIN se abra sola sin tener que
+  // elegirla de la lista de pendientes.
+  const juegoEtiqueta = creada.juego === "cricket" ? "Cricket" : "501";
+  await notificarJugador(rival.id, {
+    titulo: "🎯 Te han retado a un amistoso",
+    cuerpo: `${creador.apodo || creador.nombre} te reta a un amistoso (${juegoEtiqueta}, al mejor de ${creada.alMejorDe}).`,
+    url: urlPublicaAmistoso(creada.id),
+  });
+
   res.status(201).json(formatearPartida(creada));
 });
 

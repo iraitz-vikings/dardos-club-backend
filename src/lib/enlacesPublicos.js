@@ -31,3 +31,13 @@ export function urlPublicaCuadrante(cuadrante) {
   if (cuadrante?.liga) return urlPublicaLiga(cuadrante.liga.id);
   return undefined;
 }
+
+// Enlace al aviso de "te han retado a un amistoso" (plan
+// "partido-amistoso-remoto", guardado en el proyecto): lleva directo a
+// /partidas con la PartidaHerramienta ya identificada por query param, para
+// que tras identificarse con el PIN se abra sola en vez de tener que
+// elegirla de la lista de pendientes — ver PaginaPartidas.jsx en el frontend.
+export function urlPublicaAmistoso(partidaHerramientaId) {
+  const base = frontendUrl();
+  return base && partidaHerramientaId ? `${base}/partidas?partida=${partidaHerramientaId}` : undefined;
+}

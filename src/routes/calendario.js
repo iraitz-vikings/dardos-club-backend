@@ -53,6 +53,9 @@ router.get("/", requireAuth, async (req, res) => {
       maquina: p.maquina?.nombre || null,
       titulo: `${p.equipoTorneo.nombreEquipo || "Vikings"} vs ${p.rival || "?"}`,
       competicion: `${p.equipoTorneo.torneo?.nombre || ""}${p.equipoTorneo.torneo?.plataforma ? ` (${p.equipoTorneo.torneo.plataforma.nombre})` : ""}`,
+      // Las competiciones externas no tienen página propia en la web del
+      // club, así que no se enlazan.
+      enlace: null,
     })),
     ...internosTorneo.map((p) => ({
       id: `ct-${p.id}`,
@@ -60,6 +63,15 @@ router.get("/", requireAuth, async (req, res) => {
       maquina: p.maquinaCalendario?.nombre || null,
       titulo: `${p.jugador1 || "?"} vs ${p.jugador2 || "?"}`,
       competicion: p.cuadrante.torneoClub?.nombre || p.cuadrante.liga?.nombre || "Torneo Vikings",
+      // Un cuadrante de eliminatoria pertenece a un torneo O a una liga (la
+      // gran final de algunas ligas también usa cuadrante) — de ahí sale a
+      // qué página enlazar. Sin enlace (null) si por lo que sea no tiene
+      // ninguno de los dos (no debería pasar, pero no se rompe el calendario).
+      enlace: p.cuadrante.torneoClub
+        ? { tipo: "torneo", id: p.cuadrante.torneoClub.id }
+        : p.cuadrante.liga
+        ? { tipo: "liga", id: p.cuadrante.liga.id }
+        : null,
     })),
     ...internosLiga.map((p) => ({
       id: `pl-${p.id}`,
@@ -67,6 +79,7 @@ router.get("/", requireAuth, async (req, res) => {
       maquina: p.maquinaCalendario?.nombre || null,
       titulo: `${p.participante1} vs ${p.participante2}`,
       competicion: p.liga.nombre,
+      enlace: { tipo: "liga", id: p.liga.id },
     })),
     ...manuales.map((e) => ({
       id: `man-${e.id}`,
@@ -74,6 +87,9 @@ router.get("/", requireAuth, async (req, res) => {
       maquina: e.maquina?.nombre || null,
       titulo: e.titulo,
       competicion: "Evento",
+      // Los eventos manuales y los partidos de competición externa no tienen
+      // página propia en la web del club, así que no se enlazan.
+      enlace: null,
     })),
   ];
 

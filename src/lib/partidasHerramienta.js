@@ -135,6 +135,31 @@ export async function partidosPendientesDeJugador(prisma, jugadorId) {
     }
   }
 
+  // --- Amistosos (plan "partido-amistoso-remoto", guardado en el proyecto) -
+  // No cuelgan de ningún torneo/liga: la propia fila de PartidaHerramienta ya
+  // es el partido en sí (se crea entera en POST /amistosa), así que aquí no
+  // hace falta resolver participantes ni configuración por ronda — solo
+  // listar las que están a medias y en las que participa este jugador.
+  const amistosos = await prisma.partidaHerramienta.findMany({
+    where: { amistosa: true, finalizada: false },
+  });
+  for (const partida of amistosos) {
+    const esLado1 = partida.jugadoresId1.includes(jugadorId);
+    const esLado2 = partida.jugadoresId2.includes(jugadorId);
+    if (!esLado1 && !esLado2) continue;
+    pendientes.push({
+      tipo: "amistosa",
+      partidaHerramientaId: partida.id,
+      entidadTipo: "amistosa",
+      entidadId: null,
+      entidadNombre: "Amistoso",
+      etiquetaPropia: esLado1 ? partida.etiqueta1 : partida.etiqueta2,
+      etiquetaRival: esLado1 ? partida.etiqueta2 : partida.etiqueta1,
+      juegoConfigurado: partida.juego,
+      alMejorDe: partida.alMejorDe,
+    });
+  }
+
   return pendientes;
 }
 

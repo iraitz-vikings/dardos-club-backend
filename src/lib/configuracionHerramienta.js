@@ -26,7 +26,13 @@ export const MODOS_CRICKET_VALIDOS = ["normal", "cutthroat"];
 // para `porDefecto` cuando la herramienta está activa); si no es obligatoria
 // y no viene nada, se devuelve `valor: null` sin error (significa "usa la de
 // por defecto para esta ronda/jornada").
-function limpiarConfigJuego(valor, { requerida }) {
+// Exportada aparte (además de usarse dentro de validarConfiguracionHerramienta)
+// para que la ruta POST /api/partidas-herramienta/amistosa (plan
+// "partido-amistoso-remoto", guardado en el proyecto) pueda validar con las
+// mismas reglas el juego/reglas que elige el creador de un amistoso — ahí no
+// hay ronda/jornada de la que heredar configuración, el propio jugador la
+// elige directamente al crear el partido.
+export function limpiarConfigJuego(valor, { requerida }) {
   if (valor === undefined || valor === null) {
     return requerida ? { ok: false, error: "Falta la configuración del juego (501/Cricket, al mejor de cuántas)." } : { ok: true, valor: null };
   }

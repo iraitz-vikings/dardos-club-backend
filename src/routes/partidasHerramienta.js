@@ -8,9 +8,11 @@ import {
   localizarPartidoConConfig,
   resolverParticipante,
 } from "../lib/partidasHerramienta.js";
+import { limpiarConfigJuego } from "../lib/configuracionHerramienta.js";
 import { aplicarResultadoCuadroPartido } from "./torneosClub.js";
 import { aplicarResultadoPartidoLiga } from "./ligasClub.js";
 import { pinValido } from "./jugadores.js";
+import { requireAuth } from "./auth.js";
 
 // Flujo público de juego con la herramienta de marcador (Slice 3+4 del plan
 // "herramienta-marcador-torneos-ligas", guardado en el proyecto): un jugador
@@ -136,8 +138,64 @@ function formatearPartida(fila) {
     legsGanados1: fila.legsGanados1,
     legsGanados2: fila.legsGanados2,
     finalizada: fila.finalizada,
+    amistosa: fila.amistosa,
+    visitaEnCurso: fila.visitaEnCurso,
   };
 }
+
+// POST /api/partidas-herramienta/amistosa - un socio logueado (sesión normal,
+// no PIN: hace falta para poder elegir rival del listado del club con
+// garantías) reta a otro jugador del club a un amistoso fuera de torneo/liga
+// (plan "partido-amistoso-remoto", guardado en el proyecto). A diferencia de
+// /iniciar, aquí no hay ronda/jornada de la que heredar juego/reglas: las
+// elige directamente el creador, así que "ambos" (501 o Cricket a elegir) no
+// tiene sentido y se rechaza. body: { rivalJugadorId } o { rivalNombreNuevo }
+// (alta de amigo nueva sobre la marcha, igual que ya se hace al apuntar
+// invitados a un torneo) + { juego, alMejorDe, apertura?, cierre?, modoCricket? }.
+router.post("/amistosa", requireAuth, async (req, res) => {
+  const creador = await prisma.jugador.findUnique({ where: { usuarioId: req.usuario.sub } });
+  if (!creador) {
+    return res.status(400).json({ error: "Tu cuenta de socio no tiene una ficha de jugador vinculada." });
+  }
+
+  const { rivalJugadorId, rivalNombreNuevo } = req.body;
+  let rival;
+  if (rivalNombreNuevo && rivalNombreNuevo.trim()) {
+    rival = await prisma.jugador.create({ data: { nombre: rivalNombreNuevo.trim() } });
+  } else if (rivalJugadorId) {
+    rival = await prisma.jugador.findUnique({ where: { id: rivalJugadorId } });
+    if (!rival) return res.status(404).json({ error: "Rival no encontrado." });
+  } else {
+    return res.status(400).json({ error: "Falta elegir un rival, o el nombre de un amigo nuevo." });
+  }
+  if (rival.id === creador.id) {
+    return res.status(400).json({ error: "No puedes retarte a ti mismo." });
+  }
+
+  const config = limpiarConfigJuego(req.body, { requerida: true });
+  if (!config.ok) return res.status(400).json({ error: config.error });
+  if (config.valor.juego === "ambos") {
+    return res.status(400).json({ error: 'Elige 501 o Cricket para el amistoso (no vale "ambos").' });
+  }
+
+  const creada = await prisma.partidaHerramienta.create({
+    data: {
+      amistosa: true,
+      juego: config.valor.juego,
+      alMejorDe: config.valor.alMejorDe,
+      apertura: config.valor.apertura || null,
+      cierre: config.valor.cierre || null,
+      modoCricket: config.valor.modoCricket || null,
+      etiqueta1: creador.apodo || creador.nombre,
+      etiqueta2: rival.apodo || rival.nombre,
+      jugadoresId1: [creador.id],
+      jugadoresId2: [rival.id],
+      nombres1: [creador.apodo || creador.nombre],
+      nombres2: [rival.apodo || rival.nombre],
+    },
+  });
+  res.status(201).json(formatearPartida(creada));
+});
 
 // POST /api/partidas-herramienta/iniciar - crea (o recupera, si ya existía)
 // la PartidaHerramienta de un partido pendiente concreto. body: { tipo:
@@ -244,7 +302,11 @@ router.post("/:id/legs", requireJugadorPartida, async (req, res) => {
 
   const actualizada = await prisma.partidaHerramienta.update({
     where: { id: partida.id },
-    data: { legs, legsGanados1, legsGanados2, finalizada },
+    // visitaEnCurso a null: el leg ha terminado, no hay ninguna visita a
+    // medias (ni la del siguiente leg, que todavía no ha empezado ningún
+    // dardo) — así el otro dispositivo, al hacer polling, no se queda
+    // mirando dardos de un leg que ya no existe.
+    data: { legs, legsGanados1, legsGanados2, finalizada, visitaEnCurso: null },
   });
 
   if (finalizada) {
@@ -257,6 +319,44 @@ router.post("/:id/legs", requireJugadorPartida, async (req, res) => {
     }
   }
 
+  res.json(formatearPartida(actualizada));
+});
+
+// PUT /api/partidas-herramienta/:id/visita - guarda el estado de la visita en
+// curso (partido remoto entre dos dispositivos, hoy solo amistosos — plan
+// "partido-amistoso-remoto" guardado en el proyecto). body libre (forma
+// depende del juego, ver comentario de `visitaEnCurso` en schema.prisma) pero
+// siempre con `turnoJugadorId`: de quién es el turno DESPUÉS de este envío
+// (el mismo jugador que envía, si sigue tirando dardos de su visita; el
+// rival, si acaba de terminar su turno de 3 dardos).
+//
+// Control de turno en el servidor: solo puede escribir aquí quien ya tenía
+// el turno asignado (partida.visitaEnCurso.turnoJugadorId) — así el
+// dispositivo del rival no puede pisar el marcador del otro mientras no le
+// toca. Si todavía no hay ninguna visita guardada (partida recién creada o
+// entre leg y leg) se acepta el primer envío de cualquiera de los dos
+// participantes para arrancarla: no hay hoy una regla de "quién empieza"
+// explícita en el backend para amistosos, la fija el frontend.
+router.put("/:id/visita", requireJugadorPartida, async (req, res) => {
+  const partida = await prisma.partidaHerramienta.findUnique({ where: { id: req.params.id } });
+  if (!partida) return res.status(404).json({ error: "Partida no encontrada" });
+  if (partida.finalizada) return res.status(409).json({ error: "Esta partida ya ha terminado." });
+  const esParticipante =
+    partida.jugadoresId1.includes(req.jugadorPartidaId) || partida.jugadoresId2.includes(req.jugadorPartidaId);
+  if (!esParticipante) return res.status(403).json({ error: "No eres parte de este partido." });
+
+  const turnoActual = partida.visitaEnCurso?.turnoJugadorId;
+  if (turnoActual && turnoActual !== req.jugadorPartidaId) {
+    return res.status(403).json({ error: "No es tu turno." });
+  }
+  if (!req.body || !req.body.turnoJugadorId) {
+    return res.status(400).json({ error: "Falta indicar de quién es el turno." });
+  }
+
+  const actualizada = await prisma.partidaHerramienta.update({
+    where: { id: partida.id },
+    data: { visitaEnCurso: req.body },
+  });
   res.json(formatearPartida(actualizada));
 });
 

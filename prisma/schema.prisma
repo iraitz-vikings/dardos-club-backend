@@ -703,6 +703,25 @@ model PartidaHerramienta {
   // sin empezar, o entre visita y visita).
   visitaEnCurso Json?
 
+  // Cámaras en directo (plan "camaras-partidas", guardado en el proyecto):
+  // un dispositivo con dos cámaras (diana + lanzador) se puede activar al
+  // jugar y retransmitirlas por WebRTC a quien esté viendo el partido (el
+  // rival en un amistoso remoto, o espectadores de la página pública).
+  // camarasActivas indica si el emisor las tiene encendidas ahora mismo.
+  // senalCamara es el buzón de señalización (oferta/respuesta SDP y
+  // candidatos ICE), sin websockets — por polling, igual que visitaEnCurso —
+  // keyed por viewerId (uno por cada espectador conectado):
+  // { viewers: { [viewerId]: { estado, offer, answer, iceEmisor: [],
+  // iceReceptor: [], actualizadoEn } } }. Se resetea a { viewers: {} } cada
+  // vez que se activan las cámaras (ver POST /:id/camara/activar).
+  //
+  // Simplificación conocida: un único emisor por partida (quien pulse
+  // "Activar mis cámaras" primero). Si algún día hace falta que los dos
+  // lados emitan a la vez en un amistoso remoto, habría que duplicar estos
+  // dos campos por lado (camarasActivas1/2, senalCamara1/2).
+  camarasActivas Boolean @default(false)
+  senalCamara    Json?
+
   creadoEn      DateTime @default(now())
   actualizadoEn DateTime @updatedAt
 }

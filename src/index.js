@@ -107,11 +107,12 @@ app.get("/api/health", (_req, res) => res.json({ ok: true }));
 // poder recibir el /start de los invitados que hacen check-in.
 iniciarBotTelegram();
 
-// Cada noche a las 04:00 se refrescan las medias de Connection Darts y
-// Phoenix Darts guardadas en los perfiles de los socios (ver
-// src/scrapers/actualizarMedias.js). También se puede lanzar a mano desde
-// el admin con el botón "Actualizar medias".
-cron.schedule("0 4 * * *", () => {
+// Cada 15 días (días 1 y 16 del mes) a las 04:00 se refrescan las medias de
+// Connection Darts y Phoenix Darts guardadas en los perfiles de los socios
+// (ver src/scrapers/actualizarMedias.js) — las medias no cambian tanto como
+// para justificar hacerlo cada noche. También se puede lanzar a mano en
+// cualquier momento desde el admin con el botón "Actualizar medias".
+cron.schedule("0 4 1,16 * *", () => {
   console.log("Actualizando medias de fabricantes (cron nocturno)...");
   actualizarTodasLasMedias()
     .then((resumen) => console.log("Medias actualizadas:", resumen))

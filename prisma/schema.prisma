@@ -395,6 +395,12 @@ model CuadroPartido {
   // contar aunque el partido siga "en curso". Se resetea a false cada vez
   // que el partido se vuelve a marcar "en curso" (nuevo uso de la máquina).
   partidoIniciado Boolean @default(false)
+  // Si ya se ha mandado el aviso de "queda 1 minuto" del temporizador (ver
+  // TorneoClub.temporizadorActivo/temporizadorMinutos y
+  // src/lib/avisoTemporizadorPartidos.js) — evita avisar más de una vez por
+  // activación. Se resetea a false en las mismas transiciones que
+  // partidoIniciado (ver aplicarResultadoCuadroPartido en torneosClub.js).
+  avisoUnMinutoEnviado Boolean @default(false)
 
   siguientePartidoGanadorId String?
   siguienteSlotGanador Int?

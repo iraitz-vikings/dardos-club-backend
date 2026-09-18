@@ -47,9 +47,15 @@ export async function enviarPushAJugador(jugadorId, payload) {
   await Promise.all(
     suscripciones.map(async (sub) => {
       try {
+        // urgency "high": sin esto, Android puede retrasar la entrega
+        // mientras el móvil está en reposo (Doze) y despertarlo solo en sus
+        // ventanas de mantenimiento o al desbloquear — de ahí que llegaran
+        // en momentos random en la prueba del torneo. Con prioridad alta,
+        // el sistema despierta el dispositivo al instante para entregarlo.
         await webpush.sendNotification(
           { endpoint: sub.endpoint, keys: { p256dh: sub.p256dh, auth: sub.auth } },
-          JSON.stringify(payload)
+          JSON.stringify(payload),
+          { urgency: "high" }
         );
         enviados++;
       } catch (err) {

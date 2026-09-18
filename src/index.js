@@ -8,6 +8,7 @@ import { actualizarTodasLasClasificaciones } from "./scrapers/actualizarClasific
 import { iniciarBotTelegram } from "./routes/telegram.js";
 import { limpiarPapelera } from "./lib/limpiarPapelera.js";
 import { enviarRecordatoriosDeHoy } from "./lib/recordatoriosPartidos.js";
+import { enviarAvisosUnMinutoTemporizador } from "./lib/avisoTemporizadorPartidos.js";
 
 import noticiasRouter from "./routes/noticias.js";
 import buscarRouter from "./routes/buscar.js";
@@ -155,6 +156,16 @@ cron.schedule("0 8 * * *", () => {
   enviarRecordatoriosDeHoy()
     .then((resumen) => console.log("Recordatorios enviados:", resumen))
     .catch((err) => console.error("Error enviando recordatorios:", err));
+});
+
+// Cada minuto se revisa si algún partido de torneo del club "en curso" con
+// temporizador activo ha llegado a su último minuto de plazo, para mandar
+// el aviso de "falta 1 minuto" (ver src/lib/avisoTemporizadorPartidos.js).
+// Solo torneos del club (las ligas no tienen temporizador).
+cron.schedule("* * * * *", () => {
+  enviarAvisosUnMinutoTemporizador().catch((err) =>
+    console.error("Error enviando avisos de temporizador:", err.message || err)
+  );
 });
 
 const PORT = process.env.PORT || 3000;

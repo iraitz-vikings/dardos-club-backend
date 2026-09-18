@@ -802,7 +802,7 @@ async function notificarSorteoCuadrante(cuadranteId, posiciones) {
 export async function aplicarPosicionesRonda1(cuadranteId, posiciones) {
   await prisma.cuadroPartido.updateMany({
     where: { cuadranteId },
-    data: { jugador1: null, jugador2: null, ganador: null, resultado: null, enCurso: false, enCursoDesde: null, partidoIniciado: false },
+    data: { jugador1: null, jugador2: null, ganador: null, resultado: null, enCurso: false, enCursoDesde: null, partidoIniciado: false, avisoUnMinutoEnviado: false },
   });
 
   const ronda1 = await prisma.cuadroPartido.findMany({
@@ -983,7 +983,7 @@ router.post("/cuadrantes/:cuadranteId/reiniciar", requireAdmin, async (req, res)
   // pase automático se mantiene).
   await prisma.cuadroPartido.updateMany({
     where: { cuadranteId, id: { notIn: bye.map((p) => p.id) } },
-    data: { ganador: null, resultado: null, enCurso: false, enCursoDesde: null, partidoIniciado: false },
+    data: { ganador: null, resultado: null, enCurso: false, enCursoDesde: null, partidoIniciado: false, avisoUnMinutoEnviado: false },
   });
   // Vacía los nombres en todo lo que no sea la ronda 1 del cuadro de ganadores
   // (esos nombres se rellenaban solos al avanzar, así que hay que borrarlos).
@@ -1043,7 +1043,7 @@ router.put("/cuadrantes/:cuadranteId/estado", requireAdmin, async (req, res) => 
   try {
     const cuadrante = await prisma.cuadrante.update({ where: { id: cuadranteId }, data: { estado } });
     if (estado === "finalizado") {
-      await prisma.cuadroPartido.updateMany({ where: { cuadranteId, enCurso: true }, data: { enCurso: false, enCursoDesde: null, partidoIniciado: false } });
+      await prisma.cuadroPartido.updateMany({ where: { cuadranteId, enCurso: true }, data: { enCurso: false, enCursoDesde: null, partidoIniciado: false, avisoUnMinutoEnviado: false } });
     }
     res.json(cuadrante);
   } catch {
@@ -1471,7 +1471,7 @@ export async function aplicarResultadoCuadroPartido(partidoId, cambios) {
       });
       await prisma.cuadroPartido.updateMany({
         where: { id: { in: hermanos.map((h) => h.id) } },
-        data: { enCurso: false, enCursoDesde: null, partidoIniciado: false },
+        data: { enCurso: false, enCursoDesde: null, partidoIniciado: false, avisoUnMinutoEnviado: false },
       });
     }
   }
@@ -1508,6 +1508,11 @@ export async function aplicarResultadoCuadroPartido(partidoId, cambios) {
     : enCursoDesdeFinal !== undefined
       ? false
       : undefined;
+  // Aviso de "queda 1 minuto" del temporizador (ver
+  // src/lib/avisoTemporizadorPartidos.js): se resetea a false en las mismas
+  // transiciones que partidoIniciado, para que una nueva activación de la
+  // máquina vuelva a poder avisar.
+  const avisoUnMinutoEnviadoFinal = enCursoDesdeFinal !== undefined ? false : undefined;
 
   const partido = await prisma.cuadroPartido.update({
     where: { id: partidoId },
@@ -1520,6 +1525,7 @@ export async function aplicarResultadoCuadroPartido(partidoId, cambios) {
       enCurso: enCursoFinal,
       enCursoDesde: enCursoDesdeFinal,
       partidoIniciado: partidoIniciadoFinal,
+      avisoUnMinutoEnviado: avisoUnMinutoEnviadoFinal,
     },
   });
 

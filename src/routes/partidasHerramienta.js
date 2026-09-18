@@ -2,6 +2,7 @@ import { Router } from "express";
 import { PrismaClient } from "@prisma/client";
 import bcrypt from "bcryptjs";
 import jwt from "jsonwebtoken";
+import crypto from "node:crypto";
 import { loginLimiter } from "../middleware/loginLimiter.js";
 import {
   partidosPendientesDeJugador,
@@ -420,6 +421,192 @@ router.put("/:id/visita", requireJugadorPartida, async (req, res) => {
     data: { visitaEnCurso: req.body },
   });
   res.json(formatearPartida(actualizada));
+});
+
+// --- Cámaras en directo (plan "camaras-partidas", guardado en el proyecto) -
+//
+// Un dispositivo con dos cámaras (diana + lanzador) se puede activar al
+// jugar y retransmitir por WebRTC — sin servidor de medios ni TURN de pago,
+// solo STUN público (lo elige el frontend) — a quien esté viendo el
+// partido: el rival en un amistoso remoto, o espectadores de la página
+// pública de un torneo/liga. La señalización (oferta/respuesta SDP,
+// candidatos ICE) va por polling, igual que visitaEnCurso, guardada en
+// senalCamara.viewers, una entrada por espectador conectado.
+//
+// Dos roles con permisos distintos:
+// - Emisor: quien tiene las cámaras encendidas, siempre uno de los dos
+//   participantes del partido (requireJugadorPartida). Ve el mapa entero de
+//   espectadores (para poder mandarles oferta a los nuevos) y solo puede
+//   escribir su propia mitad (offer/iceEmisor) de cada entrada.
+// - Espectador: público, sin PIN — puede ser el rival remoto o cualquiera
+//   viendo la página pública. Solo ve y escribe su PROPIA entrada (por
+//   viewerId), nunca el mapa completo, para no filtrar la señalización de
+//   otros espectadores ni dejar que nadie la pise.
+function esParticipanteDe(partida, jugadorId) {
+  return partida.jugadoresId1.includes(jugadorId) || partida.jugadoresId2.includes(jugadorId);
+}
+
+// Descarta entradas de espectador con más de 10 minutos sin actividad, para
+// que senalCamara no crezca sin límite con gente que abrió la página y nunca
+// llegó a conectar (o se fue sin cerrar la pestaña). Se llama al registrar
+// un espectador nuevo (POST /ver) y al activar las cámaras.
+function podarViewers(senalCamara) {
+  const viewers = (senalCamara && senalCamara.viewers) || {};
+  const limite = Date.now() - 10 * 60 * 1000;
+  const vivos = {};
+  for (const [id, v] of Object.entries(viewers)) {
+    if (new Date(v.actualizadoEn || 0).getTime() >= limite) vivos[id] = v;
+  }
+  return { viewers: vivos };
+}
+
+// GET /api/partidas-herramienta/:id/camara/estado - público: si las cámaras
+// están encendidas ahora mismo, para que cualquier vista del partido decida
+// si mostrar el hueco de vídeo.
+router.get("/:id/camara/estado", async (req, res) => {
+  const partida = await prisma.partidaHerramienta.findUnique({
+    where: { id: req.params.id },
+    select: { camarasActivas: true },
+  });
+  if (!partida) return res.status(404).json({ error: "Partida no encontrada" });
+  res.json({ camarasActivas: partida.camarasActivas });
+});
+
+// POST /api/partidas-herramienta/:id/camara/activar - un participante
+// enciende sus cámaras. Resetea senalCamara: cualquier espectador que
+// estuviera conectado a una emisión anterior tiene que volver a registrarse
+// (ver POST /ver).
+router.post("/:id/camara/activar", requireJugadorPartida, async (req, res) => {
+  const partida = await prisma.partidaHerramienta.findUnique({ where: { id: req.params.id } });
+  if (!partida) return res.status(404).json({ error: "Partida no encontrada" });
+  if (!esParticipanteDe(partida, req.jugadorPartidaId)) {
+    return res.status(403).json({ error: "No eres parte de este partido." });
+  }
+  const actualizada = await prisma.partidaHerramienta.update({
+    where: { id: partida.id },
+    data: { camarasActivas: true, senalCamara: { viewers: {} } },
+  });
+  res.json({ camarasActivas: actualizada.camarasActivas });
+});
+
+// POST /api/partidas-herramienta/:id/camara/desactivar - apaga las cámaras
+// y limpia la señalización.
+router.post("/:id/camara/desactivar", requireJugadorPartida, async (req, res) => {
+  const partida = await prisma.partidaHerramienta.findUnique({ where: { id: req.params.id } });
+  if (!partida) return res.status(404).json({ error: "Partida no encontrada" });
+  if (!esParticipanteDe(partida, req.jugadorPartidaId)) {
+    return res.status(403).json({ error: "No eres parte de este partido." });
+  }
+  const actualizada = await prisma.partidaHerramienta.update({
+    where: { id: partida.id },
+    data: { camarasActivas: false, senalCamara: null },
+  });
+  res.json({ camarasActivas: actualizada.camarasActivas });
+});
+
+// POST /api/partidas-herramienta/:id/camara/ver - público: un espectador se
+// registra para ver las cámaras y recibe su viewerId (a partir de aquí, solo
+// puede leer/escribir su propia entrada — ver GET/PUT .../senal/:viewerId).
+router.post("/:id/camara/ver", async (req, res) => {
+  const partida = await prisma.partidaHerramienta.findUnique({ where: { id: req.params.id } });
+  if (!partida) return res.status(404).json({ error: "Partida no encontrada" });
+  if (!partida.camarasActivas) {
+    return res.status(409).json({ error: "Las cámaras no están activas ahora mismo." });
+  }
+  const viewerId = crypto.randomUUID();
+  const senal = podarViewers(partida.senalCamara);
+  senal.viewers[viewerId] = {
+    estado: "esperando",
+    offer: null,
+    answer: null,
+    iceEmisor: [],
+    iceReceptor: [],
+    actualizadoEn: new Date().toISOString(),
+  };
+  await prisma.partidaHerramienta.update({ where: { id: partida.id }, data: { senalCamara: senal } });
+  res.status(201).json({ viewerId });
+});
+
+// GET /api/partidas-herramienta/:id/camara/senal - el EMISOR (participante)
+// consulta el mapa entero de espectadores, para mandar oferta a los nuevos
+// ("esperando") y aplicar la respuesta de los que ya contestaron.
+router.get("/:id/camara/senal", requireJugadorPartida, async (req, res) => {
+  const partida = await prisma.partidaHerramienta.findUnique({
+    where: { id: req.params.id },
+    select: { jugadoresId1: true, jugadoresId2: true, senalCamara: true },
+  });
+  if (!partida) return res.status(404).json({ error: "Partida no encontrada" });
+  if (!esParticipanteDe(partida, req.jugadorPartidaId)) {
+    return res.status(403).json({ error: "No eres parte de este partido." });
+  }
+  res.json({ viewers: (partida.senalCamara && partida.senalCamara.viewers) || {} });
+});
+
+// PUT /api/partidas-herramienta/:id/camara/senal - el EMISOR manda su oferta
+// y/o candidatos ICE nuevos para un espectador concreto (body: { viewerId,
+// offer?, iceEmisor?: [...] }). Los candidatos se ACUMULAN (no se
+// sobrescriben): el espectador solo aplica los que no tenía ya.
+router.put("/:id/camara/senal", requireJugadorPartida, async (req, res) => {
+  const { viewerId, offer, iceEmisor } = req.body || {};
+  if (!viewerId) return res.status(400).json({ error: "Falta el id del espectador." });
+  const partida = await prisma.partidaHerramienta.findUnique({ where: { id: req.params.id } });
+  if (!partida) return res.status(404).json({ error: "Partida no encontrada" });
+  if (!esParticipanteDe(partida, req.jugadorPartidaId)) {
+    return res.status(403).json({ error: "No eres parte de este partido." });
+  }
+  const senal = partida.senalCamara || { viewers: {} };
+  const actual = senal.viewers[viewerId];
+  if (!actual) return res.status(404).json({ error: "Ese espectador ya no está conectado." });
+  senal.viewers[viewerId] = {
+    ...actual,
+    ...(offer ? { offer, estado: "esperando-respuesta" } : {}),
+    iceEmisor: [...(actual.iceEmisor || []), ...(iceEmisor || [])],
+    actualizadoEn: new Date().toISOString(),
+  };
+  await prisma.partidaHerramienta.update({ where: { id: partida.id }, data: { senalCamara: senal } });
+  res.status(204).end();
+});
+
+// GET /api/partidas-herramienta/:id/camara/senal/:viewerId - público: el
+// espectador lee SOLO su propia entrada (nunca el mapa completo, para no
+// filtrar la señalización de otros).
+router.get("/:id/camara/senal/:viewerId", async (req, res) => {
+  const partida = await prisma.partidaHerramienta.findUnique({
+    where: { id: req.params.id },
+    select: { camarasActivas: true, senalCamara: true },
+  });
+  if (!partida) return res.status(404).json({ error: "Partida no encontrada" });
+  const entrada = partida.senalCamara && partida.senalCamara.viewers[req.params.viewerId];
+  if (!entrada) {
+    return res.status(404).json({ error: "Tu sesión de vídeo ha caducado, vuelve a intentarlo." });
+  }
+  res.json({
+    camarasActivas: partida.camarasActivas,
+    offer: entrada.offer,
+    iceEmisor: entrada.iceEmisor || [],
+  });
+});
+
+// PUT /api/partidas-herramienta/:id/camara/senal/:viewerId - público: el
+// espectador manda su respuesta y/o candidatos ICE nuevos (body: { answer?,
+// iceReceptor?: [...] }).
+router.put("/:id/camara/senal/:viewerId", async (req, res) => {
+  const { answer, iceReceptor } = req.body || {};
+  const partida = await prisma.partidaHerramienta.findUnique({ where: { id: req.params.id } });
+  if (!partida) return res.status(404).json({ error: "Partida no encontrada" });
+  const senal = partida.senalCamara || { viewers: {} };
+  const actual = senal.viewers[req.params.viewerId];
+  if (!actual) {
+    return res.status(404).json({ error: "Tu sesión de vídeo ha caducado, vuelve a intentarlo." });
+  }
+  senal.viewers[req.params.viewerId] = {
+    ...actual,
+    ...(answer ? { answer, estado: "conectado" } : {}),
+    iceReceptor: [...(actual.iceReceptor || []), ...(iceReceptor || [])],
+    actualizadoEn: new Date().toISOString(),
+  };
+  await prisma.partidaHerramienta.update({ where: { id: partida.id }, data: { senalCamara: senal } });
+  res.status(204).end();
 });
 
 export default router;

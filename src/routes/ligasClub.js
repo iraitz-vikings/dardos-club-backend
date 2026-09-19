@@ -155,7 +155,7 @@ router.post("/", requireAdmin, async (req, res) => {
 
 router.put("/:id", requireAdmin, async (req, res) => {
   const { id } = req.params;
-  const { nombre, descripcion, fechaInicio, fechaFin, insigniaUrl, visibilidad, finalizado, numeroGrupos, notificaciones, imagenEliminadoUrl, imagenCampeonUrl, imagenBienvenidaUrl, configuracionHerramienta, videoDirectoUrl, mensajesAvisos } = req.body;
+  const { nombre, descripcion, fechaInicio, fechaFin, insigniaUrl, visibilidad, finalizado, numeroGrupos, notificaciones, anclarInicio, imagenEliminadoUrl, imagenCampeonUrl, imagenBienvenidaUrl, configuracionHerramienta, videoDirectoUrl, mensajesAvisos } = req.body;
 
   let numeroGruposData;
   if (numeroGrupos !== undefined) {
@@ -183,6 +183,7 @@ router.put("/:id", requireAdmin, async (req, res) => {
         finalizado: finalizado !== undefined ? !!finalizado : undefined,
         numeroGrupos: numeroGrupos !== undefined ? numeroGruposData : undefined,
         notificaciones: notificaciones !== undefined ? !!notificaciones : undefined,
+        anclarInicio: anclarInicio !== undefined ? !!anclarInicio : undefined,
         imagenEliminadoUrl: imagenEliminadoUrl !== undefined ? imagenEliminadoUrl || null : undefined,
         imagenCampeonUrl: imagenCampeonUrl !== undefined ? imagenCampeonUrl || null : undefined,
         imagenBienvenidaUrl: imagenBienvenidaUrl !== undefined ? imagenBienvenidaUrl || null : undefined,

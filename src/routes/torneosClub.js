@@ -371,7 +371,7 @@ router.post("/", requireAdmin, async (req, res) => {
 
 router.put("/:id", requireAdmin, async (req, res) => {
   const { id } = req.params;
-  const { nombre, descripcion, fechaInicio, fechaFin, insigniaUrl, visibilidad, numeroMaquinas, tipoEliminacion, finalizado, notificaciones, temporizadorActivo, temporizadorMinutos, modoJornadas, puntosPorPosicion, imagenEliminadoUrl, imagenCampeonUrl, imagenBienvenidaUrl, configuracionHerramienta, videoDirectoUrl, mensajesAvisos } = req.body;
+  const { nombre, descripcion, fechaInicio, fechaFin, insigniaUrl, visibilidad, numeroMaquinas, tipoEliminacion, finalizado, notificaciones, anclarInicio, temporizadorActivo, temporizadorMinutos, modoJornadas, puntosPorPosicion, imagenEliminadoUrl, imagenCampeonUrl, imagenBienvenidaUrl, configuracionHerramienta, videoDirectoUrl, mensajesAvisos } = req.body;
   const puntos = validarPuntosPorPosicion(puntosPorPosicion);
   if (!puntos.ok) return res.status(400).json({ error: puntos.error });
   const herramienta = validarConfiguracionHerramienta(configuracionHerramienta);
@@ -401,6 +401,7 @@ router.put("/:id", requireAdmin, async (req, res) => {
         tipoEliminacion: tipoEliminacion || undefined,
         finalizado: finalizado !== undefined ? !!finalizado : undefined,
         notificaciones: notificaciones !== undefined ? !!notificaciones : undefined,
+        anclarInicio: anclarInicio !== undefined ? !!anclarInicio : undefined,
         temporizadorActivo: temporizadorActivo !== undefined ? !!temporizadorActivo : undefined,
         temporizadorMinutos: temporizadorActivo !== undefined ? temporizador.valor : undefined,
         modoJornadas: modoJornadas !== undefined ? !!modoJornadas : undefined,

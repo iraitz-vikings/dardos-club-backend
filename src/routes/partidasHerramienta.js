@@ -123,6 +123,48 @@ router.get("/pendientes", requireJugadorPartida, async (req, res) => {
   res.json(pendientes);
 });
 
+// GET /api/partidas-herramienta/mis-competiciones - torneos y ligas en los
+// que participa el jugador identificado con PIN y que el admin ha marcado
+// "anclar a inicio" (pestaña pública /torneos). Cada jugador solo ve las
+// suyas. Participar = estar en algún cuadrante del torneo (o cuadrante final
+// de una liga) o en la lista de participantes de la liga.
+router.get("/mis-competiciones", requireJugadorPartida, async (req, res) => {
+  const jugadorId = req.jugadorPartidaId;
+  const enJugador = { OR: [{ jugador1Id: jugadorId }, { jugador2Id: jugadorId }] };
+  const [enCuadrantes, enLigas] = await Promise.all([
+    prisma.participanteCuadrante.findMany({
+      where: { ...enJugador, cuadrante: { OR: [{ torneoClub: { anclarInicio: true, borradoEn: null } }, { liga: { anclarInicio: true, borradoEn: null } }] } },
+      include: { cuadrante: { include: { torneoClub: true, liga: true } } },
+    }),
+    prisma.participanteLiga.findMany({
+      where: { ...enJugador, liga: { anclarInicio: true, borradoEn: null } },
+      include: { liga: true },
+    }),
+  ]);
+  const vistas = new Map();
+  const anadir = (tipo, e, etiqueta) => {
+    if (!e || !e.anclarInicio || e.borradoEn) return;
+    const clave = `${tipo}:${e.id}`;
+    if (vistas.has(clave)) return;
+    vistas.set(clave, {
+      tipo,
+      id: e.id,
+      nombre: e.nombre,
+      insigniaUrl: e.insigniaUrl,
+      fechaInicio: e.fechaInicio,
+      fechaFin: e.fechaFin,
+      finalizado: e.finalizado,
+      etiquetaPropia: etiqueta,
+    });
+  };
+  for (const p of enCuadrantes) {
+    if (p.cuadrante.torneoClub) anadir("torneo", p.cuadrante.torneoClub, p.etiqueta);
+    else anadir("liga", p.cuadrante.liga, p.etiqueta);
+  }
+  for (const p of enLigas) anadir("liga", p.liga, p.etiqueta);
+  res.json([...vistas.values()].sort((a, b) => new Date(b.fechaInicio) - new Date(a.fechaInicio)));
+});
+
 function formatearPartida(fila) {
   return {
     id: fila.id,

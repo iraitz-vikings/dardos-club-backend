@@ -185,6 +185,7 @@ function formatearPartida(fila) {
     finalizada: fila.finalizada,
     amistosa: fila.amistosa,
     visitaEnCurso: fila.visitaEnCurso,
+    listosInicio: fila.listosInicio || [],
   };
 }
 
@@ -379,6 +380,36 @@ router.get("/:id", requireJugadorPartida, async (req, res) => {
     partida.jugadoresId1.includes(req.jugadorPartidaId) || partida.jugadoresId2.includes(req.jugadorPartidaId);
   if (!esParticipante) return res.status(403).json({ error: "No eres parte de este partido." });
   res.json(formatearPartida(partida));
+});
+
+// POST /api/partidas-herramienta/:id/listo - sala de espera de un amistoso
+// remoto: el jugador pulsa (o cancela, body { listo: false }) "Inicio". El
+// marcador aparece cuando han pulsado TODOS los participantes. Una vez están
+// todos listos ya no se puede cancelar (el partido ha empezado). Se bloquea
+// la fila para que dos pulsaciones simultáneas no se pisen.
+router.post("/:id/listo", requireJugadorPartida, async (req, res) => {
+  const listo = !(req.body && req.body.listo === false);
+  const resultado = await prisma.$transaction(async (tx) => {
+    await tx.$queryRaw`SELECT id FROM "PartidaHerramienta" WHERE id = ${req.params.id} FOR UPDATE`;
+    const partida = await tx.partidaHerramienta.findUnique({ where: { id: req.params.id } });
+    if (!partida) return { fallo: [404, "Partida no encontrada"] };
+    const ids = [...new Set([...partida.jugadoresId1, ...partida.jugadoresId2])];
+    if (!ids.includes(req.jugadorPartidaId)) return { fallo: [403, "No eres parte de este partido."] };
+    if (!partida.amistosa) return { fallo: [400, "Solo los amistosos tienen sala de espera."] };
+    const actuales = new Set(partida.listosInicio || []);
+    if (!listo && ids.every((id) => actuales.has(id))) {
+      return { fallo: [409, "El partido ya ha empezado."] };
+    }
+    if (listo) actuales.add(req.jugadorPartidaId);
+    else actuales.delete(req.jugadorPartidaId);
+    const actualizada = await tx.partidaHerramienta.update({
+      where: { id: partida.id },
+      data: { listosInicio: [...actuales] },
+    });
+    return { partida: actualizada };
+  });
+  if (resultado.fallo) return res.status(resultado.fallo[0]).json({ error: resultado.fallo[1] });
+  res.json(formatearPartida(resultado.partida));
 });
 
 // POST /api/partidas-herramienta/:id/legs - registra un leg terminado. body:

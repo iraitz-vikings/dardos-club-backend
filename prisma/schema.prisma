@@ -729,6 +729,10 @@ model PartidaHerramienta {
   // dos campos por lado (camarasActivas1/2, senalCamara1/2).
   camarasActivas Boolean @default(false)
   senalCamara    Json?
+  // Sala de espera previa a un amistoso remoto: ids de los jugadores que ya
+  // han pulsado "Inicio". El marcador solo aparece cuando están todos los
+  // participantes (ver POST /:id/listo en src/routes/partidasHerramienta.js).
+  listosInicio   String[] @default([])
 
   creadoEn      DateTime @default(now())
   actualizadoEn DateTime @updatedAt

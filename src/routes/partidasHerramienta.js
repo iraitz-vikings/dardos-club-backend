@@ -488,89 +488,128 @@ function esParticipanteDe(partida, jugadorId) {
   return partida.jugadoresId1.includes(jugadorId) || partida.jugadoresId2.includes(jugadorId);
 }
 
-// Descarta entradas de espectador con más de 10 minutos sin actividad, para
-// que senalCamara no crezca sin límite con gente que abrió la página y nunca
-// llegó a conectar (o se fue sin cerrar la pestaña). Se llama al registrar
-// un espectador nuevo (POST /ver) y al activar las cámaras.
-function podarViewers(senalCamara) {
-  const viewers = (senalCamara && senalCamara.viewers) || {};
-  const limite = Date.now() - 10 * 60 * 1000;
-  const vivos = {};
-  for (const [id, v] of Object.entries(viewers)) {
-    if (new Date(v.actualizadoEn || 0).getTime() >= limite) vivos[id] = v;
-  }
-  return { viewers: vivos };
+// Emisión en los DOS sentidos a la vez (pedido de Iraitz, 2026-09-19: solo se
+// veían las cámaras del rival si apagabas las tuyas). Cada participante es un
+// emisor independiente: senalCamara = { emisores: { [jugadorId]: { activas,
+// viewers: { [viewerId]: {...} } } } }. El rival (o quien sea) que quiere ver
+// las cámaras de un emisor se registra como espectador de ESE emisor.
+// camarasActivas (columna) queda como "hay algún emisor activo".
+function normalizarSenal(senalCamara) {
+  return { emisores: (senalCamara && senalCamara.emisores) || {} };
 }
 
-// GET /api/partidas-herramienta/:id/camara/estado - público: si las cámaras
-// están encendidas ahora mismo, para que cualquier vista del partido decida
-// si mostrar el hueco de vídeo.
+function hayEmisorActivo(senal) {
+  return Object.values(senal.emisores).some((e) => e.activas);
+}
+
+// Ahora escriben en el mismo JSON dos emisores y dos espectadores cada 2.5s,
+// así que el leer-modificar-escribir se hace bloqueando la fila (FOR UPDATE)
+// dentro de una transacción: sin esto se pisarían candidatos ICE/ofertas.
+// `mutador(senal, partida)` modifica `senal` en sitio y devuelve un valor
+// (o { fallo: [status, mensaje] } para abortar sin guardar).
+async function modificarSenal(partidaId, mutador) {
+  return prisma.$transaction(async (tx) => {
+    await tx.$queryRaw`SELECT id FROM "PartidaHerramienta" WHERE id = ${partidaId} FOR UPDATE`;
+    const partida = await tx.partidaHerramienta.findUnique({ where: { id: partidaId } });
+    if (!partida) return { fallo: [404, "Partida no encontrada"] };
+    const senal = normalizarSenal(partida.senalCamara);
+    const resultado = (await mutador(senal, partida)) || {};
+    if (resultado.fallo) return resultado;
+    await tx.partidaHerramienta.update({
+      where: { id: partidaId },
+      data: { senalCamara: senal, camarasActivas: hayEmisorActivo(senal) },
+    });
+    return resultado;
+  });
+}
+
+function responderFallo(res, r) {
+  return res.status(r.fallo[0]).json({ error: r.fallo[1] });
+}
+
+// Descarta espectadores con más de 10 minutos sin actividad de un emisor,
+// para que la señalización no crezca sin límite.
+function podarViewers(emisor) {
+  const limite = Date.now() - 10 * 60 * 1000;
+  const vivos = {};
+  for (const [id, v] of Object.entries(emisor.viewers || {})) {
+    if (new Date(v.actualizadoEn || 0).getTime() >= limite) vivos[id] = v;
+  }
+  emisor.viewers = vivos;
+}
+
+// Busca en qué emisor está registrado un viewerId (los ids son UUID únicos).
+function buscarViewer(senal, viewerId) {
+  for (const emisor of Object.values(senal.emisores)) {
+    if (emisor.viewers && emisor.viewers[viewerId]) return { emisor, viewerId };
+  }
+  return null;
+}
+
+// GET /api/partidas-herramienta/:id/camara/estado - público: qué emisores
+// (jugadorId) tienen las cámaras encendidas ahora mismo.
 router.get("/:id/camara/estado", async (req, res) => {
   const partida = await prisma.partidaHerramienta.findUnique({
     where: { id: req.params.id },
-    select: { camarasActivas: true },
+    select: { senalCamara: true },
   });
   if (!partida) return res.status(404).json({ error: "Partida no encontrada" });
-  res.json({ camarasActivas: partida.camarasActivas });
+  const senal = normalizarSenal(partida.senalCamara);
+  const emisores = Object.entries(senal.emisores).filter(([, e]) => e.activas).map(([id]) => id);
+  res.json({ camarasActivas: emisores.length > 0, emisores });
 });
 
 // POST /api/partidas-herramienta/:id/camara/activar - un participante
-// enciende sus cámaras. Resetea senalCamara: cualquier espectador que
-// estuviera conectado a una emisión anterior tiene que volver a registrarse
-// (ver POST /ver).
+// enciende SUS cámaras (no afecta a las del rival). Resetea solo sus
+// espectadores: tienen que volver a registrarse (ver POST /ver).
 router.post("/:id/camara/activar", requireJugadorPartida, async (req, res) => {
-  const partida = await prisma.partidaHerramienta.findUnique({ where: { id: req.params.id } });
-  if (!partida) return res.status(404).json({ error: "Partida no encontrada" });
-  if (!esParticipanteDe(partida, req.jugadorPartidaId)) {
-    return res.status(403).json({ error: "No eres parte de este partido." });
-  }
-  const actualizada = await prisma.partidaHerramienta.update({
-    where: { id: partida.id },
-    data: { camarasActivas: true, senalCamara: { viewers: {} } },
+  const r = await modificarSenal(req.params.id, (senal, partida) => {
+    if (!esParticipanteDe(partida, req.jugadorPartidaId)) return { fallo: [403, "No eres parte de este partido."] };
+    senal.emisores[req.jugadorPartidaId] = { activas: true, viewers: {} };
+    return {};
   });
-  res.json({ camarasActivas: actualizada.camarasActivas });
+  if (r.fallo) return responderFallo(res, r);
+  res.json({ camarasActivas: true });
 });
 
-// POST /api/partidas-herramienta/:id/camara/desactivar - apaga las cámaras
-// y limpia la señalización.
+// POST /api/partidas-herramienta/:id/camara/desactivar - apaga SUS cámaras y
+// limpia su señalización.
 router.post("/:id/camara/desactivar", requireJugadorPartida, async (req, res) => {
-  const partida = await prisma.partidaHerramienta.findUnique({ where: { id: req.params.id } });
-  if (!partida) return res.status(404).json({ error: "Partida no encontrada" });
-  if (!esParticipanteDe(partida, req.jugadorPartidaId)) {
-    return res.status(403).json({ error: "No eres parte de este partido." });
-  }
-  const actualizada = await prisma.partidaHerramienta.update({
-    where: { id: partida.id },
-    data: { camarasActivas: false, senalCamara: null },
+  const r = await modificarSenal(req.params.id, (senal, partida) => {
+    if (!esParticipanteDe(partida, req.jugadorPartidaId)) return { fallo: [403, "No eres parte de este partido."] };
+    delete senal.emisores[req.jugadorPartidaId];
+    return {};
   });
-  res.json({ camarasActivas: actualizada.camarasActivas });
+  if (r.fallo) return responderFallo(res, r);
+  res.json({ camarasActivas: false });
 });
 
 // POST /api/partidas-herramienta/:id/camara/ver - público: un espectador se
-// registra para ver las cámaras y recibe su viewerId (a partir de aquí, solo
-// puede leer/escribir su propia entrada — ver GET/PUT .../senal/:viewerId).
+// registra para ver las cámaras de UN emisor (body: { emisorId }) y recibe su
+// viewerId (a partir de aquí, solo puede leer/escribir su propia entrada).
 router.post("/:id/camara/ver", async (req, res) => {
-  const partida = await prisma.partidaHerramienta.findUnique({ where: { id: req.params.id } });
-  if (!partida) return res.status(404).json({ error: "Partida no encontrada" });
-  if (!partida.camarasActivas) {
-    return res.status(409).json({ error: "Las cámaras no están activas ahora mismo." });
-  }
+  const { emisorId } = req.body || {};
   const viewerId = crypto.randomUUID();
-  const senal = podarViewers(partida.senalCamara);
-  senal.viewers[viewerId] = {
-    estado: "esperando",
-    offer: null,
-    answer: null,
-    iceEmisor: [],
-    iceReceptor: [],
-    actualizadoEn: new Date().toISOString(),
-  };
-  await prisma.partidaHerramienta.update({ where: { id: partida.id }, data: { senalCamara: senal } });
+  const r = await modificarSenal(req.params.id, (senal) => {
+    const emisor = emisorId && senal.emisores[emisorId];
+    if (!emisor || !emisor.activas) return { fallo: [409, "Las cámaras no están activas ahora mismo."] };
+    podarViewers(emisor);
+    emisor.viewers[viewerId] = {
+      estado: "esperando",
+      offer: null,
+      answer: null,
+      iceEmisor: [],
+      iceReceptor: [],
+      actualizadoEn: new Date().toISOString(),
+    };
+    return {};
+  });
+  if (r.fallo) return responderFallo(res, r);
   res.status(201).json({ viewerId });
 });
 
 // GET /api/partidas-herramienta/:id/camara/senal - el EMISOR (participante)
-// consulta el mapa entero de espectadores, para mandar oferta a los nuevos
+// consulta el mapa de SUS espectadores, para mandar oferta a los nuevos
 // ("esperando") y aplicar la respuesta de los que ya contestaron.
 router.get("/:id/camara/senal", requireJugadorPartida, async (req, res) => {
   const partida = await prisma.partidaHerramienta.findUnique({
@@ -581,49 +620,48 @@ router.get("/:id/camara/senal", requireJugadorPartida, async (req, res) => {
   if (!esParticipanteDe(partida, req.jugadorPartidaId)) {
     return res.status(403).json({ error: "No eres parte de este partido." });
   }
-  res.json({ viewers: (partida.senalCamara && partida.senalCamara.viewers) || {} });
+  const emisor = normalizarSenal(partida.senalCamara).emisores[req.jugadorPartidaId];
+  res.json({ viewers: (emisor && emisor.viewers) || {} });
 });
 
 // PUT /api/partidas-herramienta/:id/camara/senal - el EMISOR manda su oferta
-// y/o candidatos ICE nuevos para un espectador concreto (body: { viewerId,
-// offer?, iceEmisor?: [...] }). Los candidatos se ACUMULAN (no se
-// sobrescriben): el espectador solo aplica los que no tenía ya.
+// y/o candidatos ICE nuevos para un espectador suyo (body: { viewerId,
+// offer?, iceEmisor?: [...] }). Los candidatos se ACUMULAN.
 router.put("/:id/camara/senal", requireJugadorPartida, async (req, res) => {
   const { viewerId, offer, iceEmisor } = req.body || {};
   if (!viewerId) return res.status(400).json({ error: "Falta el id del espectador." });
-  const partida = await prisma.partidaHerramienta.findUnique({ where: { id: req.params.id } });
-  if (!partida) return res.status(404).json({ error: "Partida no encontrada" });
-  if (!esParticipanteDe(partida, req.jugadorPartidaId)) {
-    return res.status(403).json({ error: "No eres parte de este partido." });
-  }
-  const senal = partida.senalCamara || { viewers: {} };
-  const actual = senal.viewers[viewerId];
-  if (!actual) return res.status(404).json({ error: "Ese espectador ya no está conectado." });
-  senal.viewers[viewerId] = {
-    ...actual,
-    ...(offer ? { offer, estado: "esperando-respuesta" } : {}),
-    iceEmisor: [...(actual.iceEmisor || []), ...(iceEmisor || [])],
-    actualizadoEn: new Date().toISOString(),
-  };
-  await prisma.partidaHerramienta.update({ where: { id: partida.id }, data: { senalCamara: senal } });
+  const r = await modificarSenal(req.params.id, (senal, partida) => {
+    if (!esParticipanteDe(partida, req.jugadorPartidaId)) return { fallo: [403, "No eres parte de este partido."] };
+    const emisor = senal.emisores[req.jugadorPartidaId];
+    const actual = emisor && emisor.viewers[viewerId];
+    if (!actual) return { fallo: [404, "Ese espectador ya no está conectado."] };
+    emisor.viewers[viewerId] = {
+      ...actual,
+      ...(offer ? { offer, estado: "esperando-respuesta" } : {}),
+      iceEmisor: [...(actual.iceEmisor || []), ...(iceEmisor || [])],
+      actualizadoEn: new Date().toISOString(),
+    };
+    return {};
+  });
+  if (r.fallo) return responderFallo(res, r);
   res.status(204).end();
 });
 
 // GET /api/partidas-herramienta/:id/camara/senal/:viewerId - público: el
-// espectador lee SOLO su propia entrada (nunca el mapa completo, para no
-// filtrar la señalización de otros).
+// espectador lee SOLO su propia entrada.
 router.get("/:id/camara/senal/:viewerId", async (req, res) => {
   const partida = await prisma.partidaHerramienta.findUnique({
     where: { id: req.params.id },
-    select: { camarasActivas: true, senalCamara: true },
+    select: { senalCamara: true },
   });
   if (!partida) return res.status(404).json({ error: "Partida no encontrada" });
-  const entrada = partida.senalCamara && partida.senalCamara.viewers[req.params.viewerId];
-  if (!entrada) {
+  const encontrado = buscarViewer(normalizarSenal(partida.senalCamara), req.params.viewerId);
+  if (!encontrado) {
     return res.status(404).json({ error: "Tu sesión de vídeo ha caducado, vuelve a intentarlo." });
   }
+  const entrada = encontrado.emisor.viewers[req.params.viewerId];
   res.json({
-    camarasActivas: partida.camarasActivas,
+    camarasActivas: !!encontrado.emisor.activas,
     offer: entrada.offer,
     iceEmisor: entrada.iceEmisor || [],
   });
@@ -634,20 +672,19 @@ router.get("/:id/camara/senal/:viewerId", async (req, res) => {
 // iceReceptor?: [...] }).
 router.put("/:id/camara/senal/:viewerId", async (req, res) => {
   const { answer, iceReceptor } = req.body || {};
-  const partida = await prisma.partidaHerramienta.findUnique({ where: { id: req.params.id } });
-  if (!partida) return res.status(404).json({ error: "Partida no encontrada" });
-  const senal = partida.senalCamara || { viewers: {} };
-  const actual = senal.viewers[req.params.viewerId];
-  if (!actual) {
-    return res.status(404).json({ error: "Tu sesión de vídeo ha caducado, vuelve a intentarlo." });
-  }
-  senal.viewers[req.params.viewerId] = {
-    ...actual,
-    ...(answer ? { answer, estado: "conectado" } : {}),
-    iceReceptor: [...(actual.iceReceptor || []), ...(iceReceptor || [])],
-    actualizadoEn: new Date().toISOString(),
-  };
-  await prisma.partidaHerramienta.update({ where: { id: partida.id }, data: { senalCamara: senal } });
+  const r = await modificarSenal(req.params.id, (senal) => {
+    const encontrado = buscarViewer(senal, req.params.viewerId);
+    if (!encontrado) return { fallo: [404, "Tu sesión de vídeo ha caducado, vuelve a intentarlo."] };
+    const actual = encontrado.emisor.viewers[req.params.viewerId];
+    encontrado.emisor.viewers[req.params.viewerId] = {
+      ...actual,
+      ...(answer ? { answer, estado: "conectado" } : {}),
+      iceReceptor: [...(actual.iceReceptor || []), ...(iceReceptor || [])],
+      actualizadoEn: new Date().toISOString(),
+    };
+    return {};
+  });
+  if (r.fallo) return responderFallo(res, r);
   res.status(204).end();
 });
 

@@ -310,6 +310,10 @@ model TorneoClub {
   // reintentar. Pensado para torneos informales/de prueba donde no interesa
   // molestar a los socios. Se decide al crear el torneo (ver POST /).
   notificaciones   Boolean  @default(true)
+  // "Anclar a inicio": si está a true, esta competición sale en la pestaña
+  // pública "Torneos" (/torneos) de los jugadores que participan en ella —
+  // ver GET /mis-competiciones en src/routes/partidasHerramienta.js.
+  anclarInicio     Boolean  @default(false)
   // Temporizador de partidos: si está activo, cada enfrentamiento marcado
   // "en curso" (ver CuadroPartido.enCurso) tiene un plazo máximo en minutos
   // para empezar a jugarse desde que se activa. El aviso automático de
@@ -543,6 +547,10 @@ model LigaClub {
   // reintentar. Pensado para ligas informales/de prueba donde no interesa
   // molestar a los socios. Se decide al crear la liga (ver POST /).
   notificaciones   Boolean  @default(true)
+  // "Anclar a inicio": si está a true, esta competición sale en la pestaña
+  // pública "Torneos" (/torneos) de los jugadores que participan en ella —
+  // ver GET /mis-competiciones en src/routes/partidasHerramienta.js.
+  anclarInicio     Boolean  @default(false)
   // Imágenes opcionales (Cloudinary) para los avisos automáticos de
   // eliminación/campeón del cuadrante final de esta liga — ver
   // analizarResultadoCuadrante en src/routes/torneosClub.js. Si están vacías

@@ -555,8 +555,13 @@ router.get("/:id/camara/estado", async (req, res) => {
   });
   if (!partida) return res.status(404).json({ error: "Partida no encontrada" });
   const senal = normalizarSenal(partida.senalCamara);
-  const emisores = Object.entries(senal.emisores).filter(([, e]) => e.activas).map(([id]) => id);
-  res.json({ camarasActivas: emisores.length > 0, emisores });
+  const activos = Object.entries(senal.emisores).filter(([, e]) => e.activas);
+  const emisores = activos.map(([id]) => id);
+  // revisada: el emisor ha pulsado "Todo correcto" tras orientar sus cámaras
+  // (el rival lo ve en su pantalla).
+  const estados = {};
+  for (const [id, e] of activos) estados[id] = { revisada: !!e.revisada };
+  res.json({ camarasActivas: emisores.length > 0, emisores, estados });
 });
 
 // POST /api/partidas-herramienta/:id/camara/activar - un participante
@@ -565,7 +570,7 @@ router.get("/:id/camara/estado", async (req, res) => {
 router.post("/:id/camara/activar", requireJugadorPartida, async (req, res) => {
   const r = await modificarSenal(req.params.id, (senal, partida) => {
     if (!esParticipanteDe(partida, req.jugadorPartidaId)) return { fallo: [403, "No eres parte de este partido."] };
-    senal.emisores[req.jugadorPartidaId] = { activas: true, viewers: {} };
+    senal.emisores[req.jugadorPartidaId] = { activas: true, revisada: false, viewers: {} };
     return {};
   });
   if (r.fallo) return responderFallo(res, r);
@@ -582,6 +587,22 @@ router.post("/:id/camara/desactivar", requireJugadorPartida, async (req, res) =>
   });
   if (r.fallo) return responderFallo(res, r);
   res.json({ camarasActivas: false });
+});
+
+// POST /api/partidas-herramienta/:id/camara/revisada - el emisor marca (o
+// desmarca) que ya ha comprobado la orientación de SUS cámaras (body:
+// { revisada: boolean }); lo ve el rival en GET /estado.
+router.post("/:id/camara/revisada", requireJugadorPartida, async (req, res) => {
+  const revisada = !!(req.body && req.body.revisada);
+  const r = await modificarSenal(req.params.id, (senal, partida) => {
+    if (!esParticipanteDe(partida, req.jugadorPartidaId)) return { fallo: [403, "No eres parte de este partido."] };
+    const emisor = senal.emisores[req.jugadorPartidaId];
+    if (!emisor || !emisor.activas) return { fallo: [409, "Tus cámaras no están activas."] };
+    emisor.revisada = revisada;
+    return {};
+  });
+  if (r.fallo) return responderFallo(res, r);
+  res.json({ revisada });
 });
 
 // POST /api/partidas-herramienta/:id/camara/ver - público: un espectador se

@@ -373,6 +373,61 @@ router.post("/iniciar", requireJugadorPartida, async (req, res) => {
 
 // GET /api/partidas-herramienta/:id - estado actual, para reanudar tras
 // recargar la página (o, en el futuro, desde el otro dispositivo).
+// GET /ice - servidores ICE (STUN + TURN) para las cámaras WebRTC. Sin TURN,
+// dos móviles en redes distintas (4G/CGNAT, NAT simétrico) a menudo no logran
+// conectar. Se configura por variables de entorno en Railway:
+//  - Cloudflare Realtime TURN (credenciales temporales): CF_TURN_KEY_ID y
+//    CF_TURN_API_TOKEN.
+//  - o un TURN estático cualquiera: TURN_URLS (separadas por comas),
+//    TURN_USERNAME y TURN_CREDENTIAL.
+// Sin ninguna de ellas devuelve solo STUN (como hasta ahora). Es público a
+// propósito (los espectadores de cámara no llevan token) y se cachea, así que
+// no genera credenciales nuevas por petición.
+const ICE_STUN = [
+  { urls: "stun:stun.l.google.com:19302" },
+  { urls: "stun:stun.cloudflare.com:3478" },
+];
+let iceCache = { hasta: 0, servidores: ICE_STUN };
+router.get("/ice", async (_req, res) => {
+  res.set("Cache-Control", "no-store");
+  if (Date.now() < iceCache.hasta) return res.json({ iceServers: iceCache.servidores });
+  try {
+    let servidores = ICE_STUN;
+    let vigenciaMs = 5 * 60 * 1000;
+    const { CF_TURN_KEY_ID, CF_TURN_API_TOKEN, TURN_URLS, TURN_USERNAME, TURN_CREDENTIAL } = process.env;
+    if (CF_TURN_KEY_ID && CF_TURN_API_TOKEN) {
+      const resp = await fetch(
+        `https://rtc.live.cloudflare.com/v1/turn/keys/${CF_TURN_KEY_ID}/credentials/generate-ice-servers`,
+        {
+          method: "POST",
+          headers: { Authorization: `Bearer ${CF_TURN_API_TOKEN}`, "Content-Type": "application/json" },
+          body: JSON.stringify({ ttl: 86400 }),
+        }
+      );
+      if (!resp.ok) throw new Error(`Cloudflare TURN respondió ${resp.status}`);
+      const data = await resp.json();
+      const lista = Array.isArray(data.iceServers) ? data.iceServers : data.iceServers ? [data.iceServers] : [];
+      if (lista.length > 0) {
+        // Se conservan los STUN propios y se añade el TURN de Cloudflare
+        // (sus entradas stun: se descartan por duplicadas).
+        servidores = [...ICE_STUN, ...lista.filter((s) => [].concat(s.urls).some((u) => !String(u).startsWith("stun:")))];
+        vigenciaMs = 6 * 60 * 60 * 1000;
+      }
+    } else if (TURN_URLS && TURN_USERNAME && TURN_CREDENTIAL) {
+      servidores = [
+        ...ICE_STUN,
+        { urls: TURN_URLS.split(",").map((u) => u.trim()).filter(Boolean), username: TURN_USERNAME, credential: TURN_CREDENTIAL },
+      ];
+      vigenciaMs = 60 * 60 * 1000;
+    }
+    iceCache = { hasta: Date.now() + vigenciaMs, servidores };
+    res.json({ iceServers: servidores });
+  } catch (err) {
+    console.error("Error obteniendo servidores ICE:", err.message);
+    res.json({ iceServers: ICE_STUN });
+  }
+});
+
 router.get("/:id", requireJugadorPartida, async (req, res) => {
   const partida = await prisma.partidaHerramienta.findUnique({ where: { id: req.params.id } });
   if (!partida) return res.status(404).json({ error: "Partida no encontrada" });

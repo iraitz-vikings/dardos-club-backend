@@ -319,6 +319,133 @@ router.get("/:id/estadisticas-acero", requireAuth, async (req, res) => {
 // datos rechaza el borrado (relación obligatoria) — antes eso se tragaba en
 // silencio y el admin recibía un "borrado" que no era cierto; ahora se
 // responde con un error explicando qué lo bloquea.
+// POST /api/jugadores/:id/fusionar - fusiona la ficha :id (origen) EN otra
+// (body: { destinoId }, la que se conserva): pasa a la ficha destino todo el
+// historial del origen (participaciones en torneos/ligas, puntos de jornada,
+// equipos, capitanías, partidas de la herramienta con sus estadísticas, avisos
+// push/Telegram, IDs de fabricante) y elimina la ficha origen. Los datos
+// propios (nombre, apodo, PIN…) son los del destino; solo se rellenan sus
+// huecos vacíos con los del origen. El origen no puede ser un miembro con
+// cuenta (la cuenta vive en la ficha que se conserva): para juntar un amigo
+// con un miembro se conserva la ficha del miembro. Los textos ya escritos en
+// cuadrantes/calendarios (etiquetas) no se reescriben, igual que al editar un
+// nombre: lo que cambia es la ficha a la que apuntan.
+router.post("/:id/fusionar", requireAdmin, async (req, res) => {
+  const origenId = req.params.id;
+  const { destinoId } = req.body || {};
+  if (!destinoId) return res.status(400).json({ error: "Falta la ficha que se conserva." });
+  if (destinoId === origenId) return res.status(400).json({ error: "Elige dos fichas distintas." });
+
+  const [origen, destino] = await Promise.all([
+    prisma.jugador.findUnique({ where: { id: origenId } }),
+    prisma.jugador.findUnique({ where: { id: destinoId } }),
+  ]);
+  if (!origen || !destino) return res.status(404).json({ error: "Jugador no encontrado" });
+  if (origen.usuarioId) {
+    return res.status(400).json({
+      error: "La ficha que se elimina no puede ser la de un miembro con cuenta: conserva la del miembro y fusiona la otra en ella.",
+    });
+  }
+
+  const cambiarId = (valor) => JSON.parse(JSON.stringify(valor).split(origenId).join(destinoId));
+  const sinRepetidos = (lista) => (Array.isArray(lista) ? [...new Set(lista)] : lista);
+
+  try {
+    const resumen = await prisma.$transaction(
+      async (tx) => {
+        const cuenta = {};
+
+        // Referencias directas (sin restricción de unicidad).
+        const directas = [
+          ["participanteCuadrante", "jugador1Id"],
+          ["participanteCuadrante", "jugador2Id"],
+          ["participanteLiga", "jugador1Id"],
+          ["participanteLiga", "jugador2Id"],
+          ["puntoJornada", "jugador1Id"],
+          ["puntoJornada", "jugador2Id"],
+          ["equipoTorneo", "capitanId"],
+          ["equipoClub", "capitanId"],
+          ["suscripcionPush", "jugadorId"],
+        ];
+        for (const [modelo, campo] of directas) {
+          const r = await tx[modelo].updateMany({ where: { [campo]: origenId }, data: { [campo]: destinoId } });
+          cuenta[`${modelo}.${campo}`] = r.count;
+        }
+
+        // Referencias con restricción de unicidad: si el destino ya tiene la
+        // suya, se descarta la del origen.
+        for (const fila of await tx.equipoJugador.findMany({ where: { jugadorId: origenId } })) {
+          const ya = await tx.equipoJugador.findFirst({ where: { equipoTorneoId: fila.equipoTorneoId, jugadorId: destinoId } });
+          if (ya) await tx.equipoJugador.delete({ where: { id: fila.id } });
+          else await tx.equipoJugador.update({ where: { id: fila.id }, data: { jugadorId: destinoId } });
+        }
+        for (const fila of await tx.miembroEquipoClub.findMany({ where: { jugadorId: origenId } })) {
+          const ya = await tx.miembroEquipoClub.findFirst({ where: { equipoId: fila.equipoId, jugadorId: destinoId } });
+          if (ya) await tx.miembroEquipoClub.delete({ where: { id: fila.id } });
+          else await tx.miembroEquipoClub.update({ where: { id: fila.id }, data: { jugadorId: destinoId } });
+        }
+        for (const fila of await tx.jugadorFabricanteId.findMany({ where: { jugadorId: origenId } })) {
+          const ya = await tx.jugadorFabricanteId.findFirst({ where: { jugadorId: destinoId, fabricanteId: fila.fabricanteId } });
+          if (ya) await tx.jugadorFabricanteId.delete({ where: { id: fila.id } });
+          else await tx.jugadorFabricanteId.update({ where: { id: fila.id }, data: { jugadorId: destinoId } });
+        }
+
+        // Telegram: un solo vínculo por ficha. Se queda el del destino; si no
+        // tiene, se pasa el del origen.
+        const subDestino = await tx.suscripcionTelegram.findUnique({ where: { jugadorId: destinoId } });
+        const subOrigen = await tx.suscripcionTelegram.findUnique({ where: { jugadorId: origenId } });
+        if (subOrigen) {
+          if (subDestino) await tx.suscripcionTelegram.delete({ where: { id: subOrigen.id } });
+          else await tx.suscripcionTelegram.update({ where: { id: subOrigen.id }, data: { jugadorId: destinoId } });
+        }
+        await tx.telegramCheckIn.deleteMany({ where: { jugadorId: origenId } });
+
+        // Partidas de la herramienta: los ids viven dentro de JSON (lados,
+        // estadísticas por leg, señalización…), así que se reescriben ahí.
+        const partidas = await tx.partidaHerramienta.findMany();
+        let partidasCambiadas = 0;
+        for (const p of partidas) {
+          const texto = JSON.stringify([p.jugadoresId1, p.jugadoresId2, p.legs, p.visitaEnCurso, p.senalCamara, p.listosInicio]);
+          if (!texto.includes(origenId)) continue;
+          await tx.partidaHerramienta.update({
+            where: { id: p.id },
+            data: {
+              jugadoresId1: sinRepetidos(cambiarId(p.jugadoresId1)),
+              jugadoresId2: sinRepetidos(cambiarId(p.jugadoresId2)),
+              legs: cambiarId(p.legs),
+              ...(p.visitaEnCurso != null ? { visitaEnCurso: cambiarId(p.visitaEnCurso) } : {}),
+              ...(p.senalCamara != null ? { senalCamara: cambiarId(p.senalCamara) } : {}),
+              listosInicio: sinRepetidos(cambiarId(p.listosInicio || [])),
+            },
+          });
+          partidasCambiadas += 1;
+        }
+        cuenta.partidasHerramienta = partidasCambiadas;
+
+        // Datos propios: prevalece el destino; solo se rellenan sus huecos.
+        await tx.jugador.update({
+          where: { id: destinoId },
+          data: {
+            apodo: destino.apodo || origen.apodo,
+            avatarUrl: destino.avatarUrl || origen.avatarUrl,
+            bio: destino.bio || origen.bio,
+            pinPartidasHash: destino.pinPartidasHash || origen.pinPartidasHash,
+            oculto: destino.oculto && origen.oculto,
+          },
+        });
+
+        await tx.jugador.delete({ where: { id: origenId } });
+        return cuenta;
+      },
+      { timeout: 60000, maxWait: 10000 }
+    );
+    res.json({ mensaje: `"${origen.nombre}" fusionado en "${destino.nombre}".`, resumen });
+  } catch (err) {
+    console.error("Error fusionando jugadores:", err);
+    res.status(500).json({ error: "No se pudo fusionar. No se ha cambiado nada." });
+  }
+});
+
 router.delete("/:id", requireAdmin, async (req, res) => {
   try {
     await prisma.jugador.delete({ where: { id: req.params.id } });

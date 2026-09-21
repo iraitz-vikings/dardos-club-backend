@@ -19,13 +19,19 @@ export function pinValido(pin) {
 // invitados sin cuenta de socio (usuarioId null)
 router.get("/", requireAdmin, async (_req, res) => {
   const jugadores = await prisma.jugador.findMany({
-    include: { usuario: { select: { email: true } } },
+    include: { usuario: { select: { email: true } }, suscripcionTelegram: { select: { id: true } } },
     orderBy: { nombre: "asc" },
   });
   // pinPartidasHash no sale nunca de aquí (es un hash, pero no hace falta
   // mandarlo ni para eso): solo si tiene uno puesto, para que el admin sepa
   // si tiene que "poner" o "cambiar" el PIN.
-  res.json(jugadores.map(({ pinPartidasHash, ...j }) => ({ ...j, tienePinPartidas: !!pinPartidasHash })));
+  res.json(
+    jugadores.map(({ pinPartidasHash, suscripcionTelegram, ...j }) => ({
+      ...j,
+      tienePinPartidas: !!pinPartidasHash,
+      telegramVinculado: !!suscripcionTelegram,
+    }))
+  );
 });
 
 // POST /api/jugadores - crea un jugador rápido (invitado, sin cuenta) (protegido)

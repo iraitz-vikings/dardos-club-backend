@@ -1,7 +1,7 @@
 import { Router } from "express";
 import { PrismaClient } from "@prisma/client";
 import { requireAuth } from "./auth.js";
-import { vapidPublicKey } from "./webPush.js";
+import { vapidPublicKey, generarTokenResuscripcionPush, verificarTokenResuscripcionPush } from "./webPush.js";
 import { generarEnlaceCheckIn } from "./telegram.js";
 import { requireAdmin } from "../middleware/requireAdmin.js";
 
@@ -59,6 +59,40 @@ router.get("/push/estado", requireAuth, async (req, res) => {
   if (!jugador) return res.json({ activo: false, cantidad: 0 });
   const cantidad = await prisma.suscripcionPush.count({ where: { jugadorId: jugador.id } });
   res.json({ activo: cantidad > 0, cantidad });
+});
+
+// GET /api/notificaciones/push/token-resuscripcion - un socio logueado pide
+// su token permanente de re-suscripción, para guardarlo en IndexedDB desde
+// el frontend (el service worker no tiene acceso a localStorage) y poder
+// recuperar los avisos en segundo plano si la suscripción se pierde sola
+// (ver periodicsync en service-worker.js).
+router.get("/push/token-resuscripcion", requireAuth, async (req, res) => {
+  const jugador = await prisma.jugador.findUnique({ where: { usuarioId: req.usuario.sub } });
+  if (!jugador) return res.status(404).json({ error: "Tu cuenta no tiene una ficha de jugador asociada" });
+  res.json({ token: generarTokenResuscripcionPush(jugador.id) });
+});
+
+// POST /api/notificaciones/push/resuscribir - re-vincula una suscripción push
+// nueva SIN sesión activa (no manda Authorization: Bearer), usando en su
+// lugar el token permanente de arriba. Lo usa el service worker en segundo
+// plano (periodicsync), que no tiene acceso al socioToken de localStorage.
+router.post("/push/resuscribir", async (req, res) => {
+  const { token, endpoint, keys } = req.body || {};
+  if (!token || !endpoint || !keys?.p256dh || !keys?.auth) {
+    return res.status(400).json({ error: "Faltan datos de re-suscripción" });
+  }
+  let jugadorId;
+  try {
+    jugadorId = verificarTokenResuscripcionPush(token);
+  } catch {
+    return res.status(401).json({ error: "Token de re-suscripción inválido" });
+  }
+  await prisma.suscripcionPush.upsert({
+    where: { endpoint },
+    update: { jugadorId, p256dh: keys.p256dh, auth: keys.auth, userAgent: req.headers["user-agent"] || null },
+    create: { jugadorId, endpoint, p256dh: keys.p256dh, auth: keys.auth, userAgent: req.headers["user-agent"] || null },
+  });
+  res.status(201).json({ ok: true });
 });
 
 // GET /api/notificaciones/checkin/:token - página pública de check-in de un

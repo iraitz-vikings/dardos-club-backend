@@ -13,6 +13,7 @@
 import { PrismaClient } from "@prisma/client";
 import { notificarJugadores } from "../routes/notificar.js";
 import { urlPublicaCuadrante } from "./enlacesPublicos.js";
+import { resolverMensaje } from "./mensajesAvisos.js";
 
 const prisma = new PrismaClient();
 
@@ -60,9 +61,26 @@ export async function enviarAvisosUnMinutoTemporizador() {
         });
         const jugadorIds = participantes.flatMap((pt) => [pt.jugador1Id, pt.jugador2Id]).filter(Boolean);
         if (jugadorIds.length > 0) {
+          // Texto personalizable desde el panel "Mensajes de avisos" del
+          // torneo (tipo unMinuto, ver src/lib/mensajesAvisos.js).
+          const mensaje = resolverMensaje(torneo.mensajesAvisos, "unMinuto", {
+            titulo: {
+              es: `¡Falta 1 minuto! {competicion}`,
+              eu: `Minutu bat falta da! {competicion}`,
+              fr: `Plus qu'une minute ! {competicion}`,
+            },
+            cuerpo: {
+              es: `{enfrentamiento}: queda 1 minuto para presentaros a jugar. Si no empezáis antes de que se acabe el tiempo, el partido se dará por perdido.`,
+              eu: `{enfrentamiento}: minutu bat geratzen da jokatzera aurkezteko. Denbora amaitu aurretik hasten ez bazarete, partida galdutzat emango da.`,
+              fr: `{enfrentamiento} : il reste 1 minute pour vous présenter. Si vous ne commencez pas avant la fin du temps, le match sera déclaré perdu.`,
+            },
+          }, {
+            competicion: torneo.nombre,
+            enfrentamiento: `${p.jugador1 || "?"} vs ${p.jugador2 || "?"}`,
+          });
           await notificarJugadores(jugadorIds, {
-            titulo: `¡Falta 1 minuto! ${torneo.nombre}`,
-            cuerpo: `${p.jugador1 || "?"} vs ${p.jugador2 || "?"}: queda 1 minuto para presentaros a jugar.`,
+            titulo: mensaje.titulo,
+            cuerpo: mensaje.cuerpo,
             url: urlPublicaCuadrante(p.cuadrante),
           });
           enviados++;

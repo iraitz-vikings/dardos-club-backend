@@ -1238,9 +1238,9 @@ async function notificarPartidoDeCuadrante(partido, motivo = "programado") {
         : "",
       minutos: minutosTemporizador
         ? {
-            es: ` Tienes ${minutosTemporizador} min para empezar.`,
-            eu: ` ${minutosTemporizador} min dituzu hasteko.`,
-            fr: ` Tu as ${minutosTemporizador} min pour commencer.`,
+            es: ` Tienes ${minutosTemporizador} min para empezar. Si no empezáis antes de que se acabe el tiempo, el partido se dará por perdido.`,
+            eu: ` ${minutosTemporizador} min dituzu hasteko. Denbora amaitu aurretik hasten ez bazarete, partida galdutzat emango da.`,
+            fr: ` Tu as ${minutosTemporizador} min pour commencer. Si vous ne commencez pas avant la fin du temps, le match sera déclaré perdu.`,
           }
         : "",
     });

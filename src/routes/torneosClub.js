@@ -1219,18 +1219,7 @@ async function notificarPartidoDeCuadrante(partido, motivo = "programado") {
     const minutosTemporizador = cuadrante?.torneoClub?.temporizadorActivo
       ? cuadrante.torneoClub.temporizadorMinutos
       : null;
-    const mensaje = resolverMensaje(mensajesAvisos, "enCurso", {
-      titulo: {
-        es: `¡Tu partido empieza ahora! {competicion}`,
-        eu: `Zure partida orain hasten da! {competicion}`,
-        fr: `Ton match commence maintenant ! {competicion}`,
-      },
-      cuerpo: {
-        es: `{enfrentamiento}{maquina}.{minutos}`,
-        eu: `{enfrentamiento}{maquina}.{minutos}`,
-        fr: `{enfrentamiento}{maquina}.{minutos}`,
-      },
-    }, {
+    const valoresEnCurso = {
       competicion: nombreCompeticion,
       enfrentamiento,
       maquina: partido.maquina
@@ -1243,7 +1232,19 @@ async function notificarPartidoDeCuadrante(partido, motivo = "programado") {
             fr: ` Tu as ${minutosTemporizador} min pour commencer. Si vous ne commencez pas avant la fin du temps, le match sera déclaré perdu.`,
           }
         : "",
-    });
+    };
+    const mensaje = resolverMensaje(mensajesAvisos, "enCurso", {
+      titulo: {
+        es: `¡Tu partido empieza ahora! {competicion}`,
+        eu: `Zure partida orain hasten da! {competicion}`,
+        fr: `Ton match commence maintenant ! {competicion}`,
+      },
+      cuerpo: {
+        es: `{enfrentamiento}{maquina}.{minutos}`,
+        eu: `{enfrentamiento}{maquina}.{minutos}`,
+        fr: `{enfrentamiento}{maquina}.{minutos}`,
+      },
+    }, valoresEnCurso, { ...valoresEnCurso, maquina: partido.maquina || "" });
     await notificarJugadores(jugadorIds, {
       titulo: mensaje.titulo,
       cuerpo: mensaje.cuerpo,
@@ -1279,6 +1280,13 @@ async function notificarPartidoDeCuadrante(partido, motivo = "programado") {
           fr: ` sur ${partido.maquinaCalendario.nombre}`,
         }
       : "",
+  }, {
+    // Texto escrito por el admin: solo el dato, sin palabra de enlace (ver
+    // resolverMensaje).
+    competicion: nombreCompeticion,
+    enfrentamiento,
+    fecha: fechaTexto || "",
+    maquina: partido.maquinaCalendario?.nombre || "",
   });
   await notificarJugadores(jugadorIds, {
     titulo: mensaje.titulo,

@@ -65,9 +65,9 @@ export async function enviarAvisosUnMinutoTemporizador() {
           // torneo (tipo unMinuto, ver src/lib/mensajesAvisos.js).
           const mensaje = resolverMensaje(torneo.mensajesAvisos, "unMinuto", {
             titulo: {
-              es: `¡Falta 1 minuto! {competicion}`,
-              eu: `Minutu bat falta da! {competicion}`,
-              fr: `Plus qu'une minute ! {competicion}`,
+              es: `¡Falta 1 minuto! · {competicion}`,
+              eu: `Minutu bat falta da! · {competicion}`,
+              fr: `Plus qu'une minute ! · {competicion}`,
             },
             cuerpo: {
               es: `{enfrentamiento}: queda 1 minuto para presentaros a jugar. Si no empezáis antes de que se acabe el tiempo, el partido se dará por perdido.`,

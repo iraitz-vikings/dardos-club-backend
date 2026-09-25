@@ -62,7 +62,13 @@ const includeCompleto = {
   cuadrantes: {
     orderBy: { creadoEn: "asc" },
     include: {
-      partidos: { orderBy: [{ rama: "asc" }, { ronda: "asc" }, { posicion: "asc" }] },
+      // partidaHerramienta: para que la página pública sepa qué partidos se
+      // están jugando con la herramienta y pueda abrir el marcador en directo
+      // (GET /api/partidas-herramienta/:id/directo).
+      partidos: {
+        orderBy: [{ rama: "asc" }, { ronda: "asc" }, { posicion: "asc" }],
+        include: { partidaHerramienta: { select: { id: true, finalizada: true } } },
+      },
       participantes: { include: { jugador1: true, jugador2: true }, orderBy: { creadoEn: "asc" } },
       // Puntos ya asignados (ver POST /cuadrantes/:id/asignar-puntos) — se
       // incluyen aquí para que la página pública del torneo pueda mostrar la

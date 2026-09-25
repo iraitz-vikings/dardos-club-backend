@@ -643,13 +643,28 @@ function responderFallo(res, r) {
   return res.status(r.fallo[0]).json({ error: r.fallo[1] });
 }
 
-// Descarta espectadores con más de 10 minutos sin actividad de un emisor,
-// para que la señalización no crezca sin límite.
+// Espectadores del público (ventanita "En directo" de la página del
+// torneo/liga, ver DirectoPartida.jsx en el frontend): como cada uno es una
+// conexión aparte desde el dispositivo de la diana (más subida y más
+// codificación de vídeo por cada uno), se limitan a unos pocos a la vez. Van
+// mandando un latido cada ~15s mientras miran (PUT /senal/:viewerId sin
+// datos) y se dan de baja al cerrar (DELETE); si dejan de latir (pestaña
+// cerrada de golpe), a los 45s dejan libre su plaza y el emisor corta su
+// conexión (ya no le aparecen en GET /senal).
+const MAX_ESPECTADORES_PUBLICOS = 3;
+const VIDA_ESPECTADOR_PUBLICO_MS = 45 * 1000;
+
+function viewerVivo(v, ahora = Date.now()) {
+  const vida = v.publico ? VIDA_ESPECTADOR_PUBLICO_MS : 10 * 60 * 1000;
+  return new Date(v.actualizadoEn || 0).getTime() >= ahora - vida;
+}
+
+// Descarta espectadores sin actividad (10 minutos, o 45s los del público —
+// ver arriba), para que la señalización no crezca sin límite.
 function podarViewers(emisor) {
-  const limite = Date.now() - 10 * 60 * 1000;
   const vivos = {};
   for (const [id, v] of Object.entries(emisor.viewers || {})) {
-    if (new Date(v.actualizadoEn || 0).getTime() >= limite) vivos[id] = v;
+    if (viewerVivo(v)) vivos[id] = v;
   }
   emisor.viewers = vivos;
 }
@@ -724,14 +739,24 @@ router.post("/:id/camara/revisada", requireJugadorPartida, async (req, res) => {
 // POST /api/partidas-herramienta/:id/camara/ver - público: un espectador se
 // registra para ver las cámaras de UN emisor (body: { emisorId }) y recibe su
 // viewerId (a partir de aquí, solo puede leer/escribir su propia entrada).
+//
+// body.publico = true: espectador de la página pública (no el rival de un
+// amistoso). Solo recibe la cámara de la diana, y hay un máximo de
+// MAX_ESPECTADORES_PUBLICOS a la vez por emisor (409 con completo: true).
 router.post("/:id/camara/ver", async (req, res) => {
   const { emisorId } = req.body || {};
+  const publico = !!(req.body && req.body.publico);
   const viewerId = crypto.randomUUID();
   const r = await modificarSenal(req.params.id, (senal) => {
     const emisor = emisorId && senal.emisores[emisorId];
     if (!emisor || !emisor.activas) return { fallo: [409, "Las cámaras no están activas ahora mismo."] };
     podarViewers(emisor);
+    if (publico) {
+      const publicos = Object.values(emisor.viewers).filter((v) => v.publico).length;
+      if (publicos >= MAX_ESPECTADORES_PUBLICOS) return { completo: true };
+    }
     emisor.viewers[viewerId] = {
+      publico,
       estado: "esperando",
       offer: null,
       answer: null,
@@ -742,6 +767,12 @@ router.post("/:id/camara/ver", async (req, res) => {
     return {};
   });
   if (r.fallo) return responderFallo(res, r);
+  if (r.completo) {
+    return res.status(409).json({
+      error: `Ya hay ${MAX_ESPECTADORES_PUBLICOS} personas viendo la cámara. Prueba otra vez en un rato.`,
+      completo: true,
+    });
+  }
   res.status(201).json({ viewerId });
 });
 
@@ -758,7 +789,15 @@ router.get("/:id/camara/senal", requireJugadorPartida, async (req, res) => {
     return res.status(403).json({ error: "No eres parte de este partido." });
   }
   const emisor = normalizarSenal(partida.senalCamara).emisores[req.jugadorPartidaId];
-  res.json({ viewers: (emisor && emisor.viewers) || {} });
+  // Sin los espectadores del público que ya se han ido (sin latido, ver
+  // viewerVivo): el emisor cierra su conexión al dejar de verlos aquí. Los
+  // demás (rival de un amistoso) se devuelven siempre, como hasta ahora: no
+  // mandan latido y su conexión no debe cortarse por inactividad.
+  const ahora = Date.now();
+  const viewers = Object.fromEntries(
+    Object.entries((emisor && emisor.viewers) || {}).filter(([, v]) => !v.publico || viewerVivo(v, ahora))
+  );
+  res.json({ viewers });
 });
 
 // PUT /api/partidas-herramienta/:id/camara/senal - el EMISOR manda su oferta
@@ -819,6 +858,20 @@ router.put("/:id/camara/senal/:viewerId", async (req, res) => {
       iceReceptor: [...(actual.iceReceptor || []), ...(iceReceptor || [])],
       actualizadoEn: new Date().toISOString(),
     };
+    return {};
+  });
+  if (r.fallo) return responderFallo(res, r);
+  res.status(204).end();
+});
+
+// DELETE /api/partidas-herramienta/:id/camara/senal/:viewerId - público: el
+// espectador se da de baja al cerrar (deja libre su plaza, ver
+// MAX_ESPECTADORES_PUBLICOS). Idempotente.
+router.delete("/:id/camara/senal/:viewerId", async (req, res) => {
+  const r = await modificarSenal(req.params.id, (senal) => {
+    for (const emisor of Object.values(senal.emisores)) {
+      if (emisor.viewers) delete emisor.viewers[req.params.viewerId];
+    }
     return {};
   });
   if (r.fallo) return responderFallo(res, r);

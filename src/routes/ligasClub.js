@@ -23,11 +23,19 @@ const router = Router();
 
 const includeCompleto = {
   participantes: { include: { jugador1: true, jugador2: true }, orderBy: { creadoEn: "asc" } },
-  partidos: { orderBy: [{ jornada: "asc" }, { posicion: "asc" }] },
+  // partidaHerramienta: ver el comentario equivalente en torneosClub.js
+  // (marcador en directo en la página pública).
+  partidos: {
+    orderBy: [{ jornada: "asc" }, { posicion: "asc" }],
+    include: { partidaHerramienta: { select: { id: true, finalizada: true } } },
+  },
   cuadrantes: {
     orderBy: { creadoEn: "asc" },
     include: {
-      partidos: { orderBy: [{ rama: "asc" }, { ronda: "asc" }, { posicion: "asc" }] },
+      partidos: {
+        orderBy: [{ rama: "asc" }, { ronda: "asc" }, { posicion: "asc" }],
+        include: { partidaHerramienta: { select: { id: true, finalizada: true } } },
+      },
       participantes: { include: { jugador1: true, jugador2: true } },
     },
   },

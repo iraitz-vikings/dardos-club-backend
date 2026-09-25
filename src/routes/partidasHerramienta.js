@@ -536,12 +536,28 @@ router.put("/:id/visita", requireJugadorPartida, async (req, res) => {
     partida.jugadoresId1.includes(req.jugadorPartidaId) || partida.jugadoresId2.includes(req.jugadorPartidaId);
   if (!esParticipante) return res.status(403).json({ error: "No eres parte de este partido." });
 
-  const turnoActual = partida.visitaEnCurso?.turnoJugadorId;
-  if (turnoActual && turnoActual !== req.jugadorPartidaId) {
-    return res.status(403).json({ error: "No es tu turno." });
-  }
   if (!req.body || !req.body.turnoJugadorId) {
     return res.status(400).json({ error: "Falta indicar de quién es el turno." });
+  }
+  if (partida.amistosa) {
+    const turnoActual = partida.visitaEnCurso?.turnoJugadorId;
+    if (turnoActual && turnoActual !== req.jugadorPartidaId) {
+      return res.status(403).json({ error: "No es tu turno." });
+    }
+  } else {
+    // Torneo/liga (marcador en directo para la página pública, ver GET
+    // /:id/directo): se juega en un único dispositivo compartido, con la
+    // sesión de uno solo de los dos jugadores, así que no hay control de
+    // turno. Se manda dardo a dardo, y dos envíos seguidos pueden llegar
+    // desordenados: se descarta uno más antiguo (por `secuencia`) que el ya
+    // guardado, o uno de un leg que ya ha terminado.
+    const guardada = partida.visitaEnCurso;
+    if (typeof req.body.leg === "number" && req.body.leg !== partida.legs.length + 1) {
+      return res.json(formatearPartida(partida));
+    }
+    if (guardada && typeof guardada.secuencia === "number" && !(req.body.secuencia > guardada.secuencia)) {
+      return res.json(formatearPartida(partida));
+    }
   }
 
   const actualizada = await prisma.partidaHerramienta.update({
@@ -549,6 +565,20 @@ router.put("/:id/visita", requireJugadorPartida, async (req, res) => {
     data: { visitaEnCurso: req.body },
   });
   res.json(formatearPartida(actualizada));
+});
+
+// GET /api/partidas-herramienta/:id/directo - público, solo lectura: estado
+// de una partida de torneo/liga para el marcador en directo de la página
+// pública (ventanita "En directo" del cuadro/jornada). Sin PIN — no incluye
+// nada que no se vea ya en la página pública más allá del marcador. Los
+// amistosos no se exponen (no cuelgan de ninguna página pública).
+router.get("/:id/directo", async (req, res) => {
+  res.set("Cache-Control", "no-store");
+  const partida = await prisma.partidaHerramienta.findUnique({ where: { id: req.params.id } });
+  if (!partida || partida.amistosa) return res.status(404).json({ error: "Partida no encontrada" });
+  const p = formatearPartida(partida);
+  delete p.listosInicio;
+  res.json({ ...p, camarasActivas: !!partida.camarasActivas });
 });
 
 // --- Cámaras en directo (plan "camaras-partidas", guardado en el proyecto) -

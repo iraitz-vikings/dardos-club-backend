@@ -103,14 +103,25 @@ function sustituir(plantilla, valores, idioma) {
 // un objeto { es, eu, fr } si el texto de alrededor cambia por idioma (ver
 // `sustituir`) —, ya sustituidos aquí mismo tanto en el override como en el
 // texto por defecto.
-export function resolverMensaje(mensajesAvisos, tipo, porDefecto, valores) {
+//
+// `valoresPersonalizado` (opcional) son los valores a usar en el texto que ha
+// escrito el admin, cuando difieren de los del texto por defecto: los textos
+// por defecto usan p.ej. {maquina} = " en Máquina 2" (con la palabra de
+// enlace incluida, para que desaparezca entera si no hay máquina), pero en el
+// panel el admin escribe "... en {maquina}", así que ahí {maquina} tiene que
+// ser solo "Máquina 2" — si no, saldría "en en Máquina 2".
+export function resolverMensaje(mensajesAvisos, tipo, porDefecto, valores, valoresPersonalizado = valores) {
   const override = mensajesAvisos?.[tipo];
   const resultado = { titulo: {}, cuerpo: {} };
   for (const idioma of IDIOMAS_MENSAJE) {
-    const tituloPlantilla = override?.titulo?.[idioma] || porDefecto.titulo[idioma];
-    const cuerpoPlantilla = override?.cuerpo?.[idioma] || porDefecto.cuerpo[idioma];
-    resultado.titulo[idioma] = sustituir(tituloPlantilla, valores, idioma);
-    resultado.cuerpo[idioma] = sustituir(cuerpoPlantilla, valores, idioma);
+    const tituloOverride = override?.titulo?.[idioma];
+    const cuerpoOverride = override?.cuerpo?.[idioma];
+    resultado.titulo[idioma] = tituloOverride
+      ? sustituir(tituloOverride, valoresPersonalizado, idioma)
+      : sustituir(porDefecto.titulo[idioma], valores, idioma);
+    resultado.cuerpo[idioma] = cuerpoOverride
+      ? sustituir(cuerpoOverride, valoresPersonalizado, idioma)
+      : sustituir(porDefecto.cuerpo[idioma], valores, idioma);
   }
   return resultado;
 }

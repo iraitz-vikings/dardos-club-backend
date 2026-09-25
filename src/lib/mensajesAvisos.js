@@ -14,6 +14,7 @@
 //     programado:  { titulo: {...}, cuerpo: {...} },
 //     eliminado:   { titulo: {...}, cuerpo: {...} },
 //     campeon:     { titulo: {...}, cuerpo: {...} },
+//     unMinuto:    { titulo: {...}, cuerpo: {...} },
 //   }
 // Todos los campos son opcionales en todos los niveles — un objeto vacío
 // {} (o directamente null) es válido y significa "usa todo el texto por
@@ -27,8 +28,10 @@
 //   programado: {competicion} {enfrentamiento} {fecha} {maquina}
 //   eliminado:  {competicion}
 //   campeon:    {competicion}
+//   unMinuto:   {competicion} {enfrentamiento}   (aviso "falta 1 minuto" del
+//               temporizador, ver src/lib/avisoTemporizadorPartidos.js)
 
-export const TIPOS_MENSAJE = ["bienvenida", "enCurso", "programado", "eliminado", "campeon"];
+export const TIPOS_MENSAJE = ["bienvenida", "enCurso", "programado", "eliminado", "campeon", "unMinuto"];
 export const IDIOMAS_MENSAJE = ["es", "eu", "fr"];
 
 // Limpia un bloque { es, eu, fr } de un campo (titulo o cuerpo): recorta

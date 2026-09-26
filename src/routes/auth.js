@@ -90,7 +90,8 @@ function firmarToken(usuario) {
 // se podría intentar adivinar a base de intentos, igual que una contraseña.
 router.post("/registro", registroLimiter, async (req, res) => {
   const { nombre, email, password, codigoInvitacion } = req.body;
-  if (!nombre || !email || !password || !codigoInvitacion) {
+  if (!nombre || !email || !password || !codigoInvitacion ||
+      typeof email !== "string" || typeof password !== "string" || typeof nombre !== "string") {
     return res.status(400).json({ error: "Faltan datos" });
   }
   if (typeof password !== "string" || password.length < LONGITUD_MINIMA_PASSWORD) {
@@ -117,7 +118,7 @@ router.post("/registro", registroLimiter, async (req, res) => {
 // POST /api/auth/login
 router.post("/login", loginLimiter, async (req, res) => {
   const { email, password } = req.body;
-  if (!email || !password) {
+  if (!email || !password || typeof email !== "string" || typeof password !== "string") {
     return res.status(400).json({ error: "Faltan datos" });
   }
   const usuario = await prisma.usuario.findUnique({ where: { email: email.trim().toLowerCase() } });
@@ -321,7 +322,8 @@ router.patch("/:id/rol", requireAdmin, async (req, res) => {
 // POST /api/auth/crear-manual - el admin crea una cuenta directamente, ya aprobada (admin)
 router.post("/crear-manual", requireAdmin, async (req, res) => {
   const { nombre, email, password, rol } = req.body;
-  if (!nombre || !email || !password) {
+  if (!nombre || !email || !password ||
+      typeof email !== "string" || typeof password !== "string" || typeof nombre !== "string") {
     return res.status(400).json({ error: "Faltan datos" });
   }
   if (typeof password !== "string" || password.length < LONGITUD_MINIMA_PASSWORD) {

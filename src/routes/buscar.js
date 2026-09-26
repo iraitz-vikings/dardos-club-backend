@@ -24,7 +24,8 @@ function socioOpcional(req, _res, next) {
 
 // GET /api/buscar?q=texto
 router.get("/", socioOpcional, async (req, res) => {
-  const q = (req.query.q || "").trim();
+  // req.query.q puede llegar como array (?q[]=a&q[]=b): se ignora, no es texto.
+  const q = (typeof req.query.q === "string" ? req.query.q : "").trim();
   if (q.length < 2) {
     return res.json({ noticias: [], torneos: [], ligas: [] });
   }

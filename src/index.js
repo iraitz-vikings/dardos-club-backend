@@ -2,6 +2,13 @@ import express from "express";
 import cors from "cors";
 import cron from "node-cron";
 import "dotenv/config";
+// Hace que un error lanzado (o una promesa rechazada) dentro de CUALQUIER
+// ruta async se pase al manejador de errores de Express en vez de quedar
+// como "unhandledRejection", que en Node por defecto MATA el proceso. Sin
+// esto, una sola petición malformada (p.ej. POST /auth/login con el email
+// como lista: email.trim() peta) tumbaba el servidor entero para todo el
+// mundo, sin necesidad de estar identificado (auditoría 2026-09-26).
+import "express-async-errors";
 
 import { actualizarTodasLasMedias } from "./scrapers/actualizarMedias.js";
 import { actualizarTodasLasClasificaciones } from "./scrapers/actualizarClasificaciones.js";
@@ -172,6 +179,21 @@ cron.schedule("* * * * *", () => {
   enviarAvisosUnMinutoTemporizador().catch((err) =>
     console.error("Error enviando avisos de temporizador:", err.message || err)
   );
+});
+
+// Manejador de errores final: cualquier error no controlado en una ruta
+// acaba aquí y se responde 500 sin filtrar la traza al cliente (queda en el
+// log del servidor). Tiene que ir DESPUÉS de montar todas las rutas.
+app.use((err, req, res, _next) => {
+  console.error(`Error no controlado en ${req.method} ${req.originalUrl}:`, err?.message || err);
+  if (res.headersSent) return;
+  res.status(500).json({ error: "Ha ocurrido un error inesperado." });
+});
+
+// Última red de seguridad: si algo se escapa fuera de una ruta (un cron, el
+// bot de Telegram...), se registra pero NO se mata el proceso.
+process.on("unhandledRejection", (motivo) => {
+  console.error("unhandledRejection (no se cierra el proceso):", motivo?.message || motivo);
 });
 
 const PORT = process.env.PORT || 3000;

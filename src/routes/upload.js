@@ -3,6 +3,7 @@ import multer from "multer";
 import { v2 as cloudinary } from "cloudinary";
 import { verificarTokenSocio } from "./auth.js";
 import { requireAdmin, adminRateLimiter } from "../middleware/requireAdmin.js";
+import rateLimit from "express-rate-limit";
 
 const router = Router();
 
@@ -32,10 +33,28 @@ cloudinary.config({
 // que cada uno pueda subir su propia foto de perfil sin usar la contraseña de
 // admin). adminRateLimiter protege el token fijo también en esta puerta de
 // entrada alternativa (ver src/middleware/requireAdmin.js).
+// Límite de subidas para socios (no admin): cada subida real cuenta (no solo
+// las fallidas), para que un socio no pueda llenar el Cloudinary del club
+// subiendo sin parar (auditoría 2026-09-26). El admin no está limitado.
+const subidaSocioLimiter = rateLimit({
+  windowMs: 15 * 60 * 1000,
+  max: 30,
+  standardHeaders: true,
+  legacyHeaders: false,
+  message: { error: "Has subido demasiados archivos en poco tiempo. Espera unos minutos." },
+});
+
 function requireAdminOAuth(req, res, next) {
   adminRateLimiter(req, res, (err) => {
     if (err) return next(err);
-    continuarRequireAdminOAuth(req, res, next);
+    // Con token de admin no se aplica el límite de socio.
+    if (req.headers["x-admin-token"] === process.env.ADMIN_TOKEN) {
+      return continuarRequireAdminOAuth(req, res, next);
+    }
+    subidaSocioLimiter(req, res, (err2) => {
+      if (err2) return next(err2);
+      continuarRequireAdminOAuth(req, res, next);
+    });
   });
 }
 function continuarRequireAdminOAuth(req, res, next) {

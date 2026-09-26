@@ -6,7 +6,7 @@
 // ficha pública/de socio por jugador a la que llevar el resultado.
 import { Router } from "express";
 import { PrismaClient } from "@prisma/client";
-import { verificarTokenSocio } from "./auth.js";
+import { socioDeLaPeticion } from "./auth.js";
 
 const prisma = new PrismaClient();
 const router = Router();
@@ -19,15 +19,7 @@ const LIMITE_POR_CATEGORIA = 6;
 // solo para socios), además de los públicos. Un token ausente, caducado o
 // inválido no es un error — simplemente se busca como visitante anónimo.
 function socioOpcional(req, _res, next) {
-  const header = req.headers.authorization || "";
-  const token = header.startsWith("Bearer ") ? header.slice(7) : null;
-  if (token) {
-    try {
-      req.usuario = verificarTokenSocio(token);
-    } catch {
-      // sigue como anónimo
-    }
-  }
+  req.usuario = socioDeLaPeticion(req) || undefined;
   next();
 }
 

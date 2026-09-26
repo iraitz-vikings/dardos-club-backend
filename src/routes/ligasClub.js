@@ -11,7 +11,7 @@ import { urlPublicaLiga } from "../lib/enlacesPublicos.js";
 import { requireAdmin } from "../middleware/requireAdmin.js";
 import { validarConfiguracionHerramienta } from "../lib/configuracionHerramienta.js";
 import { validarVideoDirectoUrl } from "../lib/videoDirecto.js";
-import { validarMensajesAvisos } from "../lib/mensajesAvisos.js";
+import { validarMensajesAvisos, resolverMensaje } from "../lib/mensajesAvisos.js";
 import { JUGADOR_PUBLICO } from "../lib/selectsJugador.js";
 
 // "A", "B", "C"... — nombres de grupo para `numeroGrupos` grupos.
@@ -98,6 +98,8 @@ router.get("/papelera", requireAdmin, async (_req, res) => {
 
 router.get("/:id", async (req, res) => {
   const liga = await prisma.ligaClub.findUnique({ where: { id: req.params.id }, include: includeCompleto });
+  // Sin comprobar visibilidad a propósito, ver el comentario equivalente en
+  // torneosClub.js (GET /:id).
   if (!liga || liga.borradoEn) return res.status(404).json({ error: "Liga no encontrada" });
   res.json(liga);
 });
@@ -536,13 +538,38 @@ async function notificarPartidoDeLiga(partido, motivo = "programado") {
   const nombreLiga = liga?.nombre || "Liga del club";
   const enfrentamiento = `${partido.participante1 || "?"} vs ${partido.participante2 || "?"}`;
   const url = urlPublicaLiga(partido.ligaId);
+  // Mensajes personalizados de la liga (panel "Mensajes de avisos") y
+  // traducción al idioma de cada jugador, igual que en los torneos (ver
+  // notificarPartidoDeCuadrante en torneosClub.js). Antes estos dos avisos
+  // de jornada iban siempre en castellano fijo y el panel no les afectaba
+  // (auditoría 2026-09-26).
+  const mensajesAvisos = liga?.mensajesAvisos;
 
   if (motivo === "en_curso") {
     // No repetir si se desmarca y vuelve a marcar (ver avisoRepetido).
     if (avisoRepetido(`en_curso-liga-${partido.id}`)) return;
+    const valores = {
+      competicion: nombreLiga,
+      enfrentamiento,
+      maquina: partido.maquina
+        ? { es: ` en ${partido.maquina}`, eu: ` (${partido.maquina} makinan)`, fr: ` sur ${partido.maquina}` }
+        : "",
+    };
+    const mensaje = resolverMensaje(mensajesAvisos, "enCurso", {
+      titulo: {
+        es: `¡Tu partido empieza ahora! · {competicion}`,
+        eu: `Zure partida orain hasten da! · {competicion}`,
+        fr: `Ton match commence maintenant ! · {competicion}`,
+      },
+      cuerpo: {
+        es: `{enfrentamiento}{maquina}.`,
+        eu: `{enfrentamiento}{maquina}.`,
+        fr: `{enfrentamiento}{maquina}.`,
+      },
+    }, valores, { ...valores, maquina: partido.maquina || "" });
     await notificarJugadores(jugadorIds, {
-      titulo: `¡Tu partido empieza ahora! · ${nombreLiga}`,
-      cuerpo: `${enfrentamiento}${partido.maquina ? ` en ${partido.maquina}` : ""}.`,
+      titulo: mensaje.titulo,
+      cuerpo: mensaje.cuerpo,
       url,
       tag: `partido-liga-${partido.id}`,
       ttl: TTL_AVISO_EN_CURSO,
@@ -553,11 +580,35 @@ async function notificarPartidoDeLiga(partido, motivo = "programado") {
   const fechaTexto = partido.fechaCalendario
     ? new Date(partido.fechaCalendario).toLocaleDateString("es-ES", { day: "2-digit", month: "2-digit" })
     : null;
+  const nombreMaquina = partido.maquinaCalendario?.nombre;
+  const mensaje = resolverMensaje(mensajesAvisos, "programado", {
+    titulo: {
+      es: `Partido programado: {competicion}`,
+      eu: `Partida programatuta: {competicion}`,
+      fr: `Match programmé : {competicion}`,
+    },
+    cuerpo: {
+      es: `{enfrentamiento}{fecha}{maquina}.`,
+      eu: `{enfrentamiento}{fecha}{maquina}.`,
+      fr: `{enfrentamiento}{fecha}{maquina}.`,
+    },
+  }, {
+    competicion: nombreLiga,
+    enfrentamiento,
+    fecha: fechaTexto ? { es: ` el ${fechaTexto}`, eu: ` (${fechaTexto})`, fr: ` le ${fechaTexto}` } : "",
+    maquina: nombreMaquina
+      ? { es: ` en ${nombreMaquina}`, eu: ` — ${nombreMaquina} makina`, fr: ` sur ${nombreMaquina}` }
+      : "",
+  }, {
+    // Texto escrito por el admin: solo el dato (ver resolverMensaje).
+    competicion: nombreLiga,
+    enfrentamiento,
+    fecha: fechaTexto || "",
+    maquina: nombreMaquina || "",
+  });
   await notificarJugadores(jugadorIds, {
-    titulo: `Partido programado: ${nombreLiga}`,
-    cuerpo: `${enfrentamiento}${fechaTexto ? ` el ${fechaTexto}` : ""}${
-      partido.maquinaCalendario ? ` en ${partido.maquinaCalendario.nombre}` : ""
-    }.`,
+    titulo: mensaje.titulo,
+    cuerpo: mensaje.cuerpo,
     url,
     tag: `partido-liga-${partido.id}`,
     ttl: TTL_AVISO_NORMAL,

@@ -113,6 +113,19 @@ model SuscripcionPush {
   auth      String
   userAgent String?
   creadoEn  DateTime @default(now())
+
+  // Registro de envíos (plan de 2026-09-26 contra los avisos que "se
+  // desactivan solos"): cuántos avisos ha recibido esta suscripción y cuándo
+  // el último, y si el servicio push la dio por muerta (404/410) cuándo y con
+  // qué código. Antes se borraba al fallar y no quedaba rastro para saber si
+  // coincidía con picos de volumen (p.ej. en mitad de un torneo). Ahora se
+  // marca activa=false y se deja; solo se envía a las activas. Si el mismo
+  // endpoint se vuelve a suscribir, se reactiva (ver notificaciones.js).
+  enviados    Int       @default(0)
+  ultimoEnvio DateTime?
+  activa      Boolean   @default(true)
+  fallidaEn   DateTime?
+  fallidaCod  Int?
 }
 
 // Vínculo entre un Jugador invitado (sin cuenta) y su chat de Telegram,

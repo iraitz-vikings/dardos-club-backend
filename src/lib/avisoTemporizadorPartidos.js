@@ -11,7 +11,7 @@
 // — las ligas del club no tienen temporizador (ver schema.prisma). Se
 // llama desde el cron de cada minuto en src/index.js.
 import { PrismaClient } from "@prisma/client";
-import { notificarJugadores } from "../routes/notificar.js";
+import { notificarJugadores, TTL_AVISO_UN_MINUTO } from "../routes/notificar.js";
 import { urlPublicaCuadrante } from "./enlacesPublicos.js";
 import { resolverMensaje } from "./mensajesAvisos.js";
 
@@ -82,6 +82,8 @@ export async function enviarAvisosUnMinutoTemporizador() {
             titulo: mensaje.titulo,
             cuerpo: mensaje.cuerpo,
             url: urlPublicaCuadrante(p.cuadrante),
+            tag: `partido-${p.id}`,
+            ttl: TTL_AVISO_UN_MINUTO,
           });
           enviados++;
         }

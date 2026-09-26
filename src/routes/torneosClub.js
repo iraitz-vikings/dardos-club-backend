@@ -4,7 +4,7 @@ import { randomUUID } from "crypto";
 import { requireAuth } from "./auth.js";
 import { sortearParejasPorGrupos, resolverNombresJugadores } from "../lib/sorteoParejasGrupos.js";
 import { calcularClasificacionCuadrante } from "../lib/clasificacionCuadrante.js";
-import { notificarJugadores } from "./notificar.js";
+import { notificarJugadores, avisoRepetido, TTL_AVISO_EN_CURSO, TTL_AVISO_NORMAL } from "./notificar.js";
 import { diasRestantesPapelera } from "../lib/papelera.js";
 import { urlPublicaCuadrante } from "../lib/enlacesPublicos.js";
 import { requireAdmin } from "../middleware/requireAdmin.js";
@@ -793,6 +793,8 @@ async function notificarSorteoCuadrante(cuadranteId, posiciones) {
     cuerpo: mensaje.cuerpo,
     imagen,
     url: urlPublicaCuadrante(cuadrante),
+    tag: `cuadrante-${cuadrante.id}`,
+    ttl: TTL_AVISO_NORMAL,
   });
 }
 
@@ -1217,6 +1219,9 @@ async function notificarPartidoDeCuadrante(partido, motivo = "programado") {
   const mensajesAvisos = cuadrante?.torneoClub?.mensajesAvisos || cuadrante?.liga?.mensajesAvisos;
 
   if (motivo === "en_curso") {
+    // Si el admin desmarca y vuelve a marcar "en curso" el mismo partido, no
+    // se repite el aviso (ver avisoRepetido en notificar.js).
+    if (avisoRepetido(`en_curso-${partido.id}`)) return;
     // Temporizador de partidos (ver TorneoClub.temporizadorActivo/
     // temporizadorMinutos en schema.prisma): si está activo para este
     // torneo, se añade al aviso cuántos minutos tiene el jugador para
@@ -1255,6 +1260,8 @@ async function notificarPartidoDeCuadrante(partido, motivo = "programado") {
       titulo: mensaje.titulo,
       cuerpo: mensaje.cuerpo,
       url,
+      tag: `partido-${partido.id}`,
+      ttl: TTL_AVISO_EN_CURSO,
     });
     return;
   }
@@ -1298,6 +1305,8 @@ async function notificarPartidoDeCuadrante(partido, motivo = "programado") {
     titulo: mensaje.titulo,
     cuerpo: mensaje.cuerpo,
     url,
+    tag: `partido-${partido.id}`,
+    ttl: TTL_AVISO_NORMAL,
   });
 }
 
@@ -1386,6 +1395,10 @@ async function notificarEliminacionCuadrante(partido, etiquetaEliminado) {
     cuerpo: mensaje.cuerpo,
     imagen,
     url: urlPublicaCuadrante(cuadrante),
+    // Mismo tag que los avisos del partido que lo decide: sustituye a su
+    // "empieza ahora" / "falta 1 minuto" en vez de sumarse.
+    tag: `partido-${partido.id}`,
+    ttl: TTL_AVISO_NORMAL,
   });
 }
 
@@ -1425,6 +1438,10 @@ async function notificarCampeonCuadrante(partido, etiquetaCampeon) {
     cuerpo: mensaje.cuerpo,
     imagen,
     url: urlPublicaCuadrante(cuadrante),
+    // Mismo tag que los avisos del partido que lo decide: sustituye a su
+    // "empieza ahora" / "falta 1 minuto" en vez de sumarse.
+    tag: `partido-${partido.id}`,
+    ttl: TTL_AVISO_NORMAL,
   });
 }
 

@@ -3,7 +3,7 @@ import { PrismaClient } from "@prisma/client";
 import { generarPartidos, aplicarPosicionesRonda1 } from "./torneosClub.js";
 import { requireAuth } from "./auth.js";
 import { sortearParejasPorGrupos, resolverNombresJugadores } from "../lib/sorteoParejasGrupos.js";
-import { notificarJugadores } from "./notificar.js";
+import { notificarJugadores, avisoRepetido, TTL_AVISO_EN_CURSO, TTL_AVISO_NORMAL } from "./notificar.js";
 import { clasificacionPorGrupos } from "../lib/clasificacionLiga.js";
 import { construirRondaUnoConGrupos } from "../lib/cruceGruposFinal.js";
 import { diasRestantesPapelera } from "../lib/papelera.js";
@@ -537,10 +537,14 @@ async function notificarPartidoDeLiga(partido, motivo = "programado") {
   const url = urlPublicaLiga(partido.ligaId);
 
   if (motivo === "en_curso") {
+    // No repetir si se desmarca y vuelve a marcar (ver avisoRepetido).
+    if (avisoRepetido(`en_curso-liga-${partido.id}`)) return;
     await notificarJugadores(jugadorIds, {
-      titulo: `¡Tu partido empieza ahora! ${nombreLiga}`,
+      titulo: `¡Tu partido empieza ahora! · ${nombreLiga}`,
       cuerpo: `${enfrentamiento}${partido.maquina ? ` en ${partido.maquina}` : ""}.`,
       url,
+      tag: `partido-liga-${partido.id}`,
+      ttl: TTL_AVISO_EN_CURSO,
     });
     return;
   }
@@ -554,6 +558,8 @@ async function notificarPartidoDeLiga(partido, motivo = "programado") {
       partido.maquinaCalendario ? ` en ${partido.maquinaCalendario.nombre}` : ""
     }.`,
     url,
+    tag: `partido-liga-${partido.id}`,
+    ttl: TTL_AVISO_NORMAL,
   });
 }
 

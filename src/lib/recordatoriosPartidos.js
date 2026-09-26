@@ -8,7 +8,7 @@
 // tres tipos de enfrentamiento del club (torneos, ligas, competiciones
 // externas). Se llama desde el cron matutino de src/index.js.
 import { PrismaClient } from "@prisma/client";
-import { notificarJugadores } from "../routes/notificar.js";
+import { notificarJugadores, TTL_AVISO_RECORDATORIO } from "../routes/notificar.js";
 import { urlPublicaCuadrante, urlPublicaLiga } from "./enlacesPublicos.js";
 
 const prisma = new PrismaClient();
@@ -66,6 +66,8 @@ async function recordatoriosExternos(rangoHoy) {
       await notificarJugadores(jugadorIds, {
         titulo: `Hoy juegas: ${nombreEquipo}`,
         cuerpo: `${p.rival ? `Contra ${p.rival}` : "Partido"} hoy a las ${textoHora(p.fecha)}${nombreTorneo ? ` (${nombreTorneo})` : ""}.`,
+        tag: `partido-ext-${p.id}`,
+        ttl: TTL_AVISO_RECORDATORIO,
       });
       enviados++;
     }
@@ -110,6 +112,8 @@ async function recordatoriosTorneosClub(rangoHoy) {
           titulo: `Hoy juegas: ${nombreCompeticion}`,
           cuerpo: `${p.jugador1 || "?"} vs ${p.jugador2 || "?"} hoy a las ${textoHora(p.fechaCalendario)}.`,
           url: urlPublicaCuadrante(p.cuadrante),
+          tag: `partido-${p.id}`,
+          ttl: TTL_AVISO_RECORDATORIO,
         });
         enviados++;
       }
@@ -151,6 +155,8 @@ async function recordatoriosLigasClub(rangoHoy) {
           titulo: `Hoy juegas: ${nombreLiga}`,
           cuerpo: `${p.participante1 || "?"} vs ${p.participante2 || "?"} hoy a las ${textoHora(p.fechaCalendario)}.`,
           url: urlPublicaLiga(p.ligaId),
+          tag: `partido-liga-${p.id}`,
+          ttl: TTL_AVISO_RECORDATORIO,
         });
         enviados++;
       }

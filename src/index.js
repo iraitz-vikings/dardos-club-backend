@@ -35,6 +35,11 @@ import notificacionesRouter from "./routes/notificaciones.js";
 import partidasHerramientaRouter from "./routes/partidasHerramienta.js";
 
 const app = express();
+// Railway pone un proxy delante: sin esto, req.ip es siempre la IP del proxy
+// y los límites de intentos (loginLimiter.js, requireAdmin.js) contaban a
+// todo el mundo como si fuera una sola persona. 1 = confiar solo en el
+// primer salto (el de Railway), no en lo que mande el cliente.
+app.set("trust proxy", 1);
 app.use(cors());
 // Límite subido de 100kb (por defecto de Express) a 5mb: algunas rutas de
 // admin (torneos/ligas del club) construían su PUT mandando el objeto

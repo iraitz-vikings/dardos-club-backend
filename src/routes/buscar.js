@@ -6,7 +6,7 @@
 // ficha pública/de socio por jugador a la que llevar el resultado.
 import { Router } from "express";
 import { PrismaClient } from "@prisma/client";
-import jwt from "jsonwebtoken";
+import { verificarTokenSocio } from "./auth.js";
 
 const prisma = new PrismaClient();
 const router = Router();
@@ -23,7 +23,7 @@ function socioOpcional(req, _res, next) {
   const token = header.startsWith("Bearer ") ? header.slice(7) : null;
   if (token) {
     try {
-      req.usuario = jwt.verify(token, process.env.JWT_SECRET);
+      req.usuario = verificarTokenSocio(token);
     } catch {
       // sigue como anónimo
     }

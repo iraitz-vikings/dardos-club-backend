@@ -1,7 +1,7 @@
 import { Router } from "express";
 import multer from "multer";
 import { v2 as cloudinary } from "cloudinary";
-import jwt from "jsonwebtoken";
+import { verificarTokenSocio } from "./auth.js";
 import { requireAdmin, adminRateLimiter } from "../middleware/requireAdmin.js";
 
 const router = Router();
@@ -45,7 +45,7 @@ function continuarRequireAdminOAuth(req, res, next) {
   const token = header.startsWith("Bearer ") ? header.slice(7) : null;
   if (token) {
     try {
-      req.usuario = jwt.verify(token, process.env.JWT_SECRET);
+      req.usuario = verificarTokenSocio(token);
       return next();
     } catch {
       // sigue abajo y devuelve 401

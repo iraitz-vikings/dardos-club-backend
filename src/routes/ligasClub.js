@@ -12,6 +12,7 @@ import { requireAdmin } from "../middleware/requireAdmin.js";
 import { validarConfiguracionHerramienta } from "../lib/configuracionHerramienta.js";
 import { validarVideoDirectoUrl } from "../lib/videoDirecto.js";
 import { validarMensajesAvisos } from "../lib/mensajesAvisos.js";
+import { JUGADOR_PUBLICO } from "../lib/selectsJugador.js";
 
 // "A", "B", "C"... — nombres de grupo para `numeroGrupos` grupos.
 function letrasDeGrupos(numeroGrupos) {
@@ -22,7 +23,7 @@ const prisma = new PrismaClient();
 const router = Router();
 
 const includeCompleto = {
-  participantes: { include: { jugador1: true, jugador2: true }, orderBy: { creadoEn: "asc" } },
+  participantes: { include: { jugador1: JUGADOR_PUBLICO, jugador2: JUGADOR_PUBLICO }, orderBy: { creadoEn: "asc" } },
   // partidaHerramienta: ver el comentario equivalente en torneosClub.js
   // (marcador en directo en la página pública).
   partidos: {
@@ -36,7 +37,7 @@ const includeCompleto = {
         orderBy: [{ rama: "asc" }, { ronda: "asc" }, { posicion: "asc" }],
         include: { partidaHerramienta: { select: { id: true, finalizada: true } } },
       },
-      participantes: { include: { jugador1: true, jugador2: true } },
+      participantes: { include: { jugador1: JUGADOR_PUBLICO, jugador2: JUGADOR_PUBLICO } },
     },
   },
 };

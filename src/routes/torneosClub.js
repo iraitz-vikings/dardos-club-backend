@@ -1,5 +1,5 @@
 import { Router } from "express";
-import { PrismaClient } from "@prisma/client";
+import { prisma } from "../lib/prisma.js";
 import { randomUUID } from "crypto";
 import { requireAuth } from "./auth.js";
 import { sortearParejasPorGrupos, resolverNombresJugadores } from "../lib/sorteoParejasGrupos.js";
@@ -14,7 +14,6 @@ import { validarVideoDirectoUrl } from "../lib/videoDirecto.js";
 import { generarEnlaceCheckIn } from "./telegram.js";
 import { JUGADOR_PUBLICO } from "../lib/selectsJugador.js";
 
-const prisma = new PrismaClient();
 const router = Router();
 
 // Valida la tabla de puntos por posición del modo "por jornadas" (ver

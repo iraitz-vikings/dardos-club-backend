@@ -1,10 +1,9 @@
 import { Router } from "express";
-import { PrismaClient } from "@prisma/client";
+import { prisma } from "../lib/prisma.js";
 import { requireAuth } from "./auth.js";
 import { requireAdmin } from "../middleware/requireAdmin.js";
 import { JUGADOR_PUBLICO, JUGADOR_CON_USUARIO } from "../lib/selectsJugador.js";
 
-const prisma = new PrismaClient();
 const router = Router();
 
 const includeCompleto = {

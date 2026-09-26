@@ -1,8 +1,9 @@
 import { Router } from "express";
-import { PrismaClient } from "@prisma/client";
+import { prisma } from "../lib/prisma.js";
 import bcrypt from "bcryptjs";
 import jwt from "jsonwebtoken";
 import crypto from "node:crypto";
+import rateLimit from "express-rate-limit";
 import { pinLimiter } from "../middleware/loginLimiter.js";
 import {
   partidosPendientesDeJugador,
@@ -34,11 +35,24 @@ import { notificarJugador } from "./notificar.js";
 // login de socio pueda hacer. Vida corta pensada para una sesión de juego en
 // un dispositivo compartido, no para dejar sesión abierta días.
 
-const prisma = new PrismaClient();
 const router = Router();
 
 function firmarTokenPartida(jugador) {
   return jwt.sign({ tipo: "partida", jugadorId: jugador.id }, process.env.JWT_SECRET, { expiresIn: "12h" });
+}
+
+// jugadorId del token de PIN de la petición, o null si no trae uno válido
+// (para rutas públicas que dan algo más a los jugadores identificados).
+function jugadorPartidaDeLaPeticion(req) {
+  const header = req.headers.authorization || "";
+  const token = header.startsWith("Bearer ") ? header.slice(7) : null;
+  if (!token) return null;
+  try {
+    const payload = jwt.verify(token, process.env.JWT_SECRET);
+    return payload.tipo === "partida" && payload.jugadorId ? payload.jugadorId : null;
+  } catch {
+    return null;
+  }
 }
 
 function requireJugadorPartida(req, res, next) {
@@ -388,8 +402,32 @@ const ICE_STUN = [
   { urls: "stun:stun.cloudflare.com:3478" },
 ];
 let iceCache = { hasta: 0, servidores: ICE_STUN };
-router.get("/ice", async (_req, res) => {
+// Auditoría 2026-09-26: antes esto daba las credenciales del TURN (de pago
+// por uso en Cloudflare) a cualquiera que lo pidiera. Ahora solo se dan a
+// quien las necesita de verdad: un jugador identificado con su PIN (emisor
+// o rival de un amistoso) o un espectador de una partida con las cámaras
+// encendidas en este momento (?partida=<id>). Al resto, solo STUN (gratis).
+// Con límite de peticiones por IP, y credenciales de vida corta.
+const iceLimiter = rateLimit({
+  windowMs: 15 * 60 * 1000,
+  max: 60,
+  standardHeaders: true,
+  legacyHeaders: false,
+  message: { error: "Demasiadas peticiones. Espera unos minutos." },
+});
+async function puedeUsarTurn(req) {
+  if (jugadorPartidaDeLaPeticion(req)) return true;
+  const partidaId = typeof req.query.partida === "string" ? req.query.partida : null;
+  if (!partidaId) return false;
+  const partida = await prisma.partidaHerramienta.findUnique({
+    where: { id: partidaId },
+    select: { camarasActivas: true, finalizada: true },
+  });
+  return !!(partida && partida.camarasActivas && !partida.finalizada);
+}
+router.get("/ice", iceLimiter, async (req, res) => {
   res.set("Cache-Control", "no-store");
+  if (!(await puedeUsarTurn(req).catch(() => false))) return res.json({ iceServers: ICE_STUN });
   if (Date.now() < iceCache.hasta) return res.json({ iceServers: iceCache.servidores });
   try {
     let servidores = ICE_STUN;
@@ -401,7 +439,7 @@ router.get("/ice", async (_req, res) => {
         {
           method: "POST",
           headers: { Authorization: `Bearer ${CF_TURN_API_TOKEN}`, "Content-Type": "application/json" },
-          body: JSON.stringify({ ttl: 86400 }),
+          body: JSON.stringify({ ttl: 4 * 60 * 60 }),
         }
       );
       if (!resp.ok) throw new Error(`Cloudflare TURN respondió ${resp.status}`);
@@ -411,7 +449,7 @@ router.get("/ice", async (_req, res) => {
         // Se conservan los STUN propios y se añade el TURN de Cloudflare
         // (sus entradas stun: se descartan por duplicadas).
         servidores = [...ICE_STUN, ...lista.filter((s) => [].concat(s.urls).some((u) => !String(u).startsWith("stun:")))];
-        vigenciaMs = 6 * 60 * 60 * 1000;
+        vigenciaMs = 60 * 60 * 1000; // se renuevan cada hora (duran 4 h)
       }
     } else if (TURN_URLS && TURN_USERNAME && TURN_CREDENTIAL) {
       servidores = [
@@ -484,7 +522,20 @@ router.post("/:id/legs", requireJugadorPartida, async (req, res) => {
     partida.jugadoresId1.includes(req.jugadorPartidaId) || partida.jugadoresId2.includes(req.jugadorPartidaId);
   if (!esParticipante) return res.status(403).json({ error: "No eres parte de este partido." });
 
-  const legs = [...partida.legs, { numero: partida.legs.length + 1, ladoGanador, estadisticas: estadisticas || {} }];
+  // registradoPor/registradoEn: quién metió este leg (sesión de PIN) y
+  // cuándo. En torneos/ligas se juega en un dispositivo compartido con la
+  // sesión de uno de los dos, así que no se exige confirmación del rival,
+  // pero queda constancia por si hay una reclamación (auditoría 2026-09-26).
+  const legs = [
+    ...partida.legs,
+    {
+      numero: partida.legs.length + 1,
+      ladoGanador,
+      estadisticas: estadisticas || {},
+      registradoPor: req.jugadorPartidaId,
+      registradoEn: new Date().toISOString(),
+    },
+  ];
   const legsGanados1 = partida.legsGanados1 + (ladoGanador === 1 ? 1 : 0);
   const legsGanados2 = partida.legsGanados2 + (ladoGanador === 2 ? 1 : 0);
   // Mayoría de "al mejor de N" (p.ej. al mejor de 5 -> hacen falta 3).
@@ -503,6 +554,10 @@ router.post("/:id/legs", requireJugadorPartida, async (req, res) => {
   if (finalizada) {
     const ganadorEtiqueta = legsGanados1 >= legsParaGanar ? partida.etiqueta1 : partida.etiqueta2;
     const resultado = `${legsGanados1}-${legsGanados2}`;
+    console.log(
+      `[herramienta] partida ${partida.id} terminada ${resultado} (${partida.etiqueta1} vs ${partida.etiqueta2}), ` +
+        `gana ${ganadorEtiqueta}; último leg registrado por jugador ${req.jugadorPartidaId}`
+    );
     if (partida.cuadroPartidoId) {
       await aplicarResultadoCuadroPartido(partida.cuadroPartidoId, { resultado, ganador: ganadorEtiqueta });
     } else if (partida.partidoLigaId) {
@@ -743,11 +798,24 @@ router.post("/:id/camara/revisada", requireJugadorPartida, async (req, res) => {
 // body.publico = true: espectador de la página pública (no el rival de un
 // amistoso). Solo recibe la cámara de la diana, y hay un máximo de
 // MAX_ESPECTADORES_PUBLICOS a la vez por emisor (409 con completo: true).
+//
+// Sin publico (el rival de un amistoso, que recibe las dos cámaras a más
+// calidad y sin límite de cupo) hace falta el token de PIN de un
+// participante de la partida que no sea el propio emisor. Antes cualquiera
+// podía registrarse así sin límite, y el dispositivo emisor abría una
+// conexión con las dos cámaras por cada registro (auditoría 2026-09-26).
 router.post("/:id/camara/ver", async (req, res) => {
   const { emisorId } = req.body || {};
   const publico = !!(req.body && req.body.publico);
+  const jugadorId = publico ? null : jugadorPartidaDeLaPeticion(req);
+  if (!publico && !jugadorId) {
+    return res.status(401).json({ error: "Identifícate con tu PIN para ver las cámaras de tu rival." });
+  }
   const viewerId = crypto.randomUUID();
-  const r = await modificarSenal(req.params.id, (senal) => {
+  const r = await modificarSenal(req.params.id, (senal, partida) => {
+    if (!publico && (!esParticipanteDe(partida, jugadorId) || jugadorId === emisorId)) {
+      return { fallo: [403, "No eres el rival en este partido."] };
+    }
     const emisor = emisorId && senal.emisores[emisorId];
     if (!emisor || !emisor.activas) return { fallo: [409, "Las cámaras no están activas ahora mismo."] };
     podarViewers(emisor);

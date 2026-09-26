@@ -1,5 +1,5 @@
 import { Router } from "express";
-import { PrismaClient } from "@prisma/client";
+import { prisma } from "../lib/prisma.js";
 import { generarPartidos, aplicarPosicionesRonda1 } from "./torneosClub.js";
 import { requireAuth } from "./auth.js";
 import { sortearParejasPorGrupos, resolverNombresJugadores } from "../lib/sorteoParejasGrupos.js";
@@ -19,7 +19,6 @@ function letrasDeGrupos(numeroGrupos) {
   return Array.from({ length: numeroGrupos }, (_, i) => String.fromCharCode(65 + i));
 }
 
-const prisma = new PrismaClient();
 const router = Router();
 
 const includeCompleto = {

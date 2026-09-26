@@ -1,10 +1,9 @@
 import { Router } from "express";
-import { PrismaClient } from "@prisma/client";
+import { prisma } from "../lib/prisma.js";
 import bcrypt from "bcryptjs";
 import { requireAuth } from "./auth.js";
 import { pinValido } from "./jugadores.js";
 
-const prisma = new PrismaClient();
 const router = Router();
 
 async function obtenerOCrearJugador(usuarioId) {

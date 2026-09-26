@@ -1,8 +1,7 @@
-import { PrismaClient } from "@prisma/client";
+import { prisma } from "../lib/prisma.js";
 import { actualizarMediasConnection } from "./connectionDarts.js";
 import { actualizarMediasPhoenix } from "./phoenixDarts.js";
 
-const prisma = new PrismaClient();
 
 // Campos de media que puede rellenar un scraper. Phoenix solo devuelve
 // mpr/ppd (una única media); Connection devuelve las 4 variantes

@@ -3,12 +3,11 @@
 // src/lib/papelera.js) se borra de verdad, en cascada completa. Se llama
 // desde el cron nocturno de index.js; también se puede lanzar a mano si
 // hiciera falta (por ejemplo desde una consola de Railway).
-import { PrismaClient } from "@prisma/client";
+import { prisma } from "./prisma.js";
 import { purgarTorneo } from "../routes/torneosClub.js";
 import { purgarLiga } from "../routes/ligasClub.js";
 import { fechaLimitePapelera } from "./papelera.js";
 
-const prisma = new PrismaClient();
 
 export async function limpiarPapelera() {
   const limite = fechaLimitePapelera();

@@ -1,12 +1,11 @@
 import { Router } from "express";
-import { PrismaClient } from "@prisma/client";
+import { prisma } from "../lib/prisma.js";
 import { requireAuth, verificarTokenSocio } from "./auth.js";
 import { requireAdmin, adminRateLimiter } from "../middleware/requireAdmin.js";
 import { actualizarClasificacionTorneo, actualizarTodasLasClasificaciones } from "../scrapers/actualizarClasificaciones.js";
 import { notificarJugadores } from "./notificar.js";
 import { JUGADOR_PUBLICO, JUGADOR_CON_USUARIO } from "../lib/selectsJugador.js";
 
-const prisma = new PrismaClient();
 const router = Router();
 
 // Acepta o bien el admin (panel), o bien la sesión de un socio (para que el

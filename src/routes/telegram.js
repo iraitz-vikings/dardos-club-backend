@@ -22,9 +22,8 @@
 // `startPolling()`.
 import { Bot } from "node-telegram-bot-api";
 import { randomBytes } from "crypto";
-import { PrismaClient } from "@prisma/client";
+import { prisma } from "../lib/prisma.js";
 
-const prisma = new PrismaClient();
 
 let bot = null;
 

@@ -326,6 +326,10 @@ router.get("/papelera", requireAdmin, async (_req, res) => {
 router.get("/:id", async (req, res) => {
   const { id } = req.params;
   const torneo = await prisma.torneoClub.findUnique({ where: { id }, include: includeCompleto });
+  // Sin comprobar visibilidad a propósito: "privado" significa que no sale
+  // en los listados públicos, pero quien tenga el enlace lo ve (invitados
+  // sin cuenta incluidos, que reciben enlaces a esta página en sus avisos y
+  // usan desde aquí la herramienta) — decisión de Iraitz, 2026-09-26.
   if (!torneo || torneo.borradoEn) {
     return res.status(404).json({ error: "Torneo no encontrado" });
   }

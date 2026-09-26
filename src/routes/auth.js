@@ -25,6 +25,21 @@ export function verificarTokenSocio(token) {
   return payload;
 }
 
+// Payload de la sesión de socio si la petición trae un token de socio
+// válido, o null si no trae ninguno o no vale (no es un error: sirve para
+// rutas públicas que muestran algo más a los socios, como los torneos y
+// ligas privados o el buscador).
+export function socioDeLaPeticion(req) {
+  const header = req.headers.authorization || "";
+  const token = header.startsWith("Bearer ") ? header.slice(7) : null;
+  if (!token) return null;
+  try {
+    return verificarTokenSocio(token);
+  } catch {
+    return null;
+  }
+}
+
 // Middleware para rutas que requieren socio logueado
 export function requireAuth(req, res, next) {
   const header = req.headers.authorization || "";

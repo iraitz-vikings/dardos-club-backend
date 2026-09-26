@@ -226,7 +226,18 @@ router.put("/", requireAuth, async (req, res) => {
     }
   }
 
-  res.json(actualizado);
+  // No se devuelve el jugador en crudo: llevaría pinPartidasHash (el hash del
+  // PIN) y usuarioId. Solo lo que la pantalla de perfil necesita (auditoría
+  // 2026-09-26).
+  res.json({
+    id: actualizado.id,
+    nombre: actualizado.nombre,
+    apodo: actualizado.apodo,
+    avatarUrl: actualizado.avatarUrl,
+    bio: actualizado.bio,
+    idiomaAvisos: actualizado.idiomaAvisos,
+    tienePinPartidas: !!actualizado.pinPartidasHash,
+  });
 });
 
 // PUT /api/perfil/pin - el socio logueado se pone o cambia su propio PIN de

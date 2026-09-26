@@ -1,5 +1,6 @@
 import express from "express";
 import cors from "cors";
+import helmet from "helmet";
 import cron from "node-cron";
 import "dotenv/config";
 // Hace que un error lanzado (o una promesa rechazada) dentro de CUALQUIER
@@ -47,6 +48,12 @@ const app = express();
 // todo el mundo como si fuera una sola persona. 1 = confiar solo en el
 // primer salto (el de Railway), no en lo que mande el cliente.
 app.set("trust proxy", 1);
+// Cabeceras de seguridad (X-Content-Type-Options, Referrer-Policy, oculta
+// X-Powered-By, etc.). La API solo devuelve JSON, no HTML, así que se
+// desactiva la CSP de helmet (no aplica y podría estorbar). CORS abierto a
+// propósito: la web del club está en otro dominio y la sesión va por token
+// Bearer (no por cookie), así que abrir CORS no expone la sesión de nadie.
+app.use(helmet({ contentSecurityPolicy: false, crossOriginResourcePolicy: false }));
 app.use(cors());
 // Límite subido de 100kb (por defecto de Express) a 5mb: algunas rutas de
 // admin (torneos/ligas del club) construían su PUT mandando el objeto

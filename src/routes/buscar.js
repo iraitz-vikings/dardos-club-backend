@@ -5,10 +5,9 @@
 // crónica) — se dejó fuera "jugadores del club" porque hoy no existe una
 // ficha pública/de socio por jugador a la que llevar el resultado.
 import { Router } from "express";
-import { PrismaClient } from "@prisma/client";
+import { prisma } from "../lib/prisma.js";
 import { socioDeLaPeticion } from "./auth.js";
 
-const prisma = new PrismaClient();
 const router = Router();
 
 const LIMITE_POR_CATEGORIA = 6;

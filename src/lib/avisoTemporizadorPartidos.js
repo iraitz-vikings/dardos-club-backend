@@ -10,12 +10,11 @@
 // temporizador deja de importar para ese partido). Solo torneos del club
 // — las ligas del club no tienen temporizador (ver schema.prisma). Se
 // llama desde el cron de cada minuto en src/index.js.
-import { PrismaClient } from "@prisma/client";
+import { prisma } from "./prisma.js";
 import { notificarJugadores, TTL_AVISO_UN_MINUTO } from "../routes/notificar.js";
 import { urlPublicaCuadrante } from "./enlacesPublicos.js";
 import { resolverMensaje } from "./mensajesAvisos.js";
 
-const prisma = new PrismaClient();
 
 export async function enviarAvisosUnMinutoTemporizador() {
   const candidatos = await prisma.cuadroPartido.findMany({

@@ -4,10 +4,9 @@
 // navegador/sistema operativo a partir del endpoint push suscrito.
 import webpush from "web-push";
 import jwt from "jsonwebtoken";
-import { PrismaClient } from "@prisma/client";
+import { prisma } from "../lib/prisma.js";
 import { enviarTelegramAJugador } from "./telegram.js";
 
-const prisma = new PrismaClient();
 
 const VAPID_PUBLIC_KEY = process.env.VAPID_PUBLIC_KEY;
 const VAPID_PRIVATE_KEY = process.env.VAPID_PRIVATE_KEY;

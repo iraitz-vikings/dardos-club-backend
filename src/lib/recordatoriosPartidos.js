@@ -7,11 +7,10 @@
 // añade un segundo aviso, la mañana del propio día del partido, para los
 // tres tipos de enfrentamiento del club (torneos, ligas, competiciones
 // externas). Se llama desde el cron matutino de src/index.js.
-import { PrismaClient } from "@prisma/client";
+import { prisma } from "./prisma.js";
 import { notificarJugadores, TTL_AVISO_RECORDATORIO } from "../routes/notificar.js";
 import { urlPublicaCuadrante, urlPublicaLiga } from "./enlacesPublicos.js";
 
-const prisma = new PrismaClient();
 
 // Límites [inicio, fin) del día de HOY en la España peninsular
 // (Europe/Madrid), como instantes UTC reales. El servidor (Railway) corre

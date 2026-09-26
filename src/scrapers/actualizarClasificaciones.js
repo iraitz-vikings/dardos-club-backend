@@ -1,8 +1,7 @@
-import { PrismaClient } from "@prisma/client";
+import { prisma } from "../lib/prisma.js";
 import { extraerClasificacionEquiposRadikal } from "./radikalDarts.js";
 import { extraerClasificacionEquiposPhoenix } from "./phoenixDarts.js";
 
-const prisma = new PrismaClient();
 
 // Convierte una fila extraída por un scraper (posicion/nombreEquipo/...) en
 // los datos que espera Prisma para crear una fila de ClasificacionEquipo.

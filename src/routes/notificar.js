@@ -4,11 +4,10 @@
 // por ahí. Un jugador puede no tener ningún canal activo todavía (no ha
 // pasado por "Mi perfil" o no ha hecho el check-in de Telegram) — en ese
 // caso simplemente no se le manda nada, no es un error.
-import { PrismaClient } from "@prisma/client";
+import { prisma } from "../lib/prisma.js";
 import { enviarPushAJugador } from "./webPush.js";
 import { enviarTelegramAJugador } from "./telegram.js";
 
-const prisma = new PrismaClient();
 
 // titulo/cuerpo pueden ser un string (igual para todo el mundo, como hasta
 // ahora) o un objeto { es, eu, fr, ... } con una versión por idioma — en ese

@@ -1,11 +1,11 @@
 import { Router } from "express";
-import { PrismaClient } from "@prisma/client";
+import { prisma } from "../lib/prisma.js";
 import bcrypt from "bcryptjs";
 import jwt from "jsonwebtoken";
+import crypto from "node:crypto";
 import { requireAdmin } from "../middleware/requireAdmin.js";
 import { loginLimiter, registroLimiter } from "../middleware/loginLimiter.js";
 
-const prisma = new PrismaClient();
 const router = Router();
 
 // Verifica que `token` sea un token de SESIÓN DE SOCIO (el de firmarToken:
@@ -40,16 +40,29 @@ export function socioDeLaPeticion(req) {
   }
 }
 
-// Middleware para rutas que requieren socio logueado
-export function requireAuth(req, res, next) {
+// Middleware para rutas que requieren socio logueado. Además de verificar
+// el token, comprueba en la base de datos que la cuenta sigue existiendo y
+// aprobada, y toma el rol ACTUAL de ahí: el token dura 30 días y lleva el
+// rol del momento del login, así que antes quitarle a alguien el rol de
+// admin/capitán, o borrar su cuenta, no tenía efecto hasta que caducara
+// (auditoría 2026-09-26).
+export async function requireAuth(req, res, next) {
   const header = req.headers.authorization || "";
   const token = header.startsWith("Bearer ") ? header.slice(7) : null;
   if (!token) return res.status(401).json({ error: "No autenticado" });
+  let payload;
   try {
-    req.usuario = verificarTokenSocio(token);
-    next();
+    payload = verificarTokenSocio(token);
   } catch {
     return res.status(401).json({ error: "Token inválido o caducado" });
+  }
+  try {
+    const usuario = await prisma.usuario.findUnique({ where: { id: payload.sub }, select: { rol: true, aprobado: true } });
+    if (!usuario || !usuario.aprobado) return res.status(401).json({ error: "Tu cuenta ya no está activa" });
+    req.usuario = { ...payload, rol: usuario.rol };
+    next();
+  } catch (err) {
+    next(err);
   }
 }
 
@@ -62,6 +75,9 @@ export function requireRole(...roles) {
     next();
   };
 }
+
+const ROLES_VALIDOS = ["jugador", "capitan", "admin"];
+const LONGITUD_MINIMA_PASSWORD = 6;
 
 function firmarToken(usuario) {
   return jwt.sign({ sub: usuario.id, rol: usuario.rol }, process.env.JWT_SECRET, {
@@ -76,6 +92,9 @@ router.post("/registro", registroLimiter, async (req, res) => {
   const { nombre, email, password, codigoInvitacion } = req.body;
   if (!nombre || !email || !password || !codigoInvitacion) {
     return res.status(400).json({ error: "Faltan datos" });
+  }
+  if (typeof password !== "string" || password.length < LONGITUD_MINIMA_PASSWORD) {
+    return res.status(400).json({ error: `La contraseña debe tener al menos ${LONGITUD_MINIMA_PASSWORD} caracteres` });
   }
   if (codigoInvitacion !== process.env.CODIGO_INVITACION) {
     return res.status(403).json({ error: "Código de invitación incorrecto" });
@@ -157,6 +176,9 @@ router.get("/pendientes", requireAdmin, async (_req, res) => {
 // POST /api/auth/:id/aprobar - aprueba una cuenta y le asigna rol (admin)
 router.post("/:id/aprobar", requireAdmin, async (req, res) => {
   const { rol } = req.body; // "jugador" | "capitan" | "admin", opcional (por defecto jugador)
+  if (rol !== undefined && !ROLES_VALIDOS.includes(rol)) {
+    return res.status(400).json({ error: "Rol inválido" });
+  }
   const usuario = await prisma.usuario.update({
     where: { id: req.params.id },
     data: { aprobado: true, ...(rol ? { rol } : {}) },
@@ -167,7 +189,10 @@ router.post("/:id/aprobar", requireAdmin, async (req, res) => {
 // POST /api/auth/:id/resetear-password - el admin genera una contraseña
 // provisional para un socio (por ejemplo, si la ha olvidado)
 router.post("/:id/resetear-password", requireAdmin, async (req, res) => {
-  const provisional = Math.random().toString(36).slice(-8);
+  // Generador criptográfico (antes Math.random, que no lo es): 8 caracteres
+  // sin los que se confunden al dictarlos (0/O, 1/l/I).
+  const alfabeto = "abcdefghjkmnpqrstuvwxyz23456789";
+  const provisional = Array.from(crypto.randomBytes(8), (b) => alfabeto[b % alfabeto.length]).join("");
   const passwordHash = await bcrypt.hash(provisional, 10);
   const usuario = await prisma.usuario.update({
     where: { id: req.params.id },
@@ -183,8 +208,8 @@ router.put("/cambiar-password", requireAuth, async (req, res) => {
   if (!passwordActual || !passwordNueva) {
     return res.status(400).json({ error: "Faltan datos" });
   }
-  if (passwordNueva.length < 6) {
-    return res.status(400).json({ error: "La contraseña nueva debe tener al menos 6 caracteres" });
+  if (typeof passwordNueva !== "string" || passwordNueva.length < LONGITUD_MINIMA_PASSWORD) {
+    return res.status(400).json({ error: `La contraseña nueva debe tener al menos ${LONGITUD_MINIMA_PASSWORD} caracteres` });
   }
   const usuario = await prisma.usuario.findUnique({ where: { id: req.usuario.sub } });
   if (!usuario) return res.status(404).json({ error: "Usuario no encontrado" });
@@ -286,7 +311,7 @@ router.get("/socios", requireAdmin, async (_req, res) => {
 // PATCH /api/auth/:id/rol - cambia el rol de un socio ya aprobado (admin)
 router.patch("/:id/rol", requireAdmin, async (req, res) => {
   const { rol } = req.body;
-  if (!["jugador", "capitan", "admin"].includes(rol)) {
+  if (!ROLES_VALIDOS.includes(rol)) {
     return res.status(400).json({ error: "Rol inválido" });
   }
   const usuario = await prisma.usuario.update({ where: { id: req.params.id }, data: { rol } });
@@ -298,6 +323,12 @@ router.post("/crear-manual", requireAdmin, async (req, res) => {
   const { nombre, email, password, rol } = req.body;
   if (!nombre || !email || !password) {
     return res.status(400).json({ error: "Faltan datos" });
+  }
+  if (typeof password !== "string" || password.length < LONGITUD_MINIMA_PASSWORD) {
+    return res.status(400).json({ error: `La contraseña debe tener al menos ${LONGITUD_MINIMA_PASSWORD} caracteres` });
+  }
+  if (rol !== undefined && rol !== "" && !ROLES_VALIDOS.includes(rol)) {
+    return res.status(400).json({ error: "Rol inválido" });
   }
   const emailNormalizado = email.trim().toLowerCase();
   const existente = await prisma.usuario.findUnique({ where: { email: emailNormalizado } });

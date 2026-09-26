@@ -1,11 +1,10 @@
 import { Router } from "express";
-import { PrismaClient } from "@prisma/client";
+import { prisma } from "../lib/prisma.js";
 import { requireAuth } from "./auth.js";
 import { vapidPublicKey, generarTokenResuscripcionPush, verificarTokenResuscripcionPush } from "./webPush.js";
 import { generarEnlaceCheckIn } from "./telegram.js";
 import { requireAdmin } from "../middleware/requireAdmin.js";
 
-const prisma = new PrismaClient();
 const router = Router();
 
 // GET /api/notificaciones/vapid-public-key - clave pública para que el

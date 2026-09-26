@@ -1,9 +1,8 @@
 import { Router } from "express";
-import { PrismaClient } from "@prisma/client";
+import { prisma } from "../lib/prisma.js";
 import { requireAuth, requireRole } from "./auth.js";
 import { notificarJugadores } from "./notificar.js";
 
-const prisma = new PrismaClient();
 const router = Router();
 
 // GET /api/anuncios - lista de anuncios, visible para cualquier socio logueado

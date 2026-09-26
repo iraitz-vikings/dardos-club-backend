@@ -12,6 +12,7 @@ import { validarConfiguracionHerramienta } from "../lib/configuracionHerramienta
 import { validarMensajesAvisos, resolverMensaje } from "../lib/mensajesAvisos.js";
 import { validarVideoDirectoUrl } from "../lib/videoDirecto.js";
 import { generarEnlaceCheckIn } from "./telegram.js";
+import { JUGADOR_PUBLICO } from "../lib/selectsJugador.js";
 
 const prisma = new PrismaClient();
 const router = Router();
@@ -69,7 +70,7 @@ const includeCompleto = {
         orderBy: [{ rama: "asc" }, { ronda: "asc" }, { posicion: "asc" }],
         include: { partidaHerramienta: { select: { id: true, finalizada: true } } },
       },
-      participantes: { include: { jugador1: true, jugador2: true }, orderBy: { creadoEn: "asc" } },
+      participantes: { include: { jugador1: JUGADOR_PUBLICO, jugador2: JUGADOR_PUBLICO }, orderBy: { creadoEn: "asc" } },
       // Puntos ya asignados (ver POST /cuadrantes/:id/asignar-puntos) — se
       // incluyen aquí para que la página pública del torneo pueda mostrar la
       // clasificación oficial de cada jornada sin llamadas aparte. Solo
@@ -568,7 +569,7 @@ router.get("/cuadrantes/:cuadranteId/participantes", requireAdmin, async (req, r
   const { cuadranteId } = req.params;
   const participantes = await prisma.participanteCuadrante.findMany({
     where: { cuadranteId },
-    include: { jugador1: true, jugador2: true },
+    include: { jugador1: JUGADOR_PUBLICO, jugador2: JUGADOR_PUBLICO },
     orderBy: { creadoEn: "asc" },
   });
   res.json(participantes);
@@ -1070,7 +1071,7 @@ router.get("/cuadrantes/:cuadranteId/clasificacion", requireAdmin, async (req, r
     where: { id: cuadranteId },
     include: {
       partidos: true,
-      participantes: { include: { jugador1: true, jugador2: true } },
+      participantes: { include: { jugador1: JUGADOR_PUBLICO, jugador2: JUGADOR_PUBLICO } },
     },
   });
   if (!cuadrante) return res.status(404).json({ error: "Cuadrante no encontrado" });
@@ -1092,7 +1093,7 @@ router.post("/cuadrantes/:cuadranteId/asignar-puntos", requireAdmin, async (req,
     include: {
       torneoClub: true,
       partidos: true,
-      participantes: { include: { jugador1: true, jugador2: true } },
+      participantes: { include: { jugador1: JUGADOR_PUBLICO, jugador2: JUGADOR_PUBLICO } },
     },
   });
   if (!cuadrante) return res.status(404).json({ error: "Cuadrante no encontrado" });
@@ -1153,8 +1154,8 @@ router.get("/:id/clasificacion-general", async (req, res) => {
   const puntos = await prisma.puntoJornada.findMany({
     where: { cuadrante: { torneoClubId: id } },
     include: {
-      jugador1: true,
-      jugador2: true,
+      jugador1: JUGADOR_PUBLICO,
+      jugador2: JUGADOR_PUBLICO,
       cuadrante: { select: { id: true, nombre: true } },
     },
   });

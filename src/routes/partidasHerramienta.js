@@ -3,7 +3,7 @@ import { PrismaClient } from "@prisma/client";
 import bcrypt from "bcryptjs";
 import jwt from "jsonwebtoken";
 import crypto from "node:crypto";
-import { loginLimiter } from "../middleware/loginLimiter.js";
+import { pinLimiter } from "../middleware/loginLimiter.js";
 import {
   partidosPendientesDeJugador,
   localizarPartidoConConfig,
@@ -77,8 +77,8 @@ router.get("/jugadores", async (_req, res) => {
 // antes desde AdminJugadores.jsx, o que el propio socio fuera a su perfil).
 // Si ya tiene uno puesto, no se puede cambiar por aquí (para eso está el
 // admin o el perfil, que si requieren sesión de socio) — solo sirve para la
-// puesta en marcha inicial. loginLimiter por IP, igual que /login.
-router.post("/pin", loginLimiter, async (req, res) => {
+// puesta en marcha inicial. pinLimiter por IP + jugador, igual que /login.
+router.post("/pin", pinLimiter, async (req, res) => {
   const { jugadorId, pin } = req.body;
   if (!jugadorId || !pinValido(pin)) {
     return res.status(400).json({ error: "Elige quién eres y un PIN de 4 dígitos." });
@@ -96,10 +96,10 @@ router.post("/pin", loginLimiter, async (req, res) => {
 });
 
 // POST /api/partidas-herramienta/login - identificación con PIN (no es un
-// login de socio: ver el comentario de arriba). loginLimiter por IP, igual
-// que el login de socios, para que probar PINs de 4 dígitos uno detrás de
-// otro no sea viable.
-router.post("/login", loginLimiter, async (req, res) => {
+// login de socio: ver el comentario de arriba). pinLimiter por IP + jugador,
+// para que probar PINs de 4 dígitos uno detrás de otro no sea viable (ver
+// middleware/loginLimiter.js).
+router.post("/login", pinLimiter, async (req, res) => {
   const { jugadorId, pin } = req.body;
   if (!jugadorId || !pin) return res.status(400).json({ error: "Faltan datos" });
   const jugador = await prisma.jugador.findUnique({ where: { id: jugadorId } });

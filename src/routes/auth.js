@@ -3,18 +3,35 @@ import { PrismaClient } from "@prisma/client";
 import bcrypt from "bcryptjs";
 import jwt from "jsonwebtoken";
 import { requireAdmin } from "../middleware/requireAdmin.js";
-import { loginLimiter } from "../middleware/loginLimiter.js";
+import { loginLimiter, registroLimiter } from "../middleware/loginLimiter.js";
 
 const prisma = new PrismaClient();
 const router = Router();
 
-// Middleware para rutas que requieren socio logueado (se reutilizará en fases futuras)
+// Verifica que `token` sea un token de SESIÓN DE SOCIO (el de firmarToken:
+// { sub, rol }) y devuelve su payload; lanza si no. Con la misma
+// JWT_SECRET se firman también el token de la herramienta de marcador
+// ({ tipo: "partida" }, partidasHerramienta.js) y el de re-suscripción de
+// avisos ({ tipo: "push-resub" }, webPush.js). Antes bastaba con que la
+// firma fuera válida, así que un token de PIN — que cualquiera puede
+// conseguir poniéndole PIN a un jugador que aún no lo tenga — abría toda la
+// zona de socios y la subida de archivos (auditoría 2026-09-26). Usar esto
+// en cualquier sitio que acepte un token de socio.
+export function verificarTokenSocio(token) {
+  const payload = jwt.verify(token, process.env.JWT_SECRET);
+  if (!payload || payload.tipo || !payload.sub || !payload.rol) {
+    throw new Error("El token no es de sesión de socio");
+  }
+  return payload;
+}
+
+// Middleware para rutas que requieren socio logueado
 export function requireAuth(req, res, next) {
   const header = req.headers.authorization || "";
   const token = header.startsWith("Bearer ") ? header.slice(7) : null;
   if (!token) return res.status(401).json({ error: "No autenticado" });
   try {
-    req.usuario = jwt.verify(token, process.env.JWT_SECRET);
+    req.usuario = verificarTokenSocio(token);
     next();
   } catch {
     return res.status(401).json({ error: "Token inválido o caducado" });
@@ -38,9 +55,9 @@ function firmarToken(usuario) {
 }
 
 // POST /api/auth/registro - alta pública con código de invitación, queda pendiente de aprobación
-// loginLimiter también aquí: el código de invitación es otro secreto fijo que
+// registroLimiter: el código de invitación es otro secreto fijo que
 // se podría intentar adivinar a base de intentos, igual que una contraseña.
-router.post("/registro", loginLimiter, async (req, res) => {
+router.post("/registro", registroLimiter, async (req, res) => {
   const { nombre, email, password, codigoInvitacion } = req.body;
   if (!nombre || !email || !password || !codigoInvitacion) {
     return res.status(400).json({ error: "Faltan datos" });

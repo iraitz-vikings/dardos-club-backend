@@ -1,10 +1,10 @@
 import { Router } from "express";
 import { PrismaClient } from "@prisma/client";
-import jwt from "jsonwebtoken";
-import { requireAuth } from "./auth.js";
+import { requireAuth, verificarTokenSocio } from "./auth.js";
 import { requireAdmin, adminRateLimiter } from "../middleware/requireAdmin.js";
 import { actualizarClasificacionTorneo, actualizarTodasLasClasificaciones } from "../scrapers/actualizarClasificaciones.js";
 import { notificarJugadores } from "./notificar.js";
+import { JUGADOR_PUBLICO, JUGADOR_CON_USUARIO } from "../lib/selectsJugador.js";
 
 const prisma = new PrismaClient();
 const router = Router();
@@ -29,7 +29,7 @@ function continuarRequireAdminOSocio(req, res, next) {
   const token = header.startsWith("Bearer ") ? header.slice(7) : null;
   if (token) {
     try {
-      req.usuario = jwt.verify(token, process.env.JWT_SECRET);
+      req.usuario = verificarTokenSocio(token);
       return next();
     } catch {
       // sigue abajo
@@ -46,9 +46,9 @@ const includeTorneo = {
       // el desplegable de capitán por inscripción (EquipoTorneo.capitan) no
       // se usa en la práctica, así que se incluyen los dos para poder
       // comprobar cualquiera de ellos.
-      equipoClub: { include: { capitan: true } },
-      capitan: true,
-      jugadores: { include: { jugador: true } },
+      equipoClub: { include: { capitan: JUGADOR_CON_USUARIO } },
+      capitan: JUGADOR_CON_USUARIO,
+      jugadores: { include: { jugador: JUGADOR_PUBLICO } },
       partidos: { include: { maquina: true }, orderBy: { fecha: "asc" } },
       clasificacion: { orderBy: { posicion: "asc" } },
     },
@@ -261,7 +261,7 @@ router.delete("/equipos/:id/jugadores/:jugadorId", requireAdmin, async (req, res
 async function esCapitanDeEquipo(equipoTorneoId, usuarioSub) {
   const equipoTorneo = await prisma.equipoTorneo.findUnique({
     where: { id: equipoTorneoId },
-    include: { capitan: true, equipoClub: { include: { capitan: true } } },
+    include: { capitan: JUGADOR_CON_USUARIO, equipoClub: { include: { capitan: JUGADOR_CON_USUARIO } } },
   });
   if (!equipoTorneo) return { equipoTorneo: null, esCapitan: false };
   const esCapitan =
@@ -299,7 +299,7 @@ router.put("/partidos/:id", requireAdminOSocio, async (req, res) => {
     where: { id },
     include: {
       equipoTorneo: {
-        include: { capitan: true, equipoClub: { include: { capitan: true } }, torneo: true },
+        include: { capitan: JUGADOR_CON_USUARIO, equipoClub: { include: { capitan: JUGADOR_CON_USUARIO } }, torneo: true },
       },
     },
   });

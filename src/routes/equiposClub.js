@@ -2,13 +2,14 @@ import { Router } from "express";
 import { PrismaClient } from "@prisma/client";
 import { requireAuth } from "./auth.js";
 import { requireAdmin } from "../middleware/requireAdmin.js";
+import { JUGADOR_PUBLICO, JUGADOR_CON_USUARIO } from "../lib/selectsJugador.js";
 
 const prisma = new PrismaClient();
 const router = Router();
 
 const includeCompleto = {
-  capitan: true,
-  miembros: { include: { jugador: true }, orderBy: { creadoEn: "asc" } },
+  capitan: JUGADOR_CON_USUARIO,
+  miembros: { include: { jugador: JUGADOR_PUBLICO }, orderBy: { creadoEn: "asc" } },
   inscripciones: {
     include: {
       // "equipoTorneoId: null" filtra a la tabla compartida por todo el
@@ -17,8 +18,8 @@ const includeCompleto = {
       // ya se muestran por separado abajo (clasificacion, en esta misma
       // inscripción).
       torneo: { include: { plataforma: true, clasificacion: { where: { equipoTorneoId: null }, orderBy: { posicion: "asc" } } } },
-      capitan: true,
-      jugadores: { include: { jugador: true } },
+      capitan: JUGADOR_CON_USUARIO,
+      jugadores: { include: { jugador: JUGADOR_PUBLICO } },
       partidos: { include: { maquina: true }, orderBy: { fecha: "asc" } },
       // Clasificación propia de ESTA inscripción (solo tiene filas en
       // plataformas por equipo como Phoenix, donde cada equipo del club

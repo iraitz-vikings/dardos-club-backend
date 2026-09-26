@@ -49,20 +49,33 @@ export function vapidPublicKey() {
 
 // Manda un aviso a TODOS los dispositivos que este jugador tenga con avisos
 // activados. Si algún endpoint ya no es válido (410/404: el usuario
-// desinstaló la web o borró los datos del navegador), se borra esa
-// suscripción de la base de datos. Nunca lanza: si el servidor no tiene
-// VAPID configurado, simplemente no manda nada (se avisa por consola).
-export async function enviarPushAJugador(jugadorId, payload) {
+// desinstaló la web, borró los datos del navegador, o el navegador/sistema le
+// retiró el permiso), esa suscripción se marca como inactiva (no se borra,
+// para conservar el historial — ver SuscripcionPush en schema.prisma) y se
+// deja en el log cuántos avisos llevaba y cuándo fue el último. Nunca lanza:
+// si el servidor no tiene VAPID configurado, simplemente no manda nada (se
+// avisa por consola).
+//
+// payload.tag (opcional): los avisos con el mismo tag se sustituyen en el
+// móvil en vez de apilarse (ver service-worker.js del frontend) — uno por
+// partido, para que "tu partido empieza", "falta 1 minuto" y el recordatorio
+// de ese mismo partido dejen una sola notificación viva.
+// opciones.ttl (segundos, opcional): cuánto puede esperar el servicio push
+// a entregarlo si el móvil está sin conexión; pasado ese tiempo se descarta.
+// Sin él, web-push usa 4 semanas: un "tu partido empieza ahora" que llega
+// horas después no sirve de nada y solo suma avisos que nadie pulsa.
+export async function enviarPushAJugador(jugadorId, payload, opciones = {}) {
   if (!asegurarConfigurado()) {
     console.warn("Web Push no configurado (faltan VAPID_PUBLIC_KEY/VAPID_PRIVATE_KEY): se omite el envío.");
     return { enviados: 0, eliminados: 0 };
   }
 
-  const suscripciones = await prisma.suscripcionPush.findMany({ where: { jugadorId } });
+  const suscripciones = await prisma.suscripcionPush.findMany({ where: { jugadorId, activa: true } });
   if (suscripciones.length === 0) return { enviados: 0, eliminados: 0 };
 
   let enviados = 0;
-  const idsAEliminar = [];
+  const idsEnviados = [];
+  const fallidas = []; // { id, codigo }
 
   await Promise.all(
     suscripciones.map(async (sub) => {
@@ -75,12 +88,18 @@ export async function enviarPushAJugador(jugadorId, payload) {
         await webpush.sendNotification(
           { endpoint: sub.endpoint, keys: { p256dh: sub.p256dh, auth: sub.auth } },
           JSON.stringify(payload),
-          { urgency: "high" }
+          { urgency: "high", ...(opciones.ttl ? { TTL: opciones.ttl } : {}) }
         );
         enviados++;
+        idsEnviados.push(sub.id);
       } catch (err) {
         if (err.statusCode === 404 || err.statusCode === 410) {
-          idsAEliminar.push(sub.id);
+          fallidas.push({ id: sub.id, codigo: err.statusCode });
+          console.warn(
+            `[push] fallo ${err.statusCode} jugador=${jugadorId} sub=${sub.id} enviados=${sub.enviados} ` +
+              `ultimoEnvio=${sub.ultimoEnvio ? sub.ultimoEnvio.toISOString() : "-"} creadoEn=${sub.creadoEn.toISOString()} ` +
+              `ua=${JSON.stringify(sub.userAgent || "")}`
+          );
         } else {
           console.error(`Error enviando push (suscripción ${sub.id}):`, err.message || err);
         }
@@ -88,8 +107,20 @@ export async function enviarPushAJugador(jugadorId, payload) {
     })
   );
 
-  if (idsAEliminar.length > 0) {
-    await prisma.suscripcionPush.deleteMany({ where: { id: { in: idsAEliminar } } });
+  if (idsEnviados.length > 0) {
+    await prisma.suscripcionPush.updateMany({
+      where: { id: { in: idsEnviados } },
+      data: { enviados: { increment: 1 }, ultimoEnvio: new Date() },
+    });
+  }
+
+  if (fallidas.length > 0) {
+    const ahora = new Date();
+    await Promise.all(
+      fallidas.map(({ id, codigo }) =>
+        prisma.suscripcionPush.update({ where: { id }, data: { activa: false, fallidaEn: ahora, fallidaCod: codigo } })
+      )
+    );
     // Las notificaciones del navegador se pueden desactivar solas con el
     // tiempo sin que el socio se entere (el navegador invalida la
     // suscripción sin avisar a la web ni al servidor). Si tiene Telegram
@@ -101,5 +132,5 @@ export async function enviarPushAJugador(jugadorId, payload) {
     ).catch(() => {});
   }
 
-  return { enviados, eliminados: idsAEliminar.length };
+  return { enviados, eliminados: fallidas.length };
 }

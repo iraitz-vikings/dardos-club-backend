@@ -29,7 +29,9 @@ router.post("/push/suscribir", requireAuth, async (req, res) => {
 
   await prisma.suscripcionPush.upsert({
     where: { endpoint },
-    update: { jugadorId: jugador.id, p256dh: keys.p256dh, auth: keys.auth, userAgent: req.headers["user-agent"] || null },
+    // Reactiva la suscripción si el mismo endpoint estaba marcada como
+    // caída (ver enviarPushAJugador en webPush.js).
+    update: { jugadorId: jugador.id, p256dh: keys.p256dh, auth: keys.auth, userAgent: req.headers["user-agent"] || null, activa: true, fallidaEn: null, fallidaCod: null },
     create: {
       jugadorId: jugador.id,
       endpoint,
@@ -57,7 +59,7 @@ router.delete("/push/suscribir", requireAuth, async (req, res) => {
 router.get("/push/estado", requireAuth, async (req, res) => {
   const jugador = await prisma.jugador.findUnique({ where: { usuarioId: req.usuario.sub } });
   if (!jugador) return res.json({ activo: false, cantidad: 0 });
-  const cantidad = await prisma.suscripcionPush.count({ where: { jugadorId: jugador.id } });
+  const cantidad = await prisma.suscripcionPush.count({ where: { jugadorId: jugador.id, activa: true } });
   res.json({ activo: cantidad > 0, cantidad });
 });
 
@@ -89,7 +91,7 @@ router.post("/push/resuscribir", async (req, res) => {
   }
   await prisma.suscripcionPush.upsert({
     where: { endpoint },
-    update: { jugadorId, p256dh: keys.p256dh, auth: keys.auth, userAgent: req.headers["user-agent"] || null },
+    update: { jugadorId, p256dh: keys.p256dh, auth: keys.auth, userAgent: req.headers["user-agent"] || null, activa: true, fallidaEn: null, fallidaCod: null },
     create: { jugadorId, endpoint, p256dh: keys.p256dh, auth: keys.auth, userAgent: req.headers["user-agent"] || null },
   });
   res.status(201).json({ ok: true });

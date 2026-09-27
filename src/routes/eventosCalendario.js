@@ -15,7 +15,7 @@ const router = Router();
 router.get("/", requireAdmin, async (_req, res) => {
   const eventos = await prisma.eventoCalendario.findMany({
     include: { maquina: true },
-    orderBy: { fecha: "desc" },
+    orderBy: { fecha: "asc" },
   });
   res.json(eventos);
 });

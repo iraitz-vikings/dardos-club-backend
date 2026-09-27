@@ -783,6 +783,9 @@ model EquipoClub {
   id          String   @id @default(uuid())
   nombre      String
   descripcion String?
+  // "equipo" (varios jugadores) o "pareja" (dos). Solo cambia cómo se
+  // agrupa/etiqueta en la web; no afecta a inscripciones ni partidos.
+  tipo        String   @default("equipo")
   escudoUrl   String?
   capitanId   String?
   capitan     Jugador? @relation("capitanEquipoClub", fields: [capitanId], references: [id])

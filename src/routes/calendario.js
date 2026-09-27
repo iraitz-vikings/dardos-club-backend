@@ -92,6 +92,11 @@ router.get("/", requireAuth, async (req, res) => {
     })),
   ];
 
+  // Orden cronológico (por fecha/hora): antes cada fuente (partidos fijados,
+  // de cuadrante, de liga, eventos manuales) se concatenaba en bloque, así
+  // que dentro de una misma máquina/día los eventos no salían por hora.
+  eventos.sort((a, b) => new Date(a.fecha) - new Date(b.fecha));
+
   res.json({ inicioSemana, eventos });
 });
 

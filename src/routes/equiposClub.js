@@ -6,6 +6,8 @@ import { JUGADOR_PUBLICO, JUGADOR_CON_USUARIO } from "../lib/selectsJugador.js";
 
 const router = Router();
 
+const TIPOS_EQUIPO = ["equipo", "pareja"];
+
 const includeCompleto = {
   capitan: JUGADOR_CON_USUARIO,
   miembros: { include: { jugador: JUGADOR_PUBLICO }, orderBy: { creadoEn: "asc" } },
@@ -41,10 +43,13 @@ router.get("/admin", requireAdmin, async (_req, res) => {
 });
 
 router.post("/", requireAdmin, async (req, res) => {
-  const { nombre, descripcion, escudoUrl } = req.body;
+  const { nombre, descripcion, escudoUrl, tipo } = req.body;
   if (!nombre) return res.status(400).json({ error: "Falta el nombre del equipo" });
+  if (tipo !== undefined && !TIPOS_EQUIPO.includes(tipo)) {
+    return res.status(400).json({ error: "Tipo no válido (equipo o pareja)." });
+  }
   const equipo = await prisma.equipoClub.create({
-    data: { nombre, descripcion: descripcion || null, escudoUrl: escudoUrl || null },
+    data: { nombre, descripcion: descripcion || null, escudoUrl: escudoUrl || null, tipo: tipo || "equipo" },
     include: includeCompleto,
   });
   res.status(201).json(equipo);
@@ -52,7 +57,10 @@ router.post("/", requireAdmin, async (req, res) => {
 
 router.put("/:id", requireAdmin, async (req, res) => {
   const { id } = req.params;
-  const { nombre, descripcion, escudoUrl, capitanId } = req.body;
+  const { nombre, descripcion, escudoUrl, capitanId, tipo } = req.body;
+  if (tipo !== undefined && !TIPOS_EQUIPO.includes(tipo)) {
+    return res.status(400).json({ error: "Tipo no válido (equipo o pareja)." });
+  }
   try {
     const equipo = await prisma.equipoClub.update({
       where: { id },
@@ -61,6 +69,7 @@ router.put("/:id", requireAdmin, async (req, res) => {
         descripcion: descripcion !== undefined ? descripcion || null : undefined,
         escudoUrl: escudoUrl !== undefined ? escudoUrl || null : undefined,
         capitanId: capitanId !== undefined ? capitanId || null : undefined,
+        tipo: tipo !== undefined ? tipo : undefined,
       },
       include: includeCompleto,
     });

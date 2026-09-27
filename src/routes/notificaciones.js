@@ -96,6 +96,34 @@ router.post("/push/resuscribir", async (req, res) => {
   res.status(201).json({ ok: true });
 });
 
+// GET /api/notificaciones/push/admin/dispositivos - el admin ve TODOS los
+// dispositivos con avisos push del club y su estado, para diagnosticar los
+// avisos que "se desactivan solos" sin tener que mirar la base de datos:
+// qué socio, qué dispositivo (userAgent), si está activo o caído, cuántos
+// avisos ha recibido, cuándo fue el último y, si el navegador lo dio por
+// muerto, cuándo y con qué código (404/410). Se ordenan primero los caídos y,
+// dentro de cada grupo, por la fecha más reciente (fallo o último envío).
+router.get("/push/admin/dispositivos", requireAdmin, async (_req, res) => {
+  const suscripciones = await prisma.suscripcionPush.findMany({
+    include: { jugador: { select: { id: true, nombre: true } } },
+    orderBy: [{ activa: "asc" }, { fallidaEn: "desc" }, { ultimoEnvio: "desc" }, { creadoEn: "desc" }],
+  });
+  res.json(
+    suscripciones.map((s) => ({
+      id: s.id,
+      jugadorId: s.jugadorId,
+      jugadorNombre: s.jugador?.nombre || "—",
+      userAgent: s.userAgent || null,
+      activa: s.activa,
+      enviados: s.enviados,
+      ultimoEnvio: s.ultimoEnvio,
+      creadoEn: s.creadoEn,
+      fallidaEn: s.fallidaEn,
+      fallidaCod: s.fallidaCod,
+    }))
+  );
+});
+
 // GET /api/notificaciones/checkin/:token - página pública de check-in de un
 // invitado: valida el token y devuelve su nombre y si ya vinculó Telegram,
 // para que el frontend pueda mostrar el botón adecuado.

@@ -7,6 +7,31 @@ import { requireAdmin } from "../middleware/requireAdmin.js";
 
 const router = Router();
 
+// Registra (o reactiva) la suscripción push de este endpoint para el jugador
+// y, acto seguido, borra las OTRAS suscripciones del MISMO dispositivo (mismo
+// userAgent) de ese jugador. Hace falta porque el navegador genera un
+// endpoint NUEVO cada vez que se vuelve a suscribir (cuando los avisos "se
+// caen y se recuperan solos", o al volver tras un tiempo): el endpoint viejo
+// ya está muerto pero quedaba como fila aparte, así que un mismo móvil
+// acababa apareciendo varias veces en el panel. Al quedarnos solo con la
+// última suscripción de cada dispositivo, la lista deja de acumular
+// duplicados. Matiz: si dos aparatos distintos tuvieran EXACTAMENTE la misma
+// cadena de navegador, se pisarían, pero cada uno se vuelve a registrar solo
+// al entrar en la zona de socios, así que se recupera. Solo se deduplica
+// cuando hay userAgent (sin él no se puede saber si es el mismo dispositivo).
+async function registrarSuscripcion(jugadorId, endpoint, keys, userAgent) {
+  await prisma.suscripcionPush.upsert({
+    where: { endpoint },
+    update: { jugadorId, p256dh: keys.p256dh, auth: keys.auth, userAgent: userAgent || null, activa: true, fallidaEn: null, fallidaCod: null },
+    create: { jugadorId, endpoint, p256dh: keys.p256dh, auth: keys.auth, userAgent: userAgent || null },
+  });
+  if (userAgent) {
+    await prisma.suscripcionPush.deleteMany({
+      where: { jugadorId, userAgent, endpoint: { not: endpoint } },
+    });
+  }
+}
+
 // GET /api/notificaciones/vapid-public-key - clave pública para que el
 // frontend pueda suscribirse a Web Push. Pública (no hace falta sesión).
 router.get("/vapid-public-key", (_req, res) => {
@@ -26,19 +51,7 @@ router.post("/push/suscribir", requireAuth, async (req, res) => {
   const jugador = await prisma.jugador.findUnique({ where: { usuarioId: req.usuario.sub } });
   if (!jugador) return res.status(404).json({ error: "Tu cuenta no tiene una ficha de jugador asociada" });
 
-  await prisma.suscripcionPush.upsert({
-    where: { endpoint },
-    // Reactiva la suscripción si el mismo endpoint estaba marcada como
-    // caída (ver enviarPushAJugador en webPush.js).
-    update: { jugadorId: jugador.id, p256dh: keys.p256dh, auth: keys.auth, userAgent: req.headers["user-agent"] || null, activa: true, fallidaEn: null, fallidaCod: null },
-    create: {
-      jugadorId: jugador.id,
-      endpoint,
-      p256dh: keys.p256dh,
-      auth: keys.auth,
-      userAgent: req.headers["user-agent"] || null,
-    },
-  });
+  await registrarSuscripcion(jugador.id, endpoint, keys, req.headers["user-agent"]);
   res.status(201).json({ ok: true });
 });
 
@@ -88,11 +101,7 @@ router.post("/push/resuscribir", async (req, res) => {
   } catch {
     return res.status(401).json({ error: "Token de re-suscripción inválido" });
   }
-  await prisma.suscripcionPush.upsert({
-    where: { endpoint },
-    update: { jugadorId, p256dh: keys.p256dh, auth: keys.auth, userAgent: req.headers["user-agent"] || null, activa: true, fallidaEn: null, fallidaCod: null },
-    create: { jugadorId, endpoint, p256dh: keys.p256dh, auth: keys.auth, userAgent: req.headers["user-agent"] || null },
-  });
+  await registrarSuscripcion(jugadorId, endpoint, keys, req.headers["user-agent"]);
   res.status(201).json({ ok: true });
 });
 
@@ -122,6 +131,15 @@ router.get("/push/admin/dispositivos", requireAdmin, async (_req, res) => {
       fallidaCod: s.fallidaCod,
     }))
   );
+});
+
+// DELETE /api/notificaciones/push/admin/dispositivos/caidos - el admin borra
+// de golpe todas las suscripciones marcadas como caídas (404/410), para
+// limpiar la lista de dispositivos que ya no sirven. Solo toca las inactivas:
+// las activas no se tocan nunca desde aquí.
+router.delete("/push/admin/dispositivos/caidos", requireAdmin, async (_req, res) => {
+  const { count } = await prisma.suscripcionPush.deleteMany({ where: { activa: false } });
+  res.json({ eliminados: count });
 });
 
 // GET /api/notificaciones/checkin/:token - página pública de check-in de un

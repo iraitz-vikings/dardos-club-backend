@@ -126,28 +126,30 @@ app.get("/api/health", (_req, res) => res.json({ ok: true }));
 // poder recibir el /start de los invitados que hacen check-in.
 iniciarBotTelegram();
 
-// Cada 15 días (días 1 y 16 del mes) a las 04:00 se refrescan las medias de
-// Connection Darts y Phoenix Darts guardadas en los perfiles de los socios
-// (ver src/scrapers/actualizarMedias.js) — las medias no cambian tanto como
-// para justificar hacerlo cada noche. También se puede lanzar a mano en
-// cualquier momento desde el admin con el botón "Actualizar medias".
-cron.schedule("0 4 1,16 * *", () => {
+// Cada 3 meses (día 1 de enero, abril, julio y octubre) a las 04:00 se
+// refrescan las medias de Connection Darts y Phoenix Darts guardadas en los
+// perfiles de los socios (ver src/scrapers/actualizarMedias.js) — las medias
+// cambian muy poco, así que no compensa hacerlo más a menudo. También se
+// puede lanzar a mano en cualquier momento desde el admin con el botón
+// "Actualizar medias".
+cron.schedule("0 4 1 1,4,7,10 *", () => {
   console.log("Actualizando medias de fabricantes (cron nocturno)...");
   actualizarTodasLasMedias()
     .then((resumen) => console.log("Medias actualizadas:", resumen))
     .catch((err) => console.error("Error actualizando medias:", err));
 });
 
-// Cada noche a las 04:30 (media hora después del cron de medias de arriba,
-// para no tener dos navegadores Playwright abiertos a la vez en el mismo
-// servidor) se refresca la clasificación de todos los torneos/ligas
+// De lunes a viernes a las 04:30 (media hora después del cron de medias de
+// arriba, para no tener dos navegadores Playwright abiertos a la vez en el
+// mismo servidor) se refresca la clasificación de todos los torneos/ligas
 // externos dados de alta (ver src/scrapers/actualizarClasificaciones.js).
-// Por ahora esto solo actualiza algo en Radikal Darts y Phoenix Darts;
-// Connection Darts se omite hasta que tenga scraper. También se puede
-// lanzar a mano desde el admin, tanto por torneo ("Actualizar
-// clasificación") como para todos a la vez ("Actualizar todas las
-// clasificaciones ahora", en "Comp. externas").
-cron.schedule("30 4 * * *", () => {
+// Los fines de semana no se suele jugar liga, así que no hace falta
+// actualizar sábados ni domingos. Por ahora esto solo actualiza algo en
+// Radikal Darts y Phoenix Darts; Connection Darts se omite hasta que tenga
+// scraper. También se puede lanzar a mano desde el admin, tanto por torneo
+// ("Actualizar clasificación") como para todos a la vez ("Actualizar todas
+// las clasificaciones ahora", en "Comp. externas").
+cron.schedule("30 4 * * 1-5", () => {
   console.log("Actualizando clasificaciones de equipos (cron nocturno)...");
   actualizarTodasLasClasificaciones()
     .then((resumen) => console.log("Clasificaciones actualizadas:", resumen))

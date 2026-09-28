@@ -3,6 +3,7 @@ import { prisma } from "../lib/prisma.js";
 import bcrypt from "bcryptjs";
 import { requireAuth } from "./auth.js";
 import { requireAdmin } from "../middleware/requireAdmin.js";
+import { actualizarMediasDeJugador } from "../scrapers/actualizarMedias.js";
 
 const router = Router();
 
@@ -78,6 +79,22 @@ router.put("/:id/pin", requireAdmin, async (req, res) => {
   const pinPartidasHash = await bcrypt.hash(pin, 10);
   await prisma.jugador.update({ where: { id: jugador.id }, data: { pinPartidasHash } });
   res.json({ ok: true });
+});
+
+// POST /api/jugadores/:id/actualizar-medias - refresca las medias/estadísticas
+// SOLO de este jugador consultando sus alias en las webs de fabricante con
+// scraper (Connection/Phoenix), en vez de recorrer a todo el club como el
+// botón general de "Actualizar medias" o el cron nocturno. Más rápido y con
+// menos consumo de servidor cuando solo hace falta refrescar a una persona.
+router.post("/:id/actualizar-medias", requireAdmin, async (req, res) => {
+  const jugador = await prisma.jugador.findUnique({ where: { id: req.params.id } });
+  if (!jugador) return res.status(404).json({ error: "Jugador no encontrado" });
+  try {
+    const resumen = await actualizarMediasDeJugador(jugador.id);
+    res.json(resumen);
+  } catch (err) {
+    res.status(500).json({ error: err.message || "No se pudo actualizar las medias de este jugador" });
+  }
 });
 
 // GET /api/jugadores/directorio - lista pública para socios logueados (sin datos

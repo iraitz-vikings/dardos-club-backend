@@ -10,6 +10,7 @@
 import { prisma } from "./prisma.js";
 import { notificarJugadores, TTL_AVISO_RECORDATORIO } from "../routes/notificar.js";
 import { urlPublicaCuadrante, urlPublicaLiga } from "./enlacesPublicos.js";
+import { CLUB_NOMBRE } from "./club.js";
 
 
 // Límites [inicio, fin) del día de HOY en la España peninsular
@@ -106,7 +107,7 @@ async function recordatoriosTorneosClub(rangoHoy) {
       });
       const jugadorIds = participantes.flatMap((pt) => [pt.jugador1Id, pt.jugador2Id]).filter(Boolean);
       if (jugadorIds.length > 0) {
-        const nombreCompeticion = p.cuadrante.torneoClub?.nombre || p.cuadrante.liga?.nombre || "Torneo Vikings";
+        const nombreCompeticion = p.cuadrante.torneoClub?.nombre || p.cuadrante.liga?.nombre || `Torneo ${CLUB_NOMBRE}`;
         await notificarJugadores(jugadorIds, {
           titulo: `Hoy juegas: ${nombreCompeticion}`,
           cuerpo: `${p.jugador1 || "?"} vs ${p.jugador2 || "?"} hoy a las ${textoHora(p.fechaCalendario)}.`,

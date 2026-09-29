@@ -5,6 +5,7 @@ import jwt from "jsonwebtoken";
 import { verificarTokenSocio } from "./auth.js";
 import { requireAdmin, adminRateLimiter } from "../middleware/requireAdmin.js";
 import rateLimit from "express-rate-limit";
+import { CLOUDINARY_FOLDER } from "../lib/club.js";
 
 const router = Router();
 
@@ -114,7 +115,7 @@ router.post("/", requireAdminOAuth, subirArchivo, async (req, res) => {
   try {
     const resultado = await new Promise((resolve, reject) => {
       const stream = cloudinary.uploader.upload_stream(
-        { folder: "dardos-club", resource_type: "auto" },
+        { folder: CLOUDINARY_FOLDER, resource_type: "auto" },
         (error, result) => (error ? reject(error) : resolve(result))
       );
       stream.end(req.file.buffer);
@@ -142,7 +143,7 @@ router.get("/existentes", requireAdmin, async (_req, res) => {
   try {
     const resultado = await cloudinary.api.resources({
       type: "upload",
-      prefix: "dardos-club/",
+      prefix: `${CLOUDINARY_FOLDER}/`,
       resource_type: "image",
       max_results: 100,
       direction: "desc",

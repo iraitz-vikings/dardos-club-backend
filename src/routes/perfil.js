@@ -138,14 +138,30 @@ const IDIOMAS_AVISOS_VALIDOS = ["es", "eu", "fr"];
 
 // PUT /api/perfil - el socio edita su propio perfil
 router.put("/", requireAuth, async (req, res) => {
-  const { apodo, avatarUrl, bio, idiomaAvisos, idsFabricantes } = req.body;
+  const { nombre, apodo, avatarUrl, bio, idiomaAvisos, idsFabricantes } = req.body;
   if (idiomaAvisos !== undefined && !IDIOMAS_AVISOS_VALIDOS.includes(idiomaAvisos)) {
     return res.status(400).json({ error: "Idioma de avisos no válido." });
   }
+  if (nombre !== undefined && !String(nombre).trim()) {
+    return res.status(400).json({ error: "El nombre no puede quedar vacío." });
+  }
+
   const jugador = await obtenerOCrearJugador(req.usuario.sub);
+
+  // El nombre vive en la cuenta (Usuario.nombre) y además se copia al Jugador,
+  // que es el que se muestra en toda la web (cuadrantes, ranking…), para que
+  // no queden desincronizados. El correo (login) no se edita desde aquí.
+  if (nombre !== undefined) {
+    await prisma.usuario.update({
+      where: { id: req.usuario.sub },
+      data: { nombre: String(nombre).trim() },
+    });
+  }
+
   const actualizado = await prisma.jugador.update({
     where: { id: jugador.id },
     data: {
+      nombre: nombre !== undefined ? String(nombre).trim() : undefined,
       apodo: apodo !== undefined ? apodo || null : undefined,
       avatarUrl: avatarUrl !== undefined ? avatarUrl || null : undefined,
       bio: bio !== undefined ? bio || null : undefined,

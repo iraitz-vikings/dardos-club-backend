@@ -90,6 +90,25 @@ router.get("/:id/perfil", requireAdmin, async (req, res) => {
   });
 });
 
+// GET /api/jugadores/:id/ficha - ficha pública de un jugador (nombre, foto,
+// apodo, bio y medias) para el socio logueado. La usa el modal de perfil que
+// se abre al pulsar un nombre en el cuadrante (mismo modal que en "Jugadores
+// del club"). Requiere sesión de socio: las medias solo se enseñan a quien se
+// ha identificado, no a un visitante anónimo de la página pública del torneo.
+router.get("/:id/ficha", requireAuth, async (req, res) => {
+  const jugador = await prisma.jugador.findUnique({ where: { id: req.params.id } });
+  if (!jugador) return res.status(404).json({ error: "Jugador no encontrado" });
+  res.json({
+    id: jugador.id,
+    nombre: jugador.nombre,
+    apodo: jugador.apodo,
+    avatarUrl: jugador.avatarUrl,
+    bio: jugador.bio,
+    usuarioId: jugador.usuarioId,
+    idsFabricantes: await leerIdsFabricantes(jugador.id),
+  });
+});
+
 // PUT /api/jugadores/:id/pin - el admin pone o cambia el PIN de partidas de
 // cualquier jugador (socio o invitado), p.ej. si se le ha olvidado. El socio
 // también puede cambiarse el suyo propio desde su perfil (ver PUT /api/perfil/pin).

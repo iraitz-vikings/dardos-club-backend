@@ -5,6 +5,7 @@ import { requireAdmin, adminRateLimiter } from "../middleware/requireAdmin.js";
 import { actualizarClasificacionTorneo, actualizarTodasLasClasificaciones } from "../scrapers/actualizarClasificaciones.js";
 import { notificarJugadores } from "./notificar.js";
 import { JUGADOR_PUBLICO, JUGADOR_CON_USUARIO } from "../lib/selectsJugador.js";
+import { CLUB_NOMBRE } from "../lib/club.js";
 
 const router = Router();
 
@@ -393,7 +394,7 @@ router.get("/calendario", requireAuth, async (_req, res) => {
       fecha: p.fecha,
       maquina: p.maquina?.nombre || null,
       rival: p.rival,
-      equipo: p.equipoTorneo.nombreEquipo || "Vikings",
+      equipo: p.equipoTorneo.nombreEquipo || CLUB_NOMBRE,
       torneo: p.equipoTorneo.torneo?.nombre,
       plataforma: p.equipoTorneo.torneo?.plataforma?.nombre,
     })),

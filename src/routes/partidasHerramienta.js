@@ -17,6 +17,7 @@ import { aplicarResultadoPartidoLiga } from "./ligasClub.js";
 import { pinValido } from "./jugadores.js";
 import { requireAuth } from "./auth.js";
 import { notificarJugador } from "./notificar.js";
+import { leerIdsFabricantes, guardarIdsFabricantes } from "../lib/fabricanteMedias.js";
 
 // Flujo público de juego con la herramienta de marcador (Slice 3+4 del plan
 // "herramienta-marcador-torneos-ligas", guardado en el proyecto): un jugador
@@ -135,6 +136,58 @@ router.get("/pendientes", requireJugadorPartida, async (req, res) => {
   if (entidadTipo) pendientes = pendientes.filter((p) => p.entidadTipo === entidadTipo);
   if (entidadId) pendientes = pendientes.filter((p) => p.entidadId === entidadId);
   res.json(pendientes);
+});
+
+// GET /api/partidas-herramienta/mi-perfil - perfil del jugador identificado
+// con PIN (pestaña pública "Invitados"). Pensado para amigos/invitados sin
+// cuenta de socio: pueden editar su ficha (foto, nombre, apodo) y sus alias
+// de fabricante para las medias, igual que un socio en su perfil. Los
+// miembros (con usuarioId) tienen su perfil completo en la zona de socios, así
+// que aquí solo se les indica que lo gestionen allí (esMiembro: true).
+router.get("/mi-perfil", requireJugadorPartida, async (req, res) => {
+  const jugador = await prisma.jugador.findUnique({ where: { id: req.jugadorPartidaId } });
+  if (!jugador) return res.status(404).json({ error: "No se ha encontrado tu ficha de jugador." });
+  res.json({
+    id: jugador.id,
+    nombre: jugador.nombre,
+    apodo: jugador.apodo,
+    avatarUrl: jugador.avatarUrl,
+    esMiembro: !!jugador.usuarioId,
+    idsFabricantes: await leerIdsFabricantes(jugador.id),
+  });
+});
+
+// PUT /api/partidas-herramienta/mi-perfil - el jugador identificado con PIN
+// edita su propia ficha. Solo para amigos/invitados: si es un miembro
+// (usuarioId), se rechaza y se le remite a la zona de socios, donde su
+// nombre/foto ya se gestionan con su cuenta.
+router.put("/mi-perfil", requireJugadorPartida, async (req, res) => {
+  const jugador = await prisma.jugador.findUnique({ where: { id: req.jugadorPartidaId } });
+  if (!jugador) return res.status(404).json({ error: "No se ha encontrado tu ficha de jugador." });
+  if (jugador.usuarioId) {
+    return res.status(403).json({ error: "Tu perfil de miembro se gestiona desde la zona de socios." });
+  }
+  const { nombre, apodo, avatarUrl, idsFabricantes } = req.body || {};
+  if (nombre !== undefined && !String(nombre).trim()) {
+    return res.status(400).json({ error: "El nombre no puede quedar vacío." });
+  }
+  const actualizado = await prisma.jugador.update({
+    where: { id: jugador.id },
+    data: {
+      nombre: nombre !== undefined ? String(nombre).trim() : undefined,
+      apodo: apodo !== undefined ? String(apodo).trim() || null : undefined,
+      avatarUrl: avatarUrl !== undefined ? avatarUrl || null : undefined,
+    },
+  });
+  await guardarIdsFabricantes(jugador.id, idsFabricantes);
+  res.json({
+    id: actualizado.id,
+    nombre: actualizado.nombre,
+    apodo: actualizado.apodo,
+    avatarUrl: actualizado.avatarUrl,
+    esMiembro: false,
+    idsFabricantes: await leerIdsFabricantes(jugador.id),
+  });
 });
 
 // GET /api/partidas-herramienta/mis-competiciones - torneos y ligas en los

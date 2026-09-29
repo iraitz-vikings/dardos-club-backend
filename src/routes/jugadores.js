@@ -4,6 +4,7 @@ import bcrypt from "bcryptjs";
 import { requireAuth } from "./auth.js";
 import { requireAdmin } from "../middleware/requireAdmin.js";
 import { actualizarMediasDeJugador } from "../scrapers/actualizarMedias.js";
+import { leerIdsFabricantes, guardarIdsFabricantes } from "../lib/fabricanteMedias.js";
 
 const router = Router();
 
@@ -50,7 +51,7 @@ router.post("/", requireAdmin, async (req, res) => {
 // permitirlo desde este endpoint los desincronizaría (el nombre del socio se
 // usa también para el login/gestión de socios).
 router.put("/:id", requireAdmin, async (req, res) => {
-  const { nombre, apodo } = req.body;
+  const { nombre, apodo, avatarUrl, idsFabricantes } = req.body;
   if (!nombre || !nombre.trim()) {
     return res.status(400).json({ error: "Falta el nombre" });
   }
@@ -61,9 +62,32 @@ router.put("/:id", requireAdmin, async (req, res) => {
   }
   const actualizado = await prisma.jugador.update({
     where: { id: req.params.id },
-    data: { nombre: nombre.trim(), ...(apodo !== undefined ? { apodo: apodo.trim() || null } : {}) },
+    data: {
+      nombre: nombre.trim(),
+      ...(apodo !== undefined ? { apodo: apodo.trim() || null } : {}),
+      ...(avatarUrl !== undefined ? { avatarUrl: avatarUrl || null } : {}),
+    },
   });
+  // Alias/medias de fabricante del amigo/invitado (ver
+  // src/lib/fabricanteMedias.js), para poder rellenarle las medias desde el
+  // panel igual que lo haría él en la pestaña "Invitados".
+  await guardarIdsFabricantes(jugador.id, idsFabricantes);
   res.json(actualizado);
+});
+
+// GET /api/jugadores/:id/perfil - foto y alias de fabricante de un jugador,
+// para poder editarlos desde el panel de admin (pestaña "Jugadores del club").
+router.get("/:id/perfil", requireAdmin, async (req, res) => {
+  const jugador = await prisma.jugador.findUnique({ where: { id: req.params.id } });
+  if (!jugador) return res.status(404).json({ error: "Jugador no encontrado" });
+  res.json({
+    id: jugador.id,
+    nombre: jugador.nombre,
+    apodo: jugador.apodo,
+    avatarUrl: jugador.avatarUrl,
+    esMiembro: !!jugador.usuarioId,
+    idsFabricantes: await leerIdsFabricantes(jugador.id),
+  });
 });
 
 // PUT /api/jugadores/:id/pin - el admin pone o cambia el PIN de partidas de

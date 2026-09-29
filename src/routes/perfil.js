@@ -134,7 +134,7 @@ router.get("/historial", requireAuth, async (req, res) => {
 // selector de idioma de la web (Nav.jsx), pero es un dato aparte: uno es de
 // navegación (localStorage) y el otro de a quién avisar en qué idioma (base
 // de datos). Ver comentario de Jugador.idiomaAvisos en schema.prisma.
-const IDIOMAS_AVISOS_VALIDOS = ["es", "eu", "fr"];
+export const IDIOMAS_AVISOS_VALIDOS = ["es", "eu", "fr"];
 
 // PUT /api/perfil - el socio edita su propio perfil
 router.put("/", requireAuth, async (req, res) => {

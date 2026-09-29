@@ -18,6 +18,8 @@ import { pinValido } from "./jugadores.js";
 import { requireAuth } from "./auth.js";
 import { notificarJugador } from "./notificar.js";
 import { leerIdsFabricantes, guardarIdsFabricantes } from "../lib/fabricanteMedias.js";
+import { IDIOMAS_AVISOS_VALIDOS } from "./perfil.js";
+import { generarEnlaceCheckIn } from "./telegram.js";
 
 // Flujo público de juego con la herramienta de marcador (Slice 3+4 del plan
 // "herramienta-marcador-torneos-ligas", guardado en el proyecto): un jugador
@@ -153,8 +155,24 @@ router.get("/mi-perfil", requireJugadorPartida, async (req, res) => {
     apodo: jugador.apodo,
     avatarUrl: jugador.avatarUrl,
     esMiembro: !!jugador.usuarioId,
+    idiomaAvisos: jugador.idiomaAvisos,
     idsFabricantes: await leerIdsFabricantes(jugador.id),
   });
+});
+
+// GET /api/partidas-herramienta/mi-perfil/telegram - el invitado identificado
+// con PIN consulta si tiene los avisos por Telegram vinculados y obtiene su
+// deep-link al bot, para darse de alta él mismo desde su perfil sin esperar a
+// que el admin le mande el enlace (/aviso/:token sigue funcionando igual: es
+// el mismo token de check-in, ver generarEnlaceCheckIn en telegram.js).
+router.get("/mi-perfil/telegram", requireJugadorPartida, async (req, res) => {
+  const jugador = await prisma.jugador.findUnique({
+    where: { id: req.jugadorPartidaId },
+    include: { suscripcionTelegram: { select: { id: true } } },
+  });
+  if (!jugador) return res.status(404).json({ error: "No se ha encontrado tu ficha de jugador." });
+  const enlace = await generarEnlaceCheckIn(jugador.id);
+  res.json({ telegramVinculado: !!jugador.suscripcionTelegram, urlTelegram: enlace.urlTelegram });
 });
 
 // PUT /api/partidas-herramienta/mi-perfil - el jugador identificado con PIN
@@ -167,9 +185,12 @@ router.put("/mi-perfil", requireJugadorPartida, async (req, res) => {
   if (jugador.usuarioId) {
     return res.status(403).json({ error: "Tu perfil de miembro se gestiona desde la zona de socios." });
   }
-  const { nombre, apodo, avatarUrl, idsFabricantes } = req.body || {};
+  const { nombre, apodo, avatarUrl, idsFabricantes, idiomaAvisos } = req.body || {};
   if (nombre !== undefined && !String(nombre).trim()) {
     return res.status(400).json({ error: "El nombre no puede quedar vacío." });
+  }
+  if (idiomaAvisos !== undefined && !IDIOMAS_AVISOS_VALIDOS.includes(idiomaAvisos)) {
+    return res.status(400).json({ error: "Idioma de avisos no válido." });
   }
   const actualizado = await prisma.jugador.update({
     where: { id: jugador.id },
@@ -177,6 +198,7 @@ router.put("/mi-perfil", requireJugadorPartida, async (req, res) => {
       nombre: nombre !== undefined ? String(nombre).trim() : undefined,
       apodo: apodo !== undefined ? String(apodo).trim() || null : undefined,
       avatarUrl: avatarUrl !== undefined ? avatarUrl || null : undefined,
+      idiomaAvisos: idiomaAvisos !== undefined ? idiomaAvisos : undefined,
     },
   });
   await guardarIdsFabricantes(jugador.id, idsFabricantes);
@@ -186,6 +208,7 @@ router.put("/mi-perfil", requireJugadorPartida, async (req, res) => {
     apodo: actualizado.apodo,
     avatarUrl: actualizado.avatarUrl,
     esMiembro: false,
+    idiomaAvisos: actualizado.idiomaAvisos,
     idsFabricantes: await leerIdsFabricantes(jugador.id),
   });
 });

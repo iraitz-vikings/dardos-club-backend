@@ -6,7 +6,13 @@
 // en la herramienta de marcador como ese jugador. Auditoría 2026-09-26.
 // Si una pantalla necesita otro campo, añadirlo aquí a propósito, nunca
 // volver a `true`.
-export const JUGADOR_PUBLICO = { select: { id: true, nombre: true, apodo: true, avatarUrl: true } };
+//
+// Sin avatarUrl: estas respuestas las puede leer cualquiera sin sesión
+// (páginas públicas de torneos/ligas/equipos) y la foto de un jugador es un
+// dato personal que no ha consentido publicar en abierto — la web solo la
+// enseña a socios con sesión (directorio y ficha, GET /api/jugadores/
+// directorio y /:id/ficha). Revisión de normativa 2026-09-29.
+export const JUGADOR_PUBLICO = { select: { id: true, nombre: true, apodo: true } };
 
 // Igual, más el usuarioId (qué cuenta de socio es) — solo para respuestas
 // que ya exigen sesión de socio y lo necesitan (p.ej. saber si el socio

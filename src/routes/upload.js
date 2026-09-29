@@ -1,6 +1,7 @@
 import { Router } from "express";
 import multer from "multer";
 import { v2 as cloudinary } from "cloudinary";
+import jwt from "jsonwebtoken";
 import { verificarTokenSocio } from "./auth.js";
 import { requireAdmin, adminRateLimiter } from "../middleware/requireAdmin.js";
 import rateLimit from "express-rate-limit";
@@ -66,6 +67,18 @@ function continuarRequireAdminOAuth(req, res, next) {
     try {
       req.usuario = verificarTokenSocio(token);
       return next();
+    } catch {
+      // no es un token de socio; se prueba abajo con el de PIN
+    }
+    // Token de PIN de la herramienta (amigo/invitado que sube su foto de
+    // perfil desde la pestaña "Invitados"): { tipo: "partida", jugadorId }.
+    // Igual que un socio, pasa por el límite de subidas de arriba.
+    try {
+      const payload = jwt.verify(token, process.env.JWT_SECRET);
+      if (payload.tipo === "partida" && payload.jugadorId) {
+        req.jugadorPartidaId = payload.jugadorId;
+        return next();
+      }
     } catch {
       // sigue abajo y devuelve 401
     }

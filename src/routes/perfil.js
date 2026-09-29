@@ -3,6 +3,7 @@ import { prisma } from "../lib/prisma.js";
 import bcrypt from "bcryptjs";
 import { requireAuth } from "./auth.js";
 import { pinValido } from "./jugadores.js";
+import { leerIdsFabricantes, guardarIdsFabricantes } from "../lib/fabricanteMedias.js";
 
 const router = Router();
 
@@ -21,10 +22,6 @@ async function obtenerOCrearJugador(usuarioId) {
 router.get("/", requireAuth, async (req, res) => {
   const jugador = await obtenerOCrearJugador(req.usuario.sub);
   const usuario = await prisma.usuario.findUnique({ where: { id: req.usuario.sub } });
-  const idsFabricantes = await prisma.jugadorFabricanteId.findMany({
-    where: { jugadorId: jugador.id },
-    include: { fabricante: true },
-  });
   res.json({
     id: jugador.id,
     nombre: jugador.nombre,
@@ -35,22 +32,7 @@ router.get("/", requireAuth, async (req, res) => {
     rol: usuario.rol,
     tienePinPartidas: !!jugador.pinPartidasHash,
     idiomaAvisos: jugador.idiomaAvisos,
-    idsFabricantes: idsFabricantes.map((i) => ({
-      fabricanteId: i.fabricanteId,
-      nombreFabricante: i.fabricante.nombre,
-      urlPerfilPlantilla: i.fabricante.urlPerfilPlantilla,
-      logoUrl: i.fabricante.logoUrl,
-      idExterno: i.idExterno,
-      notaBusqueda: i.notaBusqueda,
-      mpr: i.mpr,
-      ppd: i.ppd,
-      mprVirtual: i.mprVirtual,
-      ppdVirtual: i.ppdVirtual,
-      mprPresencial: i.mprPresencial,
-      ppdPresencial: i.ppdPresencial,
-      statsActualizadoEn: i.statsActualizadoEn,
-      statsError: i.statsError,
-    })),
+    idsFabricantes: await leerIdsFabricantes(jugador.id),
   });
 });
 
@@ -171,60 +153,9 @@ router.put("/", requireAuth, async (req, res) => {
     },
   });
 
-  // idsFabricantes: array de { fabricanteId, idExterno, notaBusqueda, mpr?,
-  // ppd? }. Un idExterno vacío borra el ID guardado para ese fabricante; si
-  // no, se crea/actualiza. notaBusqueda es opcional (hoy solo la usa
-  // Radikal Darts, ver comentario en schema.prisma) y se guarda tal cual,
-  // incluso vacía, para poder borrarla si el socio la quita.
-  //
-  // mpr/ppd son opcionales y solo se tocan si el frontend los manda de
-  // verdad (item.mpr/item.ppd !== undefined): hoy es una entrada manual que
-  // solo expone el formulario de Radikal Darts (ver SocioPerfil.jsx),
-  // porque su scraper automático no puede iniciar sesión (bloqueado por la
-  // propia web de Radikal). Si no se mandan, no se pisan los valores que ya
-  // hubiera puesto el scraper automático de otro fabricante (Connection,
-  // Phoenix). Al guardar un valor manual se marca como si fuese una
-  // actualización automática correcta (statsActualizadoEn a ahora,
-  // statsError a null) para que desaparezca cualquier error de scraping
-  // anterior en cuanto el socio pone su media a mano.
-  if (Array.isArray(idsFabricantes)) {
-    for (const item of idsFabricantes) {
-      if (!item?.fabricanteId) continue;
-      const idExterno = (item.idExterno || "").trim();
-      if (!idExterno) {
-        await prisma.jugadorFabricanteId
-          .delete({ where: { jugadorId_fabricanteId: { jugadorId: jugador.id, fabricanteId: item.fabricanteId } } })
-          .catch(() => {});
-        continue;
-      }
-      const notaBusqueda = (item.notaBusqueda || "").trim() || null;
-
-      const datosManuales = {};
-      if (item.mpr !== undefined) {
-        const mpr = item.mpr === null || item.mpr === "" ? null : Number(item.mpr);
-        datosManuales.mpr = Number.isFinite(mpr) ? mpr : null;
-      }
-      if (item.ppd !== undefined) {
-        const ppd = item.ppd === null || item.ppd === "" ? null : Number(item.ppd);
-        datosManuales.ppd = Number.isFinite(ppd) ? ppd : null;
-      }
-      if (Object.keys(datosManuales).length > 0) {
-        datosManuales.statsActualizadoEn = new Date();
-        datosManuales.statsError = null;
-      }
-
-      // .catch: si el fabricante fue borrado por un admin entre que el
-      // frontend cargó la lista y el socio guardó, ignoramos ese ID en vez
-      // de romper el resto del guardado por una violación de FK.
-      await prisma.jugadorFabricanteId
-        .upsert({
-          where: { jugadorId_fabricanteId: { jugadorId: jugador.id, fabricanteId: item.fabricanteId } },
-          update: { idExterno, notaBusqueda, ...datosManuales },
-          create: { jugadorId: jugador.id, fabricanteId: item.fabricanteId, idExterno, notaBusqueda, ...datosManuales },
-        })
-        .catch(() => {});
-    }
-  }
+  // idsFabricantes: alias/medias de fabricante del socio (ver
+  // guardarIdsFabricantes en src/lib/fabricanteMedias.js).
+  await guardarIdsFabricantes(jugador.id, idsFabricantes);
 
   // No se devuelve el jugador en crudo: llevaría pinPartidasHash (el hash del
   // PIN) y usuarioId. Solo lo que la pantalla de perfil necesita (auditoría

@@ -42,3 +42,11 @@ export function indiceLineaAlias(lineas, alias) {
   if (exacta !== -1) return exacta;
   return lineas.findIndex((l) => contieneAliasComoPalabra(l, alias));
 }
+
+// Expresión regular para localizar en la página (p.ej. con getByText de
+// Playwright) un elemento cuyo texto sea EXACTAMENTE el alias, sin
+// distinguir mayúsculas. getByText(alias, { exact: false }) busca por
+// fragmento: con "mañu" pulsaba en "erMAÑUe".
+export function regexAliasExacto(alias) {
+  return new RegExp(`^\\s*${escaparRegex(normalizarAlias(alias))}\\s*$`, "iu");
+}

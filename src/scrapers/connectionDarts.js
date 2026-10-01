@@ -1,5 +1,5 @@
 import { chromium } from "playwright";
-import { contieneAliasComoPalabra, esMismoAlias } from "./coincidenciaAlias.js";
+import { contieneAliasComoPalabra, esMismoAlias, regexAliasExacto } from "./coincidenciaAlias.js";
 
 // Scraper de Connection Darts (connectionplayer.com). Necesita una cuenta
 // personal de Connection Darts ya registrada (CONNECTION_DARTS_EMAIL /
@@ -189,13 +189,21 @@ export async function actualizarMediasConnection(registros) {
         // lista. Si por lo que sea no se puede abrir/leer, se cae al
         // parseo de reserva (solo Virtual) más abajo, en vez de fallar del
         // todo.
+        //
+        // Solo se pulsa un resultado cuyo texto sea EXACTAMENTE el alias:
+        // antes se pulsaba el primero que lo contuviera, y al buscar "mañu"
+        // se abría el perfil de "erMAÑUe" y se guardaban sus medias. Y aun
+        // así, antes de aceptar las cifras se comprueba que el perfil abierto
+        // muestra el alias buscado como palabra completa.
         let statsDetallados = null;
         try {
-          await page.getByText(idExterno, { exact: false }).first().click({ timeout: 5000 });
+          await page.getByText(regexAliasExacto(idExterno)).first().click({ timeout: 5000 });
           await page.getByText(/Perfil de jugador/i).first().waitFor({ state: "visible", timeout: 8000 });
           await page.waitForTimeout(400);
           const textoPerfil = await page.locator("body").innerText();
-          statsDetallados = parsearPerfilDetallado(textoPerfil);
+          if (contieneAliasComoPalabra(textoPerfil, idExterno)) {
+            statsDetallados = parsearPerfilDetallado(textoPerfil);
+          }
         } catch {
           statsDetallados = null;
         }

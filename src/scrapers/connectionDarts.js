@@ -1,4 +1,5 @@
 import { chromium } from "playwright";
+import { contieneAliasComoPalabra, esMismoAlias } from "./coincidenciaAlias.js";
 
 // Scraper de Connection Darts (connectionplayer.com). Necesita una cuenta
 // personal de Connection Darts ya registrada (CONNECTION_DARTS_EMAIL /
@@ -72,7 +73,7 @@ function parsearMediaListaBusqueda(texto, alias) {
     .split("\n")
     .map((l) => l.trim())
     .filter(Boolean);
-  const idx = lineas.findIndex((l) => l.toUpperCase() === alias.trim().toUpperCase());
+  const idx = lineas.findIndex((l) => esMismoAlias(l, alias));
   if (idx === -1) return null;
 
   let mpr = null;
@@ -126,7 +127,10 @@ export async function actualizarMediasConnection(registros) {
     const textoInicio = await page.locator("body").innerText().catch(() => "");
     const statsPropios = parsearPerfilDetallado(textoInicio);
     const idPropio = statsPropios
-      ? registros.find((r) => textoInicio.toUpperCase().includes(r.idExterno.trim().toUpperCase()))?.id
+      ? // Alias como palabra completa: con un "contiene", un socio cuyo alias
+        // va dentro del de la cuenta del club (p.ej. "mañu" en "erMAÑUe")
+        // se quedaba con las medias de esa cuenta.
+        registros.find((r) => contieneAliasComoPalabra(textoInicio, r.idExterno))?.id
       : undefined;
 
     for (const { id, idExterno } of registros) {

@@ -1,5 +1,10 @@
 import { chromium } from "playwright";
-import { contieneAliasComoPalabra, esMismoAlias, regexAliasExacto } from "./coincidenciaAlias.js";
+import {
+  contieneAliasComoPalabra,
+  contieneLocalidad,
+  esMismoAlias,
+  regexAliasExacto,
+} from "./coincidenciaAlias.js";
 
 // Scraper de Connection Darts (connectionplayer.com). Necesita una cuenta
 // personal de Connection Darts ya registrada (CONNECTION_DARTS_EMAIL /
@@ -79,8 +84,8 @@ function parsearMediaListaBusqueda(texto, alias) {
   let mpr = null;
   let ppd = null;
   for (let i = idx; i < Math.min(idx + 6, lineas.length); i++) {
-    const mprMatch = lineas[i].match(/^MPR:\s*([\d.,]+)/i);
-    const ppdMatch = lineas[i].match(/^PPD:\s*([\d.,]+)/i);
+    const mprMatch = lineas[i].match(/MPR:\s*([\d.,]+)/i);
+    const ppdMatch = lineas[i].match(/PPD:\s*([\d.,]+)/i);
     if (mprMatch) mpr = parseFloat(mprMatch[1].replace(",", "."));
     if (ppdMatch) ppd = parseFloat(ppdMatch[1].replace(",", "."));
   }
@@ -88,8 +93,45 @@ function parsearMediaListaBusqueda(texto, alias) {
   return { mpr, ppd };
 }
 
-// registros: [{ id, idExterno }] (id = id de la fila JugadorFabricanteId, no
-// del jugador). Devuelve [{ id, ok, mprVirtual?, ppdVirtual?, mprPresencial?,
+// Resultados de "Buscar" cuyo nombre es EXACTAMENTE el alias, cada uno con
+// el texto de su tarjeta (nombre, localidad y "MPR: x" / "PPD: y").
+// Connection permite que varios jugadores tengan el mismo alias, así que
+// puede haber más de uno. La tarjeta se localiza subiendo desde el nombre
+// hasta el primer contenedor que ya incluye las cifras de MPR y PPD.
+async function tarjetasConAlias(page, alias) {
+  const coincidencias = page.getByText(regexAliasExacto(alias));
+  await coincidencias.first().waitFor({ state: "visible", timeout: 5000 }).catch(() => {});
+  const nombres = await coincidencias.all();
+  const tarjetas = [];
+  for (const nombre of nombres) {
+    if (!(await nombre.isVisible().catch(() => false))) continue;
+    const texto = await nombre
+      .evaluate((el) => {
+        let n = el;
+        while (n && !(/MPR/i.test(n.innerText || "") && /PPD/i.test(n.innerText || ""))) n = n.parentElement;
+        return (n || el).innerText || "";
+      })
+      .catch(() => "");
+    tarjetas.push({ nombre, texto });
+  }
+  return tarjetas;
+}
+
+// Localidad que enseña una tarjeta de resultado (la línea que sigue al
+// alias), para dar pistas en los mensajes de error.
+function localidadDeTarjeta(texto, alias) {
+  const lineas = texto
+    .split("\n")
+    .map((l) => l.trim())
+    .filter(Boolean);
+  const idx = lineas.findIndex((l) => esMismoAlias(l, alias));
+  const siguiente = idx === -1 ? null : lineas[idx + 1];
+  return siguiente && !/^(MPR|PPD):/i.test(siguiente) ? siguiente : "sin localidad";
+}
+
+// registros: [{ id, idExterno, notaBusqueda }] (id = id de la fila
+// JugadorFabricanteId, no del jugador; notaBusqueda = localidad opcional del
+// jugador, para distinguirlo de otros con el mismo alias). Devuelve [{ id, ok, mprVirtual?, ppdVirtual?, mprPresencial?,
 // ppdPresencial?, error? }] en el mismo orden.
 export async function actualizarMediasConnection(registros) {
   const email = process.env.CONNECTION_DARTS_EMAIL;
@@ -130,10 +172,17 @@ export async function actualizarMediasConnection(registros) {
       ? // Alias como palabra completa: con un "contiene", un socio cuyo alias
         // va dentro del de la cuenta del club (p.ej. "mañu" en "erMAÑUe")
         // se quedaba con las medias de esa cuenta.
-        registros.find((r) => contieneAliasComoPalabra(textoInicio, r.idExterno))?.id
+        // Y si el socio ha puesto localidad, también tiene que coincidir:
+        // otro jugador puede tener el mismo alias que la cuenta del club.
+        registros.find(
+          (r) =>
+            contieneAliasComoPalabra(textoInicio, r.idExterno) &&
+            (!(r.notaBusqueda || "").trim() || contieneLocalidad(textoInicio, r.notaBusqueda))
+        )?.id
       : undefined;
 
-    for (const { id, idExterno } of registros) {
+    for (const { id, idExterno, notaBusqueda } of registros) {
+      const localidad = (notaBusqueda || "").trim();
       if (id === idPropio) {
         resultados.push({ id, ok: true, ...statsPropios });
         continue;
@@ -184,28 +233,65 @@ export async function actualizarMediasConnection(registros) {
           .catch(() => {});
         await page.waitForTimeout(700);
 
+        // Connection deja que varios jugadores tengan el mismo alias, así que
+        // solo se aceptan resultados cuyo nombre sea EXACTAMENTE el alias
+        // (antes, al buscar "mañu" se abría "erMAÑUe") y, si hay más de uno,
+        // se elige por la localidad que el socio ha guardado en notaBusqueda
+        // (la que la tarjeta enseña bajo el nombre, p.ej. "BERAUN, GIPUZKOA,
+        // ES"). Sin localidad y con varios candidatos no se adivina: mejor un
+        // error que guardar las medias de otro jugador.
+        const todas = await tarjetasConAlias(page, idExterno);
+        const candidatas = localidad ? todas.filter((t) => contieneLocalidad(t.texto, localidad)) : todas;
+        const localidades = todas.map((t) => localidadDeTarjeta(t.texto, idExterno)).join(" | ");
+        if (localidad && todas.length > 0 && candidatas.length === 0) {
+          resultados.push({
+            id,
+            ok: false,
+            error: `Ningún jugador "${idExterno}" de Connection Darts es de "${localidad}". Localidades encontradas: ${localidades}`,
+          });
+          continue;
+        }
+        if (candidatas.length > 1) {
+          resultados.push({
+            id,
+            ok: false,
+            error: localidad
+              ? `Hay ${candidatas.length} jugadores "${idExterno}" de "${localidad}" en Connection Darts; afina la localidad. Localidades: ${localidades}`
+              : `Hay ${candidatas.length} jugadores "${idExterno}" en Connection Darts; indica tu localidad para saber cuál eres. Localidades: ${localidades}`,
+          });
+          continue;
+        }
+        const tarjeta = candidatas[0];
+
         // Entrar en el "Perfil de jugador" del resultado (pulsando su
         // nombre) para leer también la media Presencial, que no sale en la
         // lista. Si por lo que sea no se puede abrir/leer, se cae al
         // parseo de reserva (solo Virtual) más abajo, en vez de fallar del
-        // todo.
-        //
-        // Solo se pulsa un resultado cuyo texto sea EXACTAMENTE el alias:
-        // antes se pulsaba el primero que lo contuviera, y al buscar "mañu"
-        // se abría el perfil de "erMAÑUe" y se guardaban sus medias. Y aun
-        // así, antes de aceptar las cifras se comprueba que el perfil abierto
-        // muestra el alias buscado como palabra completa.
+        // todo. El perfil se abre en una ventana encima de la lista, así que
+        // se lee solo el texto de esa ventana (si no, el alias o la localidad
+        // de otras tarjetas de debajo darían el perfil por bueno), y se
+        // comprueba que muestra el alias buscado y, si hay, la localidad.
         let statsDetallados = null;
-        try {
-          await page.getByText(regexAliasExacto(idExterno)).first().click({ timeout: 5000 });
-          await page.getByText(/Perfil de jugador/i).first().waitFor({ state: "visible", timeout: 8000 });
-          await page.waitForTimeout(400);
-          const textoPerfil = await page.locator("body").innerText();
-          if (contieneAliasComoPalabra(textoPerfil, idExterno)) {
-            statsDetallados = parsearPerfilDetallado(textoPerfil);
+        if (tarjeta) {
+          try {
+            await tarjeta.nombre.click({ timeout: 5000 });
+            const cabecera = page.getByText(/Perfil de jugador/i).first();
+            await cabecera.waitFor({ state: "visible", timeout: 8000 });
+            await page.waitForTimeout(400);
+            const textoPerfil = await cabecera.evaluate((el) => {
+              let n = el;
+              while (n && !/PPD\s*\(Virtual\)/i.test(n.innerText || "")) n = n.parentElement;
+              return (n || document.body).innerText || "";
+            });
+            if (
+              contieneAliasComoPalabra(textoPerfil, idExterno) &&
+              (!localidad || contieneLocalidad(textoPerfil, localidad))
+            ) {
+              statsDetallados = parsearPerfilDetallado(textoPerfil);
+            }
+          } catch {
+            statsDetallados = null;
           }
-        } catch {
-          statsDetallados = null;
         }
 
         if (statsDetallados) {
@@ -213,9 +299,9 @@ export async function actualizarMediasConnection(registros) {
           continue;
         }
 
-        const texto = await page.locator("body").innerText();
-        const encontrado = parsearMediaListaBusqueda(texto, idExterno);
+        const encontrado = tarjeta ? parsearMediaListaBusqueda(tarjeta.texto, idExterno) : null;
         if (!encontrado) {
+          const texto = await page.locator("body").innerText();
           const snippet = texto.replace(/\s+/g, " ").trim().slice(0, 1800);
           resultados.push({
             id,
@@ -224,8 +310,8 @@ export async function actualizarMediasConnection(registros) {
           });
           continue;
         }
-        // Solo se pudo leer la lista, no el perfil detallado: lo que ahí se
-        // ve es la media Virtual (confirmado contra la web real).
+        // Solo se pudo leer la tarjeta de la lista, no el perfil detallado:
+        // lo que ahí se ve es la media Virtual (confirmado contra la web real).
         resultados.push({ id, ok: true, mprVirtual: encontrado.mpr, ppdVirtual: encontrado.ppd });
       } catch (err) {
         resultados.push({ id, ok: false, error: err.message || "Error consultando Connection Darts" });

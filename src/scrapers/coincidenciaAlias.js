@@ -50,3 +50,21 @@ export function indiceLineaAlias(lineas, alias) {
 export function regexAliasExacto(alias) {
   return new RegExp(`^\\s*${escaparRegex(normalizarAlias(alias))}\\s*$`, "iu");
 }
+
+// Localidad de un jugador (p.ej. "Beraun" o "Errenteria, Gipuzkoa"), para
+// distinguir a jugadores con el mismo alias en webs que lo permiten
+// (Connection Darts). Aquí, a diferencia del alias, sí se ignoran acentos:
+// la web puede mostrar "BERAUN" y el socio escribir "Beraún".
+function normalizarLocalidad(texto) {
+  return String(texto ?? "")
+    .normalize("NFD")
+    .replace(/\p{M}/gu, "")
+    .replace(/\s+/g, " ")
+    .trim()
+    .toUpperCase();
+}
+
+export function contieneLocalidad(texto, localidad) {
+  const l = normalizarLocalidad(localidad);
+  return l !== "" && normalizarLocalidad(texto).includes(l);
+}

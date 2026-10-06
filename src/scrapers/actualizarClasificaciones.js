@@ -190,23 +190,78 @@ async function sincronizarPartidosConnection(equipoTorneoId, partidos) {
   }
 }
 
+// Ventana en la que el cron sigue buscando el resultado de un partido ya
+// jugado: si Connection tarda en publicarlo, se reintenta cada mañana; pasada
+// una semana (partido aplazado o anulado) se deja de insistir.
+const VENTANA_RESULTADO_MS = 7 * 24 * 60 * 60 * 1000;
+
+// Equipos de Connection que merece la pena actualizar en el cron: los que
+// tienen algún partido ya empezado (fecha pasada, de la última semana) sin
+// resultado guardado, es decir, los que jugaron ayer, más los que todavía
+// no tienen ningún partido (primera sincronización, para traer su
+// calendario). Cada equipo juega un día fijo de la semana, así que cada uno
+// se actualiza solo la mañana siguiente a su partido en vez de todas las
+// noches, y si ningún equipo de la liga ha jugado ni siquiera se abre el
+// navegador (menos consumo en Railway).
+async function equiposConPartidoPorActualizar(equipos, ahora = new Date()) {
+  if (equipos.length === 0) return [];
+  const partidos = await prisma.partido.findMany({
+    where: { equipoTorneoId: { in: equipos.map((e) => e.id) } },
+    select: { equipoTorneoId: true, fecha: true, resultado: true },
+  });
+  const desde = ahora.getTime() - VENTANA_RESULTADO_MS;
+  return equipos.filter((eq) => {
+    const suyos = partidos.filter((p) => p.equipoTorneoId === eq.id);
+    if (suyos.length === 0) return true;
+    return suyos.some((p) => !p.resultado && p.fecha.getTime() <= ahora.getTime() && p.fecha.getTime() > desde);
+  });
+}
+
 // Recorre todos los torneos/ligas externos NO terminados y actualiza la
 // clasificación de cada uno, uno detrás de otro (no en paralelo: cada
 // actualización abre su propio navegador Playwright, y lanzar varios a la
 // vez podría agotar la memoria del servidor). Nunca lanza si uno falla
 // (login roto, nombre de equipo mal puesto, plataforma sin soportar
-// todavía...): lo recoge en el resumen y sigue con el siguiente. Pensada
-// tanto para el cron nocturno como para el botón "Actualizar todas las
-// clasificaciones ahora" del panel de admin.
-export async function actualizarTodasLasClasificaciones() {
+// todavía...): lo recoge en el resumen y sigue con el siguiente.
+//
+// - Botón "Actualizar todas las clasificaciones ahora" (sin opciones):
+//   actualiza todo, como siempre.
+// - Cron diario (`{ cron: true, otrasPlataformas }`): en Connection solo
+//   los equipos que jugaron ayer (ver equiposConPartidoPorActualizar);
+//   Radikal y Phoenix, que no tienen calendario automático, solo si
+//   `otrasPlataformas` es true (el cron lo pasa de lunes a viernes, como
+//   antes).
+export async function actualizarTodasLasClasificaciones({ cron = false, otrasPlataformas = true } = {}) {
   // Las competiciones terminadas (histórico) ya no cambian: no se
   // intentan actualizar.
-  const torneos = await prisma.torneo.findMany({
+  const torneosTodos = await prisma.torneo.findMany({
     where: { terminado: false },
     include: { plataforma: true, equipos: { include: { equipoClub: true } } },
   });
 
+  const torneos = [];
+  const saltados = [];
+  for (const torneo of torneosTodos) {
+    const esConnection = (torneo.plataforma?.nombre || "").toLowerCase().includes("connection");
+    if (!cron) {
+      torneos.push(torneo);
+    } else if (!esConnection) {
+      if (otrasPlataformas) torneos.push(torneo);
+      else saltados.push({ torneo: torneo.nombre, motivo: "fin de semana: solo se actualiza de lunes a viernes" });
+    } else {
+      // Los equipos marcados como inactivos ya terminaron: no se miran.
+      const activos = torneo.equipos.filter((eq) => eq.equipoClub?.activo !== false);
+      const pendientes = await equiposConPartidoPorActualizar(activos);
+      if (pendientes.length > 0) torneos.push({ ...torneo, equipos: pendientes });
+      else saltados.push({ torneo: torneo.nombre, motivo: "ningún equipo jugó ayer" });
+    }
+  }
+
   const resumen = { actualizados: 0, errores: 0, omitidos: 0, detalle: [] };
+  for (const { torneo, motivo } of saltados) {
+    resumen.omitidos++;
+    resumen.detalle.push({ torneo, estado: "omitido", motivo });
+  }
 
   for (const torneo of torneos) {
     try {

@@ -57,7 +57,7 @@ router.post("/", requireAdmin, async (req, res) => {
 
 router.put("/:id", requireAdmin, async (req, res) => {
   const { id } = req.params;
-  const { nombre, descripcion, escudoUrl, capitanId, tipo } = req.body;
+  const { nombre, descripcion, escudoUrl, capitanId, tipo, activo } = req.body;
   if (tipo !== undefined && !TIPOS_EQUIPO.includes(tipo)) {
     return res.status(400).json({ error: "Tipo no válido (equipo o pareja)." });
   }
@@ -70,6 +70,7 @@ router.put("/:id", requireAdmin, async (req, res) => {
         escudoUrl: escudoUrl !== undefined ? escudoUrl || null : undefined,
         capitanId: capitanId !== undefined ? capitanId || null : undefined,
         tipo: tipo !== undefined ? tipo : undefined,
+        activo: activo !== undefined ? !!activo : undefined,
       },
       include: includeCompleto,
     });

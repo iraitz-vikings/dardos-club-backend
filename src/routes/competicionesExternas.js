@@ -126,7 +126,7 @@ router.post("/torneos", requireAdmin, async (req, res) => {
 });
 router.put("/torneos/:id", requireAdmin, async (req, res) => {
   const { id } = req.params;
-  const { nombre, nivel, temporada, idExterno } = req.body;
+  const { nombre, nivel, temporada, idExterno, terminado } = req.body;
   try {
     const torneo = await prisma.torneo.update({
       where: { id },
@@ -135,6 +135,7 @@ router.put("/torneos/:id", requireAdmin, async (req, res) => {
         nivel: nivel !== undefined ? nivel || null : undefined,
         temporada: temporada !== undefined ? temporada || null : undefined,
         idExterno: idExterno !== undefined ? idExterno || null : undefined,
+        terminado: terminado !== undefined ? !!terminado : undefined,
       },
       include: includeTorneo,
     });
@@ -169,6 +170,11 @@ router.post("/torneos/:id/actualizar-clasificacion", requireAdmin, async (req, r
     include: { plataforma: true, equipos: { include: { equipoClub: true } } },
   });
   if (!torneo) return res.status(404).json({ error: "Torneo no encontrado" });
+  // Una competición terminada (histórico) ya no se actualiza; hay que
+  // reabrirla primero si de verdad hace falta.
+  if (torneo.terminado) {
+    return res.status(400).json({ error: "Esta competición está marcada como terminada. Reábrela para actualizar su clasificación." });
+  }
 
   const resultado = await actualizarClasificacionTorneo(torneo);
 
@@ -184,8 +190,8 @@ router.post("/torneos/:id/actualizar-clasificacion", requireAdmin, async (req, r
 
 // POST /api/competiciones-externas/actualizar-todas-clasificaciones - lanza
 // a mano la actualización de la clasificación de TODOS los torneos/ligas
-// externos dados de alta (Radikal y Phoenix; Connection Darts se omite hasta
-// que tenga scraper). También se ejecuta sola cada noche (ver el cron en
+// externos dados de alta que no estén terminados (Radikal, Phoenix y
+// Connection Darts). También se ejecuta sola cada noche (ver el cron en
 // index.js). Puede tardar bastante si hay muchos torneos, porque cada uno
 // abre su propio navegador y se procesan de uno en uno.
 router.post("/actualizar-todas-clasificaciones", requireAdmin, async (_req, res) => {

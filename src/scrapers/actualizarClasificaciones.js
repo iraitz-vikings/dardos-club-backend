@@ -1,6 +1,7 @@
 import { prisma } from "../lib/prisma.js";
 import { extraerClasificacionEquiposRadikal } from "./radikalDarts.js";
 import { extraerClasificacionEquiposPhoenix } from "./phoenixDarts.js";
+import { extraerClasificacionEquiposConnection } from "./connectionDarts.js";
 
 
 // Convierte una fila extraída por un scraper (posicion/nombreEquipo/...) en
@@ -27,7 +28,8 @@ function filaClasificacion(f) {
 // todas las clasificaciones ahora", sin duplicar código en tres sitios.
 //
 // `torneo` debe venir con `plataforma` y `equipos` incluidos (findUnique con
-// { include: { plataforma: true, equipos: true } }).
+// { include: { plataforma: true, equipos: { include: { equipoClub: true } } } }
+// — equipoClub hace falta para Connection, que casa por nombre del equipo).
 //
 // Nunca lanza (salvo error real de base de datos): siempre devuelve uno de
 // estos resultados, para que quien llame decida qué hacer con él (responder
@@ -58,7 +60,8 @@ export async function actualizarClasificacionTorneo(torneo) {
     return { ok: true, avisos: [] };
   }
 
-  if (nombrePlataforma.includes("phoenix")) {
+  const esConnection = nombrePlataforma.includes("connection");
+  if (nombrePlataforma.includes("phoenix") || esConnection) {
     if (torneo.equipos.length === 0) {
       return {
         ok: false,
@@ -66,12 +69,25 @@ export async function actualizarClasificacionTorneo(torneo) {
       };
     }
 
-    const objetivos = torneo.equipos.map((eq) => ({
-      id: eq.id,
-      idExterno: eq.idExternoEquipo || torneo.idExterno,
-      nombre: torneo.nombre,
-    }));
-    const resultados = await extraerClasificacionEquiposPhoenix(objetivos);
+    // Connection: Torneo.idExterno = ids de liga separados por comas; cada
+    // equipo se busca por su nombre en todos los grupos de esas ligas (ver
+    // connectionDarts.js). Phoenix: búsqueda por nombre de equipo.
+    const resultados = esConnection
+      ? await extraerClasificacionEquiposConnection(
+          torneo.idExterno,
+          torneo.equipos.map((eq) => ({
+            id: eq.id,
+            nombreExacto: eq.idExternoEquipo || null,
+            nombreClub: eq.equipoClub?.nombre || eq.nombreEquipo || null,
+          }))
+        )
+      : await extraerClasificacionEquiposPhoenix(
+          torneo.equipos.map((eq) => ({
+            id: eq.id,
+            idExterno: eq.idExternoEquipo || torneo.idExterno,
+            nombre: torneo.nombre,
+          }))
+        );
     const exitos = resultados.filter((r) => r.ok);
     const fallos = resultados.filter((r) => !r.ok);
 
@@ -96,7 +112,7 @@ export async function actualizarClasificacionTorneo(torneo) {
 
     const avisos = fallos.map((f) => {
       const eq = torneo.equipos.find((e) => e.id === f.equipoTorneoId);
-      const nombreEq = eq?.idExternoEquipo || eq?.nombreEquipo || "Un equipo";
+      const nombreEq = eq?.idExternoEquipo || eq?.equipoClub?.nombre || eq?.nombreEquipo || "Un equipo";
       return `${nombreEq}: ${f.error}`;
     });
     return { ok: true, avisos };
@@ -105,7 +121,7 @@ export async function actualizarClasificacionTorneo(torneo) {
   return {
     ok: false,
     omitido: true,
-    motivo: `La extracción de clasificación de equipos todavía no está implementada para "${torneo.plataforma?.nombre || "esta plataforma"}" (por ahora solo Radikal Darts y Phoenix Darts).`,
+    motivo: `La extracción de clasificación de equipos todavía no está implementada para "${torneo.plataforma?.nombre || "esta plataforma"}" (por ahora solo Radikal, Phoenix y Connection Darts).`,
   };
 }
 
@@ -119,7 +135,7 @@ export async function actualizarClasificacionTorneo(torneo) {
 // clasificaciones ahora" del panel de admin.
 export async function actualizarTodasLasClasificaciones() {
   const torneos = await prisma.torneo.findMany({
-    include: { plataforma: true, equipos: true },
+    include: { plataforma: true, equipos: { include: { equipoClub: true } } },
   });
 
   const resumen = { actualizados: 0, errores: 0, omitidos: 0, detalle: [] };

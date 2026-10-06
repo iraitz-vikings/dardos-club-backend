@@ -32,18 +32,19 @@ function resolverTexto(campo, idioma) {
 // tag y ttl son solo para Web Push (ver enviarPushAJugador en webPush.js):
 // tag hace que los avisos del mismo partido se sustituyan en el móvil en vez
 // de apilarse; ttl (segundos) descarta el aviso si no se ha podido entregar
-// a tiempo.
+// a tiempo. tipo (bienvenida, unMinuto...) solo sirve para el historial de
+// Web Push (RegistroPush), para saber después qué aviso falló.
 export async function notificarJugador(jugadorId, opts = {}) {
   const jugador = await prisma.jugador.findUnique({ where: { id: jugadorId }, select: { idiomaAvisos: true } });
   const idioma = jugador?.idiomaAvisos || "es";
 
   const titulo = resolverTexto(opts.titulo, idioma);
   const cuerpo = resolverTexto(opts.cuerpo, idioma);
-  const { url, imagen, tag, ttl } = opts;
+  const { url, imagen, tag, ttl, tipo } = opts;
   const textoTelegram = [titulo, cuerpo, url].filter(Boolean).join("\n\n");
 
   const [push, telegram] = await Promise.all([
-    enviarPushAJugador(jugadorId, { titulo, cuerpo, url, imagen, tag }, { ttl }),
+    enviarPushAJugador(jugadorId, { titulo, cuerpo, url, imagen, tag }, { ttl, tipo }),
     enviarTelegramAJugador(jugadorId, textoTelegram, imagen),
   ]);
 

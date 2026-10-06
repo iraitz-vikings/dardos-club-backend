@@ -91,6 +91,7 @@ model Jugador {
   equiposCapitaneadosClub EquipoClub[]        @relation("capitanEquipoClub")
   idsFabricantes          JugadorFabricanteId[]
   suscripcionesPush       SuscripcionPush[]
+  registrosPush           RegistroPush[]
   suscripcionTelegram     SuscripcionTelegram?
   telegramCheckIn         TelegramCheckIn?
   puntosJornadaComoJugador1 PuntoJornada[] @relation("puntoJornadaJugador1")
@@ -126,6 +127,38 @@ model SuscripcionPush {
   activa      Boolean   @default(true)
   fallidaEn   DateTime?
   fallidaCod  Int?
+}
+
+// Historial de Web Push por jugador (2026-10-06): cada envío (correcto o
+// con error), cada suscripción que el servicio push da por muerta y cada
+// alta/reactivación, con fecha. SuscripcionPush solo guarda el estado
+// ACTUAL, y como los avisos se reactivan solos (periodicsync del service
+// worker, ver /push/resuscribir) y al reactivarse se borran las
+// suscripciones viejas del mismo dispositivo, al día siguiente de un fallo
+// ya no quedaba rastro. Por eso aquí no hay relación con SuscripcionPush
+// (suscripcionId y userAgent son una copia): el historial sobrevive aunque
+// la suscripción se borre. Se purga a los 60 días (cron nocturno).
+model RegistroPush {
+  id            String   @id @default(uuid())
+  creadoEn      DateTime @default(now())
+  jugadorId     String
+  jugador       Jugador  @relation(fields: [jugadorId], references: [id], onDelete: Cascade)
+  suscripcionId String?
+  userAgent     String?
+  // "envio" (aceptado por el servicio push), "error" (rechazado, el
+  // dispositivo sigue activo), "caida" (404/410: suscripción muerta),
+  // "alta" (activado desde "Mi perfil"), "reactivada" (automática, sin
+  // sesión, desde el service worker).
+  evento        String
+  // Tipo de aviso para envio/error/caida: bienvenida, unMinuto, enCurso,
+  // programado, eliminado, campeon, recordatorio, anuncio, partidoFijado...
+  tipoAviso     String?
+  titulo        String?
+  codigo        Int?
+  detalle       String?
+
+  @@index([jugadorId, creadoEn])
+  @@index([creadoEn])
 }
 
 // Vínculo entre un Jugador invitado (sin cuenta) y su chat de Telegram,

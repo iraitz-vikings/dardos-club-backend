@@ -349,6 +349,7 @@ router.put("/partidos/:id", requireAdminOSocio, async (req, res) => {
           roster.map((r) => r.jugadorId),
           {
             titulo: `Partido fijado: ${nombreEquipo}`,
+            tipo: "partidoFijado",
             cuerpo: `${actualizado.rival ? `Contra ${actualizado.rival}` : "Partido"} el ${fechaTexto}${nombreTorneo ? ` (${nombreTorneo})` : ""}.`,
           }
         );

@@ -6,6 +6,7 @@ import webpush from "web-push";
 import jwt from "jsonwebtoken";
 import { prisma } from "../lib/prisma.js";
 import { enviarTelegramAJugador } from "./telegram.js";
+import { registrarEventoPush } from "../lib/registroPush.js";
 
 
 const VAPID_PUBLIC_KEY = process.env.VAPID_PUBLIC_KEY;
@@ -63,6 +64,9 @@ export function vapidPublicKey() {
 // a entregarlo si el móvil está sin conexión; pasado ese tiempo se descarta.
 // Sin él, web-push usa 4 semanas: un "tu partido empieza ahora" que llega
 // horas después no sirve de nada y solo suma avisos que nadie pulsa.
+// opciones.tipo (opcional): qué aviso es (bienvenida, unMinuto...), solo
+// para el historial (RegistroPush): cada intento queda apuntado ahí con su
+// resultado, por dispositivo.
 export async function enviarPushAJugador(jugadorId, payload, opciones = {}) {
   if (!asegurarConfigurado()) {
     console.warn("Web Push no configurado (faltan VAPID_PUBLIC_KEY/VAPID_PRIVATE_KEY): se omite el envío.");
@@ -70,7 +74,17 @@ export async function enviarPushAJugador(jugadorId, payload, opciones = {}) {
   }
 
   const suscripciones = await prisma.suscripcionPush.findMany({ where: { jugadorId, activa: true } });
-  if (suscripciones.length === 0) return { enviados: 0, eliminados: 0 };
+  const registroBase = { jugadorId, tipoAviso: opciones.tipo, titulo: payload?.titulo };
+  if (suscripciones.length === 0) {
+    // Solo se apunta para socios (cuenta de usuario): los invitados no usan
+    // Web Push, les llega por Telegram, y llenarían el historial de ruido.
+    // Para un socio, en cambio, es la causa más habitual de "no me llegó".
+    const jugador = await prisma.jugador.findUnique({ where: { id: jugadorId }, select: { usuarioId: true } });
+    if (jugador?.usuarioId) {
+      await registrarEventoPush({ ...registroBase, evento: "sinDispositivo", detalle: "No tenía ningún dispositivo con avisos activos" });
+    }
+    return { enviados: 0, eliminados: 0 };
+  }
 
   let enviados = 0;
   const idsEnviados = [];
@@ -91,7 +105,19 @@ export async function enviarPushAJugador(jugadorId, payload, opciones = {}) {
         );
         enviados++;
         idsEnviados.push(sub.id);
+        await registrarEventoPush({ ...registroBase, evento: "envio", suscripcionId: sub.id, userAgent: sub.userAgent });
       } catch (err) {
+        // err.body es la respuesta del servicio push (FCM, Mozilla, Apple…),
+        // que suele decir el motivo exacto del rechazo.
+        const detalle = [err.message, err.body].filter(Boolean).join(" · ");
+        await registrarEventoPush({
+          ...registroBase,
+          evento: err.statusCode === 404 || err.statusCode === 410 ? "caida" : "error",
+          suscripcionId: sub.id,
+          userAgent: sub.userAgent,
+          codigo: err.statusCode,
+          detalle,
+        });
         if (err.statusCode === 404 || err.statusCode === 410) {
           fallidas.push({ id: sub.id, codigo: err.statusCode });
           console.warn(

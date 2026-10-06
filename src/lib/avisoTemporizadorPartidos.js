@@ -82,6 +82,7 @@ export async function enviarAvisosUnMinutoTemporizador() {
             cuerpo: mensaje.cuerpo,
             url: urlPublicaCuadrante(p.cuadrante),
             tag: `partido-${p.id}`,
+            tipo: "unMinuto",
             ttl: TTL_AVISO_UN_MINUTO,
           });
           enviados++;

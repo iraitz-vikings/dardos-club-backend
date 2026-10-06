@@ -571,6 +571,7 @@ async function notificarPartidoDeLiga(partido, motivo = "programado") {
       cuerpo: mensaje.cuerpo,
       url,
       tag: `partido-liga-${partido.id}`,
+      tipo: "enCurso",
       ttl: TTL_AVISO_EN_CURSO,
     });
     return;
@@ -610,6 +611,7 @@ async function notificarPartidoDeLiga(partido, motivo = "programado") {
     cuerpo: mensaje.cuerpo,
     url,
     tag: `partido-liga-${partido.id}`,
+    tipo: "programado",
     ttl: TTL_AVISO_NORMAL,
   });
 }

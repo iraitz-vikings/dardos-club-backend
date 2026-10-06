@@ -174,16 +174,49 @@ router.get("/pendientes", requireAdmin, async (_req, res) => {
   res.json(pendientes);
 });
 
+// Ficha de Jugador de un miembro. Antes solo se creaba la primera vez que
+// el miembro entraba en su perfil (obtenerOCrearJugador en perfil.js), así
+// que hasta entonces no salía en "Jugadores del club", y si ya jugaba como
+// amigo acababa con dos fichas. Ahora se resuelve al aprobar o dar de alta
+// la cuenta: con `jugadorId` se le asigna esa ficha de amigo (sin cuenta);
+// sin él se le crea una nueva con su nombre.
+//
+// comprobarFichaVinculable devuelve un mensaje de error (o null) para poder
+// validarlo ANTES de aprobar/crear la cuenta y no dejarla a medias.
+async function comprobarFichaVinculable(jugadorId) {
+  if (typeof jugadorId !== "string" || !jugadorId) return "Ficha de jugador inválida.";
+  const jugador = await prisma.jugador.findUnique({ where: { id: jugadorId } });
+  if (!jugador) return "Jugador no encontrado";
+  if (jugador.usuarioId) return "Esa ficha ya pertenece a otro miembro.";
+  return null;
+}
+
+async function asignarFichaJugador(usuario, jugadorId) {
+  const existente = await prisma.jugador.findUnique({ where: { usuarioId: usuario.id } });
+  if (existente) return existente;
+  if (jugadorId) {
+    // oculto: false porque una ficha oculta (invitado puntual de Telegram)
+    // que pasa a ser de un miembro debe salir ya en el directorio.
+    return prisma.jugador.update({ where: { id: jugadorId }, data: { usuarioId: usuario.id, oculto: false } });
+  }
+  return prisma.jugador.create({ data: { nombre: usuario.nombre, usuarioId: usuario.id } });
+}
+
 // POST /api/auth/:id/aprobar - aprueba una cuenta y le asigna rol (admin)
 router.post("/:id/aprobar", requireAdmin, async (req, res) => {
-  const { rol } = req.body; // "jugador" | "capitan" | "admin", opcional (por defecto jugador)
+  const { rol, jugadorId } = req.body; // rol: "jugador" | "capitan" | "admin", opcional (por defecto jugador)
   if (rol !== undefined && !ROLES_VALIDOS.includes(rol)) {
     return res.status(400).json({ error: "Rol inválido" });
+  }
+  if (jugadorId) {
+    const error = await comprobarFichaVinculable(jugadorId);
+    if (error) return res.status(409).json({ error });
   }
   const usuario = await prisma.usuario.update({
     where: { id: req.params.id },
     data: { aprobado: true, ...(rol ? { rol } : {}) },
   });
+  await asignarFichaJugador(usuario, jugadorId);
   res.json({ id: usuario.id, nombre: usuario.nombre, rol: usuario.rol, aprobado: usuario.aprobado });
 });
 
@@ -270,6 +303,8 @@ router.get("/socios", requireAdmin, async (_req, res) => {
       creadoEn: true,
       jugador: {
         select: {
+          id: true,
+          nombre: true,
           idsFabricantes: {
             select: {
               idExterno: true,
@@ -291,6 +326,8 @@ router.get("/socios", requireAdmin, async (_req, res) => {
   });
   const conIdsFabricantes = socios.map(({ jugador, ...s }) => ({
     ...s,
+    // null = todavía sin ficha de jugador (no sale en "Jugadores del club").
+    jugador: jugador ? { id: jugador.id, nombre: jugador.nombre } : null,
     idsFabricantes: (jugador?.idsFabricantes || []).map((i) => ({
       nombreFabricante: i.fabricante.nombre,
       logoUrl: i.fabricante.logoUrl,
@@ -332,33 +369,25 @@ router.post("/:id/vincular-jugador", requireAdmin, async (req, res) => {
   if (!jugadorId || typeof jugadorId !== "string") {
     return res.status(400).json({ error: "Falta la ficha de jugador a vincular." });
   }
-  const [usuario, jugador, fichaActual] = await Promise.all([
+  const [usuario, fichaActual] = await Promise.all([
     prisma.usuario.findUnique({ where: { id: req.params.id } }),
-    prisma.jugador.findUnique({ where: { id: jugadorId } }),
     prisma.jugador.findUnique({ where: { usuarioId: req.params.id } }),
   ]);
   if (!usuario) return res.status(404).json({ error: "Cuenta no encontrada" });
-  if (!jugador) return res.status(404).json({ error: "Jugador no encontrado" });
   if (fichaActual) {
     return res.status(409).json({
       error: "Esta cuenta ya tiene ficha de jugador: fusiona la otra ficha en ella desde Admin → Jugadores.",
     });
   }
-  if (jugador.usuarioId) {
-    return res.status(409).json({ error: "Esa ficha ya pertenece a otro miembro." });
-  }
-  // oculto: false porque una ficha oculta (invitado puntual de Telegram) que
-  // pasa a ser de un miembro debe salir ya en el directorio.
-  const actualizado = await prisma.jugador.update({
-    where: { id: jugador.id },
-    data: { usuarioId: usuario.id, oculto: false },
-  });
+  const error = await comprobarFichaVinculable(jugadorId);
+  if (error) return res.status(409).json({ error });
+  const actualizado = await asignarFichaJugador(usuario, jugadorId);
   res.json({ id: actualizado.id, nombre: actualizado.nombre, usuarioId: actualizado.usuarioId });
 });
 
 // POST /api/auth/crear-manual - el admin crea una cuenta directamente, ya aprobada (admin)
 router.post("/crear-manual", requireAdmin, async (req, res) => {
-  const { nombre, email, password, rol } = req.body;
+  const { nombre, email, password, rol, jugadorId } = req.body;
   if (!nombre || !email || !password ||
       typeof email !== "string" || typeof password !== "string" || typeof nombre !== "string") {
     return res.status(400).json({ error: "Faltan datos" });
@@ -374,6 +403,10 @@ router.post("/crear-manual", requireAdmin, async (req, res) => {
   if (existente) {
     return res.status(409).json({ error: "Ya existe una cuenta con ese email" });
   }
+  if (jugadorId) {
+    const error = await comprobarFichaVinculable(jugadorId);
+    if (error) return res.status(409).json({ error });
+  }
   const passwordHash = await bcrypt.hash(password, 10);
   const usuario = await prisma.usuario.create({
     data: {
@@ -384,6 +417,7 @@ router.post("/crear-manual", requireAdmin, async (req, res) => {
       aprobado: true,
     },
   });
+  await asignarFichaJugador(usuario, jugadorId);
   res.status(201).json({ id: usuario.id, nombre: usuario.nombre, email: usuario.email, rol: usuario.rol });
 });
 

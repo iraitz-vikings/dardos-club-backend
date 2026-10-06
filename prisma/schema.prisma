@@ -220,6 +220,10 @@ model Torneo {
   // cada uno en su grupo); este campo solo se usa ahí como último recurso
   // si una inscripción no tiene su propio idExternoEquipo.
   idExterno     String?
+  // Competición ya terminada: pasa al histórico (panel de admin y zona de
+  // socios) y deja de actualizarse su clasificación (ni en el cron nocturno
+  // ni con el botón de actualizar). Se puede reabrir desmarcándolo.
+  terminado     Boolean      @default(false)
 
   equipos EquipoTorneo[]
   clasificacion ClasificacionEquipo[]
@@ -323,6 +327,11 @@ model Partido {
   // calendario/resultados para no duplicar partidos; null en los creados a
   // mano por el capitán.
   idExterno           String?  @unique
+  // Número de jornada en la competición externa (hoy solo lo rellena la
+  // sincronización de Connection Darts), para agrupar el calendario en
+  // desplegables por jornada como en las ligas del club. null en los
+  // partidos creados a mano.
+  jornada             Int?
 }
 
 model NoticiaEvento {
@@ -828,6 +837,10 @@ model EquipoClub {
   capitanId   String?
   capitan     Jugador? @relation("capitanEquipoClub", fields: [capitanId], references: [id])
   creadoEn    DateTime @default(now())
+  // false cuando el equipo ya ha terminado sus competiciones: en el panel
+  // de admin y en la zona de socios pasa a la pestaña "Inactivos" para no
+  // ocupar la lista principal. No borra nada.
+  activo      Boolean  @default(true)
 
   miembros MiembroEquipoClub[]
   inscripciones EquipoTorneo[]

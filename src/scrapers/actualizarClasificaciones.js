@@ -163,6 +163,7 @@ async function sincronizarPartidosConnection(equipoTorneoId, partidos) {
         data: {
           equipoTorneoId,
           idExterno: p.idExterno,
+          jornada: p.jornada ?? null,
           fecha: p.fecha,
           rival: p.rival,
           resultado: p.resultado,
@@ -177,6 +178,10 @@ async function sincronizarPartidosConnection(equipoTorneoId, partidos) {
     if (editable && existente.fecha.getTime() !== p.fecha.getTime()) datos.fecha = p.fecha;
     if (editable && existente.rival !== p.rival) datos.rival = p.rival;
     if (p.resultado && existente.resultado !== p.resultado) datos.resultado = p.resultado;
+    // La jornada es dato de Connection, no del capitán: se mantiene siempre
+    // al día (también rellena los partidos sincronizados antes de existir
+    // este campo).
+    if (p.jornada != null && existente.jornada !== p.jornada) datos.jornada = p.jornada;
     if (Object.keys(datos).length > 0) {
       // Prisma pondría @updatedAt igual; origenActualizacion no se toca para
       // no "robarle" al capitán un partido que ya editó.
@@ -185,7 +190,7 @@ async function sincronizarPartidosConnection(equipoTorneoId, partidos) {
   }
 }
 
-// Recorre TODOS los torneos/ligas externos dados de alta y actualiza la
+// Recorre todos los torneos/ligas externos NO terminados y actualiza la
 // clasificación de cada uno, uno detrás de otro (no en paralelo: cada
 // actualización abre su propio navegador Playwright, y lanzar varios a la
 // vez podría agotar la memoria del servidor). Nunca lanza si uno falla
@@ -194,7 +199,10 @@ async function sincronizarPartidosConnection(equipoTorneoId, partidos) {
 // tanto para el cron nocturno como para el botón "Actualizar todas las
 // clasificaciones ahora" del panel de admin.
 export async function actualizarTodasLasClasificaciones() {
+  // Las competiciones terminadas (histórico) ya no cambian: no se
+  // intentan actualizar.
   const torneos = await prisma.torneo.findMany({
+    where: { terminado: false },
     include: { plataforma: true, equipos: { include: { equipoClub: true } } },
   });
 

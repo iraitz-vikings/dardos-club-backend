@@ -166,7 +166,7 @@ router.post("/torneos/:id/actualizar-clasificacion", requireAdmin, async (req, r
   const { id } = req.params;
   const torneo = await prisma.torneo.findUnique({
     where: { id },
-    include: { plataforma: true, equipos: true },
+    include: { plataforma: true, equipos: { include: { equipoClub: true } } },
   });
   if (!torneo) return res.status(404).json({ error: "Torneo no encontrado" });
 

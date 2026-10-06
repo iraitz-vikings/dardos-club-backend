@@ -224,3 +224,180 @@ export async function actualizarMediasConnection(registros) {
   }
   return resultados;
 }
+
+// ---------------------------------------------------------------------------
+// Clasificación de equipos (Ligas de Connection Darts)
+//
+// Investigado el 2026-10-06 con la primera liga real (LIGA COMBO 26/27): la
+// web pinta la clasificación desde una API REST propia
+// (api.connectionplayer.com) que exige las cabeceras de sesión del usuario
+// logueado (authorization, accesstoken, refreshtoken, playerid,
+// clienttype). Con ellas se puede leer CUALQUIER liga por su id numérico,
+// no solo las de "Mis Ligas" de la cuenta logueada:
+//   GET /v1/league/{ligaId}/groups                       → { groups: [{ id, name }] }
+//   GET /v1/league/{ligaId}/group/{grupoId}/ranking      → { rankings: [{ team_id,
+//        team_name, position, points, played, won, drawn, lost,
+//        score_for, score_against, ... }] }
+//
+// En Connection cada día de la semana es una liga distinta (ej. Liga Combo:
+// 25201 viernes, 25202 jueves, 25203 miércoles, 25204 martes), y cada equipo
+// del club cae en un grupo de una de ellas. Por eso Torneo.idExterno guarda
+// la LISTA de ids de liga separados por comas, y para cada equipo del club
+// se recorren todos los grupos de esas ligas hasta encontrarlo. Se guarda
+// la tabla completa de SU grupo (igual que Phoenix: una tabla por
+// EquipoTorneo).
+//
+// Para localizar el equipo: EquipoTorneo.idExternoEquipo (nombre exacto en
+// Connection, ej. "CB26V-VDC VALHALLA") si está puesto; si no, se compara
+// el nombre del equipo del club ignorando el prefijo de liga ("CB26V-") y
+// las palabras VDC/VIKINGS/THE (ej. "VIKINGS VALHALLA" ↔ "CB26V-VDC
+// VALHALLA" → los dos quedan en "VALHALLA").
+
+const API_CONNECTION = "https://api.connectionplayer.com/v1";
+const CABECERAS_SESION = ["accept", "authorization", "accesstoken", "refreshtoken", "playerid", "clienttype"];
+
+function nombreClave(nombre) {
+  return (nombre || "")
+    .toUpperCase()
+    .replace(/^[A-Z0-9]+-/, "") // prefijo de liga tipo "CB26V-"
+    .replace(/\b(VDC|VIKINGS|THE)\b/g, " ")
+    .replace(/[^A-Z0-9]+/g, " ")
+    .trim();
+}
+
+function coincideEquipo(nombreConnection, { nombreExacto, nombreClub }) {
+  if (nombreExacto) return nombreConnection.trim().toUpperCase() === nombreExacto.trim().toUpperCase();
+  const clave = nombreClave(nombreClub);
+  return !!clave && nombreClave(nombreConnection) === clave;
+}
+
+// Login con la cuenta de CONNECTION_DARTS_EMAIL/PASSWORD y captura de las
+// cabeceras de sesión que la propia SPA manda a su API.
+async function abrirSesionApiConnection(page) {
+  const email = process.env.CONNECTION_DARTS_EMAIL;
+  const password = process.env.CONNECTION_DARTS_PASSWORD;
+  if (!email || !password) {
+    throw new Error("Faltan las variables de entorno CONNECTION_DARTS_EMAIL / CONNECTION_DARTS_PASSWORD");
+  }
+
+  let cabeceras = null;
+  page.on("request", (req) => {
+    if (!req.url().startsWith("https://api.connectionplayer.com/")) return;
+    const h = req.headers();
+    if (!h.accesstoken && !h.authorization) return;
+    cabeceras = Object.fromEntries(CABECERAS_SESION.filter((k) => h[k]).map((k) => [k, h[k]]));
+  });
+
+  await page.goto(LOGIN_URL, { waitUntil: "domcontentloaded", timeout: 30000 });
+  await page.waitForLoadState("networkidle", { timeout: 15000 }).catch(() => {});
+  await page.getByPlaceholder("Dirección de correo").fill(email);
+  await page.getByPlaceholder("Contraseña").fill(password);
+  await page.getByRole("button", { name: "Iniciar Sesión" }).click();
+  await page.waitForFunction(() => !location.href.includes("login"), null, { timeout: 20000 });
+  await page.waitForLoadState("networkidle", { timeout: 10000 }).catch(() => {});
+  await page.waitForTimeout(1500);
+
+  // Si el dashboard no ha hecho ninguna llamada autenticada todavía, forzar
+  // una entrando en "Ligas".
+  if (!cabeceras) {
+    await page.goto("https://connectionplayer.com/leagues", { waitUntil: "domcontentloaded", timeout: 30000 });
+    await page.waitForLoadState("networkidle", { timeout: 15000 }).catch(() => {});
+    await page.waitForTimeout(1500);
+  }
+  if (!cabeceras) {
+    throw new Error("Login en Connection Darts hecho, pero no se pudieron capturar las cabeceras de sesión de su API.");
+  }
+  return () => cabeceras;
+}
+
+// GET a la API desde dentro de la página (mismo origen/CORS que la propia web).
+async function apiGet(page, getCabeceras, ruta) {
+  const r = await page.evaluate(
+    async ({ url, headers }) => {
+      const res = await fetch(url, { headers });
+      return { status: res.status, texto: await res.text() };
+    },
+    { url: `${API_CONNECTION}${ruta}`, headers: getCabeceras() }
+  );
+  if (r.status !== 200) throw new Error(`API Connection ${ruta} → HTTP ${r.status}: ${r.texto.slice(0, 120)}`);
+  return JSON.parse(r.texto);
+}
+
+function filaDesdeRanking(t) {
+  return {
+    posicion: t.position,
+    nombreEquipo: t.team_name,
+    puntos: t.points ?? null,
+    partidosJugados: t.played ?? null,
+    partidosGanados: t.won ?? null,
+    partidosPerdidos: t.lost ?? null,
+    partidosEmpatados: t.drawn ?? null,
+    juegosGanados: t.score_for ?? null,
+    juegosPerdidos: t.score_against ?? null,
+  };
+}
+
+// ligaIdsTexto: Torneo.idExterno, ej. "25201,25202,25203,25204".
+// equipos: [{ id (EquipoTorneo), nombreExacto?, nombreClub? }].
+// Devuelve [{ equipoTorneoId, ok, filas?, grupo?, error? }] — mismo formato
+// que extraerClasificacionEquiposPhoenix.
+export async function extraerClasificacionEquiposConnection(ligaIdsTexto, equipos) {
+  const ligaIds = String(ligaIdsTexto || "")
+    .split(/[^0-9]+/)
+    .filter(Boolean);
+  if (ligaIds.length === 0) {
+    return equipos.map((e) => ({
+      equipoTorneoId: e.id,
+      ok: false,
+      error:
+        'Falta el "Id externo" del torneo: los ids de liga de Connection Darts separados por comas (ej. 25201,25202,25203,25204).',
+    }));
+  }
+
+  const browser = await chromium.launch({ headless: true });
+  try {
+    const context = await browser.newContext(CONTEXT_OPTIONS);
+    const page = await context.newPage();
+    const getCabeceras = await abrirSesionApiConnection(page);
+
+    // Descargar una vez todos los grupos de todas las ligas indicadas.
+    const grupos = []; // [{ ligaId, nombreGrupo, rankings }]
+    const erroresLiga = [];
+    for (const ligaId of ligaIds) {
+      try {
+        const { groups = [] } = await apiGet(page, getCabeceras, `/league/${ligaId}/groups`);
+        for (const g of groups) {
+          const r = await apiGet(page, getCabeceras, `/league/${ligaId}/group/${g.id}/ranking?teamName=&archived=0`);
+          grupos.push({ ligaId, nombreGrupo: g.name, rankings: r.rankings || [] });
+        }
+      } catch (err) {
+        erroresLiga.push(`liga ${ligaId}: ${err.message}`);
+      }
+    }
+
+    return equipos.map((eq) => {
+      const encontrados = grupos.filter((g) => g.rankings.some((t) => coincideEquipo(t.team_name, eq)));
+      if (encontrados.length === 1) {
+        const g = encontrados[0];
+        return {
+          equipoTorneoId: eq.id,
+          ok: true,
+          grupo: `${g.ligaId} · ${g.nombreGrupo}`,
+          filas: [...g.rankings].sort((a, b) => a.position - b.position).map(filaDesdeRanking),
+        };
+      }
+      const quien = eq.nombreExacto || eq.nombreClub || "equipo";
+      const extra = erroresLiga.length ? ` (errores: ${erroresLiga.join("; ")})` : "";
+      return {
+        equipoTorneoId: eq.id,
+        ok: false,
+        error:
+          encontrados.length === 0
+            ? `"${quien}" no aparece en ningún grupo de las ligas ${ligaIds.join(", ")}. Pon su nombre exacto de Connection en la inscripción del equipo.${extra}`
+            : `"${quien}" coincide con varios equipos de Connection. Pon su nombre exacto en la inscripción del equipo.`,
+      };
+    });
+  } finally {
+    await browser.close();
+  }
+}

@@ -111,12 +111,30 @@ export async function actualizarClasificacionTorneo(torneo) {
       ])
     );
 
+    // Connection: además de la clasificación, sincroniza calendario y
+    // resultados de los partidos de NUESTROS equipos (ver
+    // sincronizarPartidosConnection más abajo).
+    const avisosPartidos = [];
+    if (esConnection) {
+      for (const r of exitos) {
+        const eq = torneo.equipos.find((e) => e.id === r.equipoTorneoId);
+        const nombreEq = eq?.equipoClub?.nombre || eq?.idExternoEquipo || "Un equipo";
+        if (r.avisoPartidos) avisosPartidos.push(`${nombreEq}: ${r.avisoPartidos}`);
+        if (!r.partidos) continue;
+        try {
+          await sincronizarPartidosConnection(r.equipoTorneoId, r.partidos);
+        } catch (err) {
+          avisosPartidos.push(`${nombreEq}: error guardando partidos (${err.message})`);
+        }
+      }
+    }
+
     const avisos = fallos.map((f) => {
       const eq = torneo.equipos.find((e) => e.id === f.equipoTorneoId);
       const nombreEq = eq?.idExternoEquipo || eq?.equipoClub?.nombre || eq?.nombreEquipo || "Un equipo";
       return `${nombreEq}: ${f.error}`;
     });
-    return { ok: true, avisos };
+    return { ok: true, avisos: [...avisos, ...avisosPartidos] };
   }
 
   return {
@@ -124,6 +142,48 @@ export async function actualizarClasificacionTorneo(torneo) {
     omitido: true,
     motivo: `La extracción de clasificación de equipos todavía no está implementada para "${torneo.plataforma?.nombre || "esta plataforma"}" (por ahora solo Radikal, Phoenix y Connection Darts).`,
   };
+}
+
+// Crea/actualiza los Partido de una inscripción a partir del calendario de
+// Connection (solo los partidos de ese equipo). Reglas:
+//  - Partido nuevo → se crea SIN confirmar (fijado=false), para que el
+//    capitán solo tenga que revisarlo y pulsar "Confirmar" (ahí elige
+//    máquina, y se avisa a la plantilla, como siempre).
+//  - Si aún no está confirmado ni lo ha tocado el capitán
+//    (origenActualizacion = scraper), se le actualizan fecha y rival por si
+//    Connection los cambia. Si el capitán ya lo confirmó o editó, su
+//    fecha/rival se respetan.
+//  - El resultado oficial de Connection (partido terminado) se guarda
+//    siempre, esté confirmado o no.
+// Nunca borra partidos.
+async function sincronizarPartidosConnection(equipoTorneoId, partidos) {
+  for (const p of partidos) {
+    const existente = await prisma.partido.findUnique({ where: { idExterno: p.idExterno } });
+    if (!existente) {
+      await prisma.partido.create({
+        data: {
+          equipoTorneoId,
+          idExterno: p.idExterno,
+          fecha: p.fecha,
+          rival: p.rival,
+          resultado: p.resultado,
+          fijado: false,
+          origenActualizacion: "scraper",
+        },
+      });
+      continue;
+    }
+    const datos = {};
+    const editable = !existente.fijado && existente.origenActualizacion === "scraper";
+    if (editable && existente.fecha.getTime() !== p.fecha.getTime()) datos.fecha = p.fecha;
+    if (editable && existente.rival !== p.rival) datos.rival = p.rival;
+    if (p.resultado && existente.resultado !== p.resultado) datos.resultado = p.resultado;
+    if (Object.keys(datos).length > 0) {
+      // Prisma pondría @updatedAt igual; origenActualizacion no se toca para
+      // no "robarle" al capitán un partido que ya editó.
+      await prisma.partido.update({ where: { id: existente.id }, data: datos });
+    }
+  }
 }
 
 // Recorre TODOS los torneos/ligas externos dados de alta y actualiza la

@@ -319,6 +319,43 @@ router.patch("/:id/rol", requireAdmin, async (req, res) => {
   res.json({ id: usuario.id, nombre: usuario.nombre, rol: usuario.rol });
 });
 
+// POST /api/auth/:id/vincular-jugador - vincula la cuenta :id a una ficha de
+// Jugador ya existente sin cuenta (body: { jugadorId }), normalmente la de
+// "amigo" que ya jugaba en el club antes de darse de alta como miembro. Así
+// el miembro sale en "Jugadores del club" con todo su historial, en vez de
+// esperar a que entre en su perfil y se le cree una ficha nueva vacía (ver
+// obtenerOCrearJugador en perfil.js). Si la cuenta ya tiene ficha propia se
+// rechaza: en ese caso lo que toca es fusionar la de amigo en ella
+// (POST /api/jugadores/:id/fusionar).
+router.post("/:id/vincular-jugador", requireAdmin, async (req, res) => {
+  const { jugadorId } = req.body || {};
+  if (!jugadorId || typeof jugadorId !== "string") {
+    return res.status(400).json({ error: "Falta la ficha de jugador a vincular." });
+  }
+  const [usuario, jugador, fichaActual] = await Promise.all([
+    prisma.usuario.findUnique({ where: { id: req.params.id } }),
+    prisma.jugador.findUnique({ where: { id: jugadorId } }),
+    prisma.jugador.findUnique({ where: { usuarioId: req.params.id } }),
+  ]);
+  if (!usuario) return res.status(404).json({ error: "Cuenta no encontrada" });
+  if (!jugador) return res.status(404).json({ error: "Jugador no encontrado" });
+  if (fichaActual) {
+    return res.status(409).json({
+      error: "Esta cuenta ya tiene ficha de jugador: fusiona la otra ficha en ella desde Admin → Jugadores.",
+    });
+  }
+  if (jugador.usuarioId) {
+    return res.status(409).json({ error: "Esa ficha ya pertenece a otro miembro." });
+  }
+  // oculto: false porque una ficha oculta (invitado puntual de Telegram) que
+  // pasa a ser de un miembro debe salir ya en el directorio.
+  const actualizado = await prisma.jugador.update({
+    where: { id: jugador.id },
+    data: { usuarioId: usuario.id, oculto: false },
+  });
+  res.json({ id: actualizado.id, nombre: actualizado.nombre, usuarioId: actualizado.usuarioId });
+});
+
 // POST /api/auth/crear-manual - el admin crea una cuenta directamente, ya aprobada (admin)
 router.post("/crear-manual", requireAdmin, async (req, res) => {
   const { nombre, email, password, rol } = req.body;

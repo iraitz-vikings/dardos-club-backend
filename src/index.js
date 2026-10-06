@@ -140,19 +140,24 @@ cron.schedule("0 4 1 1,4,7,10 *", () => {
     .catch((err) => console.error("Error actualizando medias:", err));
 });
 
-// De lunes a viernes a las 04:30 (media hora después del cron de medias de
-// arriba, para no tener dos navegadores Playwright abiertos a la vez en el
-// mismo servidor) se refresca la clasificación de todos los torneos/ligas
-// externos dados de alta (ver src/scrapers/actualizarClasificaciones.js).
-// Los fines de semana no se suele jugar liga, así que no hace falta
-// actualizar sábados ni domingos. Por ahora esto solo actualiza algo en
-// Radikal Darts y Phoenix Darts; Connection Darts se omite hasta que tenga
-// scraper. También se puede lanzar a mano desde el admin, tanto por torneo
+// Cada día a las 04:30 (media hora después del cron de medias de arriba,
+// para no tener dos navegadores Playwright abiertos a la vez en el mismo
+// servidor) se refrescan las clasificaciones de los torneos/ligas externos
+// (ver src/scrapers/actualizarClasificaciones.js):
+// - Connection Darts: solo los equipos que jugaron ayer (cada equipo tiene
+//   su día de la semana), así que la mayoría de mañanas no abre ni el
+//   navegador. Por eso corre también sábado y domingo: los equipos que
+//   juegan viernes/sábado/domingo se actualizan la mañana siguiente.
+// - Radikal y Phoenix (sin calendario automático): de lunes a viernes, como
+//   antes.
+// También se puede lanzar a mano desde el admin, tanto por torneo
 // ("Actualizar clasificación") como para todos a la vez ("Actualizar todas
-// las clasificaciones ahora", en "Comp. externas").
-cron.schedule("30 4 * * 1-5", () => {
+// las clasificaciones ahora", en "Comp. externas"); a mano se actualiza
+// siempre todo.
+cron.schedule("30 4 * * *", () => {
   console.log("Actualizando clasificaciones de equipos (cron nocturno)...");
-  actualizarTodasLasClasificaciones()
+  const dia = new Date().getDay(); // 0 domingo … 6 sábado
+  actualizarTodasLasClasificaciones({ cron: true, otrasPlataformas: dia >= 1 && dia <= 5 })
     .then((resumen) => console.log("Clasificaciones actualizadas:", resumen))
     .catch((err) => console.error("Error actualizando clasificaciones:", err));
 });

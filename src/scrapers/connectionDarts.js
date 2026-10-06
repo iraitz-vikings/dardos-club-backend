@@ -435,10 +435,45 @@ function filaDesdeRanking(t) {
   };
 }
 
+// Calendario de un grupo (GET /league/{l}/group/{g}/calendar):
+//   { calendar: { days: [{ day_number, matches: [{ match_id, match_start,
+//     match_state (0 pendiente, 1 en juego, 2 terminado), local_team_id,
+//     local_name, visitor_team_id, visitor_name, local_score,
+//     visitor_score, ... }] }] } }
+// match_start es el inicio de la jornada (ej. viernes 18:00 hora España).
+// Devuelve solo los partidos en los que juega `teamId`, desde el punto de
+// vista de nuestro equipo: { idExterno, fecha, rival, enCasa, terminado,
+// resultado ("nuestros-suyos" o null) }.
+function partidosDeEquipo(cal, teamId) {
+  const dias = cal?.calendar?.days || [];
+  const lista = [];
+  for (const d of dias) {
+    for (const m of d.matches || []) {
+      const enCasa = String(m.local_team_id) === teamId;
+      if (!enCasa && String(m.visitor_team_id) !== teamId) continue;
+      const terminado = Number(m.match_state) === 2;
+      const nuestros = enCasa ? m.local_score : m.visitor_score;
+      const suyos = enCasa ? m.visitor_score : m.local_score;
+      lista.push({
+        idExterno: `connection:${m.match_id}`,
+        jornada: Number(m.day_number) + 1,
+        fecha: new Date(Number(m.match_start)),
+        rival: enCasa ? m.visitor_name : m.local_name,
+        enCasa,
+        terminado,
+        resultado: terminado ? `${nuestros}-${suyos}` : null,
+      });
+    }
+  }
+  return lista;
+}
+
 // ligaIdsTexto: Torneo.idExterno, ej. "25201,25202,25203,25204".
 // equipos: [{ id (EquipoTorneo), nombreExacto?, nombreClub? }].
-// Devuelve [{ equipoTorneoId, ok, filas?, grupo?, error? }] — mismo formato
-// que extraerClasificacionEquiposPhoenix.
+// Devuelve [{ equipoTorneoId, ok, filas?, grupo?, partidos?, avisoPartidos?,
+// error? }] — mismo formato que extraerClasificacionEquiposPhoenix, más los
+// partidos de ESE equipo (ver partidosDeEquipo) para sincronizar calendario
+// y resultados.
 export async function extraerClasificacionEquiposConnection(ligaIdsTexto, equipos) {
   const ligaIds = String(ligaIdsTexto || "")
     .split(/[^0-9]+/)
@@ -458,43 +493,73 @@ export async function extraerClasificacionEquiposConnection(ligaIdsTexto, equipo
     const page = await context.newPage();
     const getCabeceras = await abrirSesionApiConnection(page);
 
-    // Descargar una vez todos los grupos de todas las ligas indicadas.
-    const grupos = []; // [{ ligaId, nombreGrupo, rankings }]
+    // Descargar una vez todos los grupos de todas las ligas indicadas. Al
+    // acabar la temporada Connection "archiva" la liga: entonces los grupos
+    // solo salen con archived=1.
+    const grupos = []; // [{ ligaId, grupoId, nombreGrupo, archivada, rankings }]
     const erroresLiga = [];
     for (const ligaId of ligaIds) {
       try {
-        const { groups = [] } = await apiGet(page, getCabeceras, `/league/${ligaId}/groups`);
+        let archivada = 0;
+        let { groups = [] } = await apiGet(page, getCabeceras, `/league/${ligaId}/groups`);
+        if (groups.length === 0) {
+          archivada = 1;
+          ({ groups = [] } = await apiGet(page, getCabeceras, `/league/${ligaId}/groups?archived=1`));
+        }
         for (const g of groups) {
-          const r = await apiGet(page, getCabeceras, `/league/${ligaId}/group/${g.id}/ranking?teamName=&archived=0`);
-          grupos.push({ ligaId, nombreGrupo: g.name, rankings: r.rankings || [] });
+          const r = await apiGet(
+            page,
+            getCabeceras,
+            `/league/${ligaId}/group/${g.id}/ranking?teamName=&archived=${archivada}`
+          );
+          grupos.push({ ligaId, grupoId: g.id, nombreGrupo: g.name, archivada, rankings: r.rankings || [] });
         }
       } catch (err) {
         erroresLiga.push(`liga ${ligaId}: ${err.message}`);
       }
     }
 
-    return equipos.map((eq) => {
+    const resultados = [];
+    for (const eq of equipos) {
       const encontrados = grupos.filter((g) => g.rankings.some((t) => coincideEquipo(t.team_name, eq)));
       if (encontrados.length === 1) {
         const g = encontrados[0];
-        return {
+        const equipoConnection = g.rankings.find((t) => coincideEquipo(t.team_name, eq));
+        // Calendario y resultados SOLO de los partidos de este equipo.
+        let partidos = null;
+        let avisoPartidos = null;
+        try {
+          const cal = await apiGet(
+            page,
+            getCabeceras,
+            `/league/${g.ligaId}/group/${g.grupoId}/calendar?archived=${g.archivada}`
+          );
+          partidos = partidosDeEquipo(cal, String(equipoConnection.team_id));
+        } catch (err) {
+          avisoPartidos = `no se pudo leer el calendario (${err.message})`;
+        }
+        resultados.push({
           equipoTorneoId: eq.id,
           ok: true,
           grupo: `${g.ligaId} · ${g.nombreGrupo}`,
           filas: [...g.rankings].sort((a, b) => a.position - b.position).map(filaDesdeRanking),
-        };
+          partidos,
+          avisoPartidos,
+        });
+        continue;
       }
       const quien = eq.nombreExacto || eq.nombreClub || "equipo";
       const extra = erroresLiga.length ? ` (errores: ${erroresLiga.join("; ")})` : "";
-      return {
+      resultados.push({
         equipoTorneoId: eq.id,
         ok: false,
         error:
           encontrados.length === 0
             ? `"${quien}" no aparece en ningún grupo de las ligas ${ligaIds.join(", ")}. Pon su nombre exacto de Connection en la inscripción del equipo.${extra}`
             : `"${quien}" coincide con varios equipos de Connection. Pon su nombre exacto en la inscripción del equipo.`,
-      };
-    });
+      });
+    }
+    return resultados;
   } finally {
     await browser.close();
   }

@@ -318,6 +318,11 @@ model Partido {
   // src/lib/recordatoriosPartidos.js, cron matutino en index.js) — evita
   // avisar dos veces si el cron se ejecuta más de una vez el mismo día.
   recordatorioEnviado Boolean  @default(false)
+  // Id del partido en la plataforma externa (hoy solo Connection Darts:
+  // match_id de su API). Lo rellena la sincronización automática de
+  // calendario/resultados para no duplicar partidos; null en los creados a
+  // mano por el capitán.
+  idExterno           String?  @unique
 }
 
 model NoticiaEvento {

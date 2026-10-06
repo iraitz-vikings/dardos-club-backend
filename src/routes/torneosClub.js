@@ -798,6 +798,7 @@ async function notificarSorteoCuadrante(cuadranteId, posiciones) {
     imagen,
     url: urlPublicaCuadrante(cuadrante),
     tag: `cuadrante-${cuadrante.id}`,
+    tipo: "bienvenida",
     ttl: TTL_AVISO_NORMAL,
   });
 }
@@ -1265,6 +1266,7 @@ async function notificarPartidoDeCuadrante(partido, motivo = "programado") {
       cuerpo: mensaje.cuerpo,
       url,
       tag: `partido-${partido.id}`,
+      tipo: "enCurso",
       ttl: TTL_AVISO_EN_CURSO,
     });
     return;
@@ -1310,6 +1312,7 @@ async function notificarPartidoDeCuadrante(partido, motivo = "programado") {
     cuerpo: mensaje.cuerpo,
     url,
     tag: `partido-${partido.id}`,
+    tipo: "programado",
     ttl: TTL_AVISO_NORMAL,
   });
 }
@@ -1402,6 +1405,7 @@ async function notificarEliminacionCuadrante(partido, etiquetaEliminado) {
     // Mismo tag que los avisos del partido que lo decide: sustituye a su
     // "empieza ahora" / "falta 1 minuto" en vez de sumarse.
     tag: `partido-${partido.id}`,
+    tipo: "eliminado",
     ttl: TTL_AVISO_NORMAL,
   });
 }
@@ -1445,6 +1449,7 @@ async function notificarCampeonCuadrante(partido, etiquetaCampeon) {
     // Mismo tag que los avisos del partido que lo decide: sustituye a su
     // "empieza ahora" / "falta 1 minuto" en vez de sumarse.
     tag: `partido-${partido.id}`,
+    tipo: "campeon",
     ttl: TTL_AVISO_NORMAL,
   });
 }

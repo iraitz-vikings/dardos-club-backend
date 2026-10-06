@@ -15,6 +15,7 @@ import { actualizarTodasLasMedias } from "./scrapers/actualizarMedias.js";
 import { actualizarTodasLasClasificaciones } from "./scrapers/actualizarClasificaciones.js";
 import { iniciarBotTelegram } from "./routes/telegram.js";
 import { limpiarPapelera } from "./lib/limpiarPapelera.js";
+import { purgarRegistroPush } from "./lib/registroPush.js";
 import { enviarRecordatoriosDeHoy } from "./lib/recordatoriosPartidos.js";
 import { enviarAvisosUnMinutoTemporizador } from "./lib/avisoTemporizadorPartidos.js";
 
@@ -165,6 +166,14 @@ cron.schedule("0 5 * * *", () => {
   limpiarPapelera()
     .then((resumen) => console.log("Papelera purgada:", resumen))
     .catch((err) => console.error("Error purgando papelera:", err));
+});
+
+// Y a la misma hora se borra el historial de Web Push de más de 60 días
+// (ver RegistroPush en schema.prisma y src/lib/registroPush.js).
+cron.schedule("10 5 * * *", () => {
+  purgarRegistroPush()
+    .then((resumen) => console.log("Historial de push purgado:", resumen))
+    .catch((err) => console.error("Error purgando historial de push:", err.message || err));
 });
 
 // Cada mañana a las 08:00 UTC (10:00 en Madrid en verano, 09:00 en

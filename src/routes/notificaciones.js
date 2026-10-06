@@ -4,6 +4,7 @@ import { requireAuth } from "./auth.js";
 import { vapidPublicKey, generarTokenResuscripcionPush, verificarTokenResuscripcionPush } from "./webPush.js";
 import { generarEnlaceCheckIn } from "./telegram.js";
 import { requireAdmin } from "../middleware/requireAdmin.js";
+import { registrarEventoPush } from "../lib/registroPush.js";
 
 const router = Router();
 
@@ -19,17 +20,54 @@ const router = Router();
 // cadena de navegador, se pisarían, pero cada uno se vuelve a registrar solo
 // al entrar en la zona de socios, así que se recupera. Solo se deduplica
 // cuando hay userAgent (sin él no se puede saber si es el mismo dispositivo).
-async function registrarSuscripcion(jugadorId, endpoint, keys, userAgent) {
-  await prisma.suscripcionPush.upsert({
+// origen: "alta" (desde "Mi perfil", con sesión) o "reactivada" (el service
+// worker en segundo plano, ver /push/resuscribir). Queda en el historial
+// (RegistroPush) con lo que había antes, porque esto borra o reactiva justo
+// las suscripciones caídas que servirían para diagnosticar un fallo.
+async function registrarSuscripcion(jugadorId, endpoint, keys, userAgent, origen) {
+  const previa = await prisma.suscripcionPush.findUnique({ where: { endpoint } });
+  const sub = await prisma.suscripcionPush.upsert({
     where: { endpoint },
     update: { jugadorId, p256dh: keys.p256dh, auth: keys.auth, userAgent: userAgent || null, activa: true, fallidaEn: null, fallidaCod: null },
     create: { jugadorId, endpoint, p256dh: keys.p256dh, auth: keys.auth, userAgent: userAgent || null },
   });
+  let reemplazadas = [];
   if (userAgent) {
+    reemplazadas = await prisma.suscripcionPush.findMany({
+      where: { jugadorId, userAgent, endpoint: { not: endpoint } },
+      select: { activa: true, fallidaEn: true, fallidaCod: true },
+    });
     await prisma.suscripcionPush.deleteMany({
       where: { jugadorId, userAgent, endpoint: { not: endpoint } },
     });
   }
+
+  // Cada visita a la zona de socios vuelve a registrar la suscripción: si no
+  // ha cambiado nada (ya activa, mismo socio, nada sustituido) no se apunta,
+  // para no llenar el historial de ruido.
+  if (previa?.activa && previa.jugadorId === jugadorId && reemplazadas.length === 0) return;
+
+  const fecha = (d) => (d ? d.toLocaleString("es-ES", { timeZone: "Europe/Madrid" }) : "?");
+  const partes = [];
+  if (!previa) partes.push("suscripción nueva");
+  else if (!previa.activa) {
+    partes.push(`reactiva una caída (${previa.fallidaCod ?? "?"} el ${fecha(previa.fallidaEn)})`);
+  } else if (previa.jugadorId !== jugadorId) partes.push("pasa de otro socio a este");
+  else partes.push("ya estaba activa");
+  for (const r of reemplazadas) {
+    partes.push(
+      r.activa
+        ? "sustituye a otra activa del mismo dispositivo"
+        : `sustituye a una caída del mismo dispositivo (${r.fallidaCod ?? "?"} el ${fecha(r.fallidaEn)})`
+    );
+  }
+  await registrarEventoPush({
+    jugadorId,
+    evento: origen,
+    suscripcionId: sub.id,
+    userAgent,
+    detalle: partes.join("; "),
+  });
 }
 
 // GET /api/notificaciones/vapid-public-key - clave pública para que el
@@ -51,7 +89,7 @@ router.post("/push/suscribir", requireAuth, async (req, res) => {
   const jugador = await prisma.jugador.findUnique({ where: { usuarioId: req.usuario.sub } });
   if (!jugador) return res.status(404).json({ error: "Tu cuenta no tiene una ficha de jugador asociada" });
 
-  await registrarSuscripcion(jugador.id, endpoint, keys, req.headers["user-agent"]);
+  await registrarSuscripcion(jugador.id, endpoint, keys, req.headers["user-agent"], "alta");
   res.status(201).json({ ok: true });
 });
 
@@ -101,7 +139,7 @@ router.post("/push/resuscribir", async (req, res) => {
   } catch {
     return res.status(401).json({ error: "Token de re-suscripción inválido" });
   }
-  await registrarSuscripcion(jugadorId, endpoint, keys, req.headers["user-agent"]);
+  await registrarSuscripcion(jugadorId, endpoint, keys, req.headers["user-agent"], "reactivada");
   res.status(201).json({ ok: true });
 });
 
@@ -129,6 +167,43 @@ router.get("/push/admin/dispositivos", requireAdmin, async (_req, res) => {
       creadoEn: s.creadoEn,
       fallidaEn: s.fallidaEn,
       fallidaCod: s.fallidaCod,
+    }))
+  );
+});
+
+// GET /api/notificaciones/push/admin/registro - historial de Web Push
+// (RegistroPush): envíos, errores, caídas y altas/reactivaciones, del más
+// reciente al más antiguo. Filtros opcionales por query: jugadorId, evento,
+// desde/hasta (fechas ISO). Como mucho 1000 filas (500 por defecto).
+router.get("/push/admin/registro", requireAdmin, async (req, res) => {
+  const { jugadorId, evento, desde, hasta } = req.query;
+  const limite = Math.min(Math.max(parseInt(req.query.limite, 10) || 500, 1), 1000);
+  const creadoEn = {};
+  if (desde && !isNaN(Date.parse(desde))) creadoEn.gte = new Date(desde);
+  if (hasta && !isNaN(Date.parse(hasta))) creadoEn.lte = new Date(hasta);
+  const registros = await prisma.registroPush.findMany({
+    where: {
+      ...(jugadorId ? { jugadorId: String(jugadorId) } : {}),
+      ...(evento ? { evento: String(evento) } : {}),
+      ...(Object.keys(creadoEn).length ? { creadoEn } : {}),
+    },
+    include: { jugador: { select: { nombre: true } } },
+    orderBy: { creadoEn: "desc" },
+    take: limite,
+  });
+  res.json(
+    registros.map((r) => ({
+      id: r.id,
+      creadoEn: r.creadoEn,
+      jugadorId: r.jugadorId,
+      jugadorNombre: r.jugador?.nombre || "—",
+      suscripcionId: r.suscripcionId,
+      userAgent: r.userAgent,
+      evento: r.evento,
+      tipoAviso: r.tipoAviso,
+      titulo: r.titulo,
+      codigo: r.codigo,
+      detalle: r.detalle,
     }))
   );
 });

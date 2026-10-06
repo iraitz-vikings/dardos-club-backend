@@ -67,6 +67,7 @@ async function recordatoriosExternos(rangoHoy) {
         titulo: `Hoy juegas: ${nombreEquipo}`,
         cuerpo: `${p.rival ? `Contra ${p.rival}` : "Partido"} hoy a las ${textoHora(p.fecha)}${nombreTorneo ? ` (${nombreTorneo})` : ""}.`,
         tag: `partido-ext-${p.id}`,
+        tipo: "recordatorio",
         ttl: TTL_AVISO_RECORDATORIO,
       });
       enviados++;
@@ -113,6 +114,7 @@ async function recordatoriosTorneosClub(rangoHoy) {
           cuerpo: `${p.jugador1 || "?"} vs ${p.jugador2 || "?"} hoy a las ${textoHora(p.fechaCalendario)}.`,
           url: urlPublicaCuadrante(p.cuadrante),
           tag: `partido-${p.id}`,
+          tipo: "recordatorio",
           ttl: TTL_AVISO_RECORDATORIO,
         });
         enviados++;
@@ -156,6 +158,7 @@ async function recordatoriosLigasClub(rangoHoy) {
           cuerpo: `${p.participante1 || "?"} vs ${p.participante2 || "?"} hoy a las ${textoHora(p.fechaCalendario)}.`,
           url: urlPublicaLiga(p.ligaId),
           tag: `partido-liga-${p.id}`,
+          tipo: "recordatorio",
           ttl: TTL_AVISO_RECORDATORIO,
         });
         enviados++;

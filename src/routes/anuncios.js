@@ -34,7 +34,7 @@ router.post("/", requireAuth, requireRole("admin", "capitan"), async (req, res) 
       .then((socios) =>
         notificarJugadores(
           socios.map((s) => s.id),
-          { titulo: `Anuncio: ${titulo}`, cuerpo: contenido }
+          { titulo: `Anuncio: ${titulo}`, cuerpo: contenido, tipo: "anuncio" }
         )
       )
       .catch((err) => console.error("Error notificando anuncio:", err.message || err));

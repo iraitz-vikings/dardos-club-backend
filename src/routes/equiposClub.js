@@ -105,6 +105,18 @@ router.post("/:id/miembros", requireAdmin, async (req, res) => {
   }
 });
 
+// PUT /api/equipos-club/:id/miembros/:jugadorId - marca o desmarca a un
+// miembro de la plantilla como co-capitán (body: { cocapitan: true|false }).
+router.put("/:id/miembros/:jugadorId", requireAdmin, async (req, res) => {
+  const { id, jugadorId } = req.params;
+  const { cocapitan } = req.body || {};
+  if (typeof cocapitan !== "boolean") return res.status(400).json({ error: "Falta cocapitan (true/false)" });
+  const { count } = await prisma.miembroEquipoClub.updateMany({ where: { equipoId: id, jugadorId }, data: { cocapitan } });
+  if (count === 0) return res.status(404).json({ error: "Ese jugador no está en la plantilla" });
+  const equipo = await prisma.equipoClub.findUnique({ where: { id }, include: includeCompleto });
+  res.json(equipo);
+});
+
 router.delete("/:id/miembros/:jugadorId", requireAdmin, async (req, res) => {
   const { id, jugadorId } = req.params;
   await prisma.miembroEquipoClub.deleteMany({ where: { equipoId: id, jugadorId } });

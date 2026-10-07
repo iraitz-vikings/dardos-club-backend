@@ -853,6 +853,10 @@ model MiembroEquipoClub {
   jugadorId String
   jugador   Jugador    @relation(fields: [jugadorId], references: [id])
   creadoEn  DateTime   @default(now())
+  // Co-capitán (2026-10-07): tiene los mismos permisos que el capitán
+  // (EquipoClub.capitanId) sobre los partidos de este equipo/pareja. Puede
+  // haber varios; el capitán sigue siendo uno solo.
+  cocapitan Boolean    @default(false)
 
   @@unique([equipoId, jugadorId])
 }

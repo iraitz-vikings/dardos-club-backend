@@ -46,7 +46,14 @@ const includeTorneo = {
       // el desplegable de capitán por inscripción (EquipoTorneo.capitan) no
       // se usa en la práctica, así que se incluyen los dos para poder
       // comprobar cualquiera de ellos.
-      equipoClub: { include: { capitan: JUGADOR_CON_USUARIO } },
+      // cocapitanes: los miembros de la plantilla marcados como
+      // co-capitán, con los mismos permisos que el capitán.
+      equipoClub: {
+        include: {
+          capitan: JUGADOR_CON_USUARIO,
+          miembros: { where: { cocapitan: true }, include: { jugador: JUGADOR_CON_USUARIO } },
+        },
+      },
       capitan: JUGADOR_CON_USUARIO,
       jugadores: { include: { jugador: JUGADOR_PUBLICO } },
       partidos: { include: { maquina: true }, orderBy: { fecha: "asc" } },
@@ -260,19 +267,41 @@ router.delete("/equipos/:id/jugadores/:jugadorId", requireAdmin, async (req, res
 
 // ---------- Partidos ----------
 
-// Comprueba si `usuarioSub` es el capitán de esta inscripción: el de la
-// inscripción concreta (poco usado) o, el caso real, el capitán de la
-// plantilla del equipo del club. Devuelve también el equipoTorneo por si
-// hace falta (null si no existe).
+// include de EquipoTorneo con todo lo que hace falta para saber quién manda
+// en él (ver tieneMandoEnEquipo).
+const includeMandoEquipo = {
+  capitan: JUGADOR_CON_USUARIO,
+  equipoClub: {
+    include: {
+      capitan: JUGADOR_CON_USUARIO,
+      miembros: { where: { cocapitan: true }, include: { jugador: JUGADOR_CON_USUARIO } },
+    },
+  },
+};
+
+// ¿`usuarioSub` es capitán o co-capitán de esta inscripción? Capitán puede
+// ser el de la inscripción concreta (poco usado) o, el caso real, el de la
+// plantilla del equipo del club; co-capitanes son los miembros de esa
+// plantilla marcados como tal. `equipoTorneo` debe venir con
+// includeMandoEquipo.
+function tieneMandoEnEquipo(equipoTorneo, usuarioSub) {
+  if (!usuarioSub) return false;
+  return (
+    equipoTorneo.capitan?.usuarioId === usuarioSub ||
+    equipoTorneo.equipoClub?.capitan?.usuarioId === usuarioSub ||
+    (equipoTorneo.equipoClub?.miembros || []).some((m) => m.jugador?.usuarioId === usuarioSub)
+  );
+}
+
+// Devuelve el equipoTorneo (null si no existe) y si `usuarioSub` es su
+// capitán o co-capitán.
 async function esCapitanDeEquipo(equipoTorneoId, usuarioSub) {
   const equipoTorneo = await prisma.equipoTorneo.findUnique({
     where: { id: equipoTorneoId },
-    include: { capitan: JUGADOR_CON_USUARIO, equipoClub: { include: { capitan: JUGADOR_CON_USUARIO } } },
+    include: includeMandoEquipo,
   });
   if (!equipoTorneo) return { equipoTorneo: null, esCapitan: false };
-  const esCapitan =
-    equipoTorneo.capitan?.usuarioId === usuarioSub || equipoTorneo.equipoClub?.capitan?.usuarioId === usuarioSub;
-  return { equipoTorneo, esCapitan };
+  return { equipoTorneo, esCapitan: tieneMandoEnEquipo(equipoTorneo, usuarioSub) };
 }
 
 // El admin, o el capitán de este equipo, pueden crear el partido (fecha +
@@ -288,7 +317,7 @@ router.post("/equipos/:id/partidos", requireAdminOSocio, async (req, res) => {
     const { equipoTorneo, esCapitan } = await esCapitanDeEquipo(id, req.usuario?.sub);
     if (!equipoTorneo) return res.status(404).json({ error: "Equipo no encontrado" });
     if (!esAdmin && !esCapitan) {
-      return res.status(403).json({ error: "Solo el capitán de este equipo o un admin pueden añadir partidos" });
+      return res.status(403).json({ error: "Solo el capitán o un co-capitán de este equipo, o un admin, pueden añadir partidos" });
     }
   }
 
@@ -304,22 +333,16 @@ router.put("/partidos/:id", requireAdminOSocio, async (req, res) => {
   const partido = await prisma.partido.findUnique({
     where: { id },
     include: {
-      equipoTorneo: {
-        include: { capitan: JUGADOR_CON_USUARIO, equipoClub: { include: { capitan: JUGADOR_CON_USUARIO } }, torneo: true },
-      },
+      equipoTorneo: { include: { ...includeMandoEquipo, torneo: true } },
     },
   });
   if (!partido) return res.status(404).json({ error: "Partido no encontrado" });
 
   if (!req.esAdminPanel) {
     const esAdmin = req.usuario?.rol === "admin";
-    // El capitán puede ser el de esta inscripción concreta (poco usado) o,
-    // el caso real, el capitán de la plantilla del equipo del club.
-    const esCapitan =
-      partido.equipoTorneo.capitan?.usuarioId === req.usuario?.sub ||
-      partido.equipoTorneo.equipoClub?.capitan?.usuarioId === req.usuario?.sub;
+    const esCapitan = tieneMandoEnEquipo(partido.equipoTorneo, req.usuario?.sub);
     if (!esAdmin && !esCapitan) {
-      return res.status(403).json({ error: "Solo el capitán de este equipo o un admin pueden confirmar este partido" });
+      return res.status(403).json({ error: "Solo el capitán o un co-capitán de este equipo, o un admin, pueden confirmar este partido" });
     }
   }
 

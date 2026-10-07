@@ -444,10 +444,32 @@ function filaDesdeRanking(t) {
 // Devuelve solo los partidos en los que juega `teamId`, desde el punto de
 // vista de nuestro equipo: { idExterno, fecha, rival, enCasa, terminado,
 // resultado ("nuestros-suyos" o null) }.
+// Fecha de una jornada: la match_start que comparten la mayoría de sus
+// partidos. Connection trae a veces el match_start de un partido suelto con
+// la fecha de OTRA jornada (visto en 2026-10 con VIKINGS EXTREME, grupo 10
+// de la Liga Combo: J10, J11, J13-J16 y J18 de la segunda vuelta venían con
+// fechas cruzadas, mientras que el calendario oficial en PDF las tiene bien),
+// así que la fecha de nuestro partido se toma de la jornada entera y no de
+// su propio match_start. Si no hay mayoría clara (empate), null y se usa la
+// del propio partido.
+function fechaDeJornada(matches) {
+  const cuenta = new Map();
+  for (const m of matches) {
+    const t = Number(m.match_start);
+    if (!Number.isFinite(t) || t <= 0) continue;
+    cuenta.set(t, (cuenta.get(t) || 0) + 1);
+  }
+  const orden = [...cuenta.entries()].sort((a, b) => b[1] - a[1]);
+  if (orden.length === 0) return null;
+  if (orden.length > 1 && orden[0][1] === orden[1][1]) return null;
+  return orden[0][0];
+}
+
 function partidosDeEquipo(cal, teamId) {
   const dias = cal?.calendar?.days || [];
   const lista = [];
   for (const d of dias) {
+    const fechaJornada = fechaDeJornada(d.matches || []);
     for (const m of d.matches || []) {
       const enCasa = String(m.local_team_id) === teamId;
       if (!enCasa && String(m.visitor_team_id) !== teamId) continue;
@@ -457,7 +479,7 @@ function partidosDeEquipo(cal, teamId) {
       lista.push({
         idExterno: `connection:${m.match_id}`,
         jornada: Number(m.day_number) + 1,
-        fecha: new Date(Number(m.match_start)),
+        fecha: new Date(fechaJornada ?? Number(m.match_start)),
         rival: enCasa ? m.visitor_name : m.local_name,
         enCasa,
         terminado,

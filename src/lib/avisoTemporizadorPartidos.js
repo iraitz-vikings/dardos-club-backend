@@ -16,6 +16,17 @@ import { urlPublicaCuadrante } from "./enlacesPublicos.js";
 import { resolverMensaje } from "./mensajesAvisos.js";
 
 
+// El cron corre en el segundo :00 de cada minuto, pero el plazo de cada
+// partido acaba en cualquier segundo (el de cuando se marcó "en curso").
+// Antes solo se avisaba en la primera pasada con 60 s o menos de margen, así
+// que el "queda 1 minuto" salía con entre 0 y 60 s restantes (en una prueba
+// del 2026-10-07, con 16 s), y llegaba al móvil con el tiempo ya agotado.
+// Ahora, si en una pasada quedan entre 60 y 120 s, se programa un
+// temporizador para volver a revisar justo al llegar al minuto exacto. Es en
+// memoria: si el servidor se reinicia en medio, la siguiente pasada del
+// cron lo sigue cubriendo como antes.
+const programados = new Set();
+
 export async function enviarAvisosUnMinutoTemporizador() {
   const candidatos = await prisma.cuadroPartido.findMany({
     where: {
@@ -41,9 +52,29 @@ export async function enviarAvisosUnMinutoTemporizador() {
     const limite = new Date(p.enCursoDesde).getTime() + torneo.temporizadorMinutos * 60 * 1000;
     const restanteMs = limite - ahora;
 
-    // Todavía no ha llegado al último minuto: se revisa de nuevo en el
-    // siguiente minuto del cron.
-    if (restanteMs > 60 * 1000) continue;
+    // Todavía no ha llegado al último minuto. Si llega antes de la
+    // siguiente pasada del cron, se programa una revisión para ese momento
+    // exacto (+0,5 s de margen); si no, la siguiente pasada lo vuelve a mirar.
+    if (restanteMs > 60 * 1000) {
+      if (restanteMs <= 120 * 1000 && !programados.has(p.id)) {
+        programados.add(p.id);
+        setTimeout(() => {
+          programados.delete(p.id);
+          enviarAvisosUnMinutoTemporizador().catch((err) =>
+            console.error("Error enviando avisos de temporizador:", err.message || err)
+          );
+        }, restanteMs - 60 * 1000 + 500);
+      }
+      continue;
+    }
+
+    // Se "reserva" el aviso antes de mandarlo: la pasada del cron y la
+    // revisión programada pueden coincidir, y así solo una de las dos avisa.
+    const { count } = await prisma.cuadroPartido.updateMany({
+      where: { id: p.id, avisoUnMinutoEnviado: false },
+      data: { avisoUnMinutoEnviado: true },
+    });
+    if (count === 0) continue;
 
     // Se marca como enviado sin avisar (para no reintentar cada minuto) si:
     // el torneo tiene los avisos desactivados o está en la papelera, o si ya
@@ -89,8 +120,6 @@ export async function enviarAvisosUnMinutoTemporizador() {
         }
       }
     }
-
-    await prisma.cuadroPartido.update({ where: { id: p.id }, data: { avisoUnMinutoEnviado: true } });
   }
 
   return { enviados };

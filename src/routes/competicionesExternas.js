@@ -405,7 +405,7 @@ router.get("/calendario", requireAuth, async (_req, res) => {
 
   const partidosExternos = await prisma.partido.findMany({
     where: { fijado: true, fecha: { gte: inicioSemana, lt: finSemana } },
-    include: { maquina: true, equipoTorneo: { include: { torneo: { include: { plataforma: true } } } } },
+    include: { maquina: true, equipoTorneo: { include: { equipoClub: true, torneo: { include: { plataforma: true } } } } },
   });
 
   const cuadroPartidosEnCurso = await prisma.cuadroPartido.findMany({
@@ -424,7 +424,7 @@ router.get("/calendario", requireAuth, async (_req, res) => {
       fecha: p.fecha,
       maquina: p.maquina?.nombre || null,
       rival: p.rival,
-      equipo: p.equipoTorneo.nombreEquipo || CLUB_NOMBRE,
+      equipo: p.equipoTorneo.equipoClub?.nombre || p.equipoTorneo.nombreEquipo || CLUB_NOMBRE,
       torneo: p.equipoTorneo.torneo?.nombre,
       plataforma: p.equipoTorneo.torneo?.plataforma?.nombre,
     })),

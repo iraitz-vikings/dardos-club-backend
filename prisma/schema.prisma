@@ -370,6 +370,11 @@ model TorneoClub {
   // reintentar. Pensado para torneos informales/de prueba donde no interesa
   // molestar a los socios. Se decide al crear el torneo (ver POST /).
   notificaciones   Boolean  @default(true)
+  // Competición de acero (2026-10-07): organizada con la web pero que no
+  // es del club ni tiene plataforma/fabricante detrás (torneos y ligas de
+  // dardos de acero). Solo cambia dónde y cómo se muestra (pestaña "Acero"
+  // en Competiciones, etiqueta en listados); por lo demás funciona igual.
+  acero            Boolean  @default(false)
   // "Anclar a inicio": si está a true, esta competición sale en la pestaña
   // pública "Torneos" (/torneos) de los jugadores que participan en ella —
   // ver GET /mis-competiciones en src/routes/partidasHerramienta.js.
@@ -607,6 +612,11 @@ model LigaClub {
   // reintentar. Pensado para ligas informales/de prueba donde no interesa
   // molestar a los socios. Se decide al crear la liga (ver POST /).
   notificaciones   Boolean  @default(true)
+  // Competición de acero (2026-10-07): organizada con la web pero que no
+  // es del club ni tiene plataforma/fabricante detrás (torneos y ligas de
+  // dardos de acero). Solo cambia dónde y cómo se muestra (pestaña "Acero"
+  // en Competiciones, etiqueta en listados); por lo demás funciona igual.
+  acero            Boolean  @default(false)
   // "Anclar a inicio": si está a true, esta competición sale en la pestaña
   // pública "Torneos" (/torneos) de los jugadores que participan en ella —
   // ver GET /mis-competiciones en src/routes/partidasHerramienta.js.

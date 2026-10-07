@@ -284,7 +284,7 @@ router.get("/privados", requireAuth, async (_req, res) => {
   const torneos = await prisma.torneoClub.findMany({
     where: { visibilidad: "privado", finalizado: true, borradoEn: null },
     orderBy: { fechaInicio: "desc" },
-    select: { id: true, nombre: true, fechaInicio: true, fechaFin: true },
+    select: { id: true, nombre: true, fechaInicio: true, fechaFin: true, acero: true },
   });
   res.json(torneos);
 });
@@ -295,7 +295,7 @@ router.get("/activos", requireAuth, async (_req, res) => {
   const torneos = await prisma.torneoClub.findMany({
     where: { finalizado: false, borradoEn: null },
     orderBy: { fechaInicio: "desc" },
-    select: { id: true, nombre: true, fechaInicio: true, fechaFin: true, modalidad: true },
+    select: { id: true, nombre: true, fechaInicio: true, fechaFin: true, modalidad: true, acero: true },
   });
   res.json(torneos);
 });
@@ -336,7 +336,7 @@ router.get("/:id", async (req, res) => {
 });
 
 router.post("/", requireAdmin, async (req, res) => {
-  const { nombre, descripcion, fechaInicio, fechaFin, insigniaUrl, visibilidad, numeroMaquinas, tipoEliminacion, modalidad, afectaCalendario, notificaciones, temporizadorActivo, temporizadorMinutos, modoJornadas, puntosPorPosicion, imagenEliminadoUrl, imagenCampeonUrl, imagenBienvenidaUrl, configuracionHerramienta, videoDirectoUrl, mensajesAvisos } = req.body;
+  const { nombre, descripcion, fechaInicio, fechaFin, insigniaUrl, visibilidad, numeroMaquinas, tipoEliminacion, modalidad, afectaCalendario, notificaciones, acero, temporizadorActivo, temporizadorMinutos, modoJornadas, puntosPorPosicion, imagenEliminadoUrl, imagenCampeonUrl, imagenBienvenidaUrl, configuracionHerramienta, videoDirectoUrl, mensajesAvisos } = req.body;
   if (!nombre || !fechaInicio || !fechaFin) {
     return res.status(400).json({ error: "Faltan campos obligatorios" });
   }
@@ -364,6 +364,7 @@ router.post("/", requireAdmin, async (req, res) => {
       modalidad: modalidadesValidas.includes(modalidad) ? modalidad : "individual",
       afectaCalendario: afectaCalendario !== undefined ? !!afectaCalendario : true,
       notificaciones: notificaciones !== undefined ? !!notificaciones : true,
+      acero: !!acero,
       temporizadorActivo: !!temporizadorActivo,
       temporizadorMinutos: temporizador.valor,
       modoJornadas: !!modoJornadas,
@@ -381,7 +382,7 @@ router.post("/", requireAdmin, async (req, res) => {
 
 router.put("/:id", requireAdmin, async (req, res) => {
   const { id } = req.params;
-  const { nombre, descripcion, fechaInicio, fechaFin, insigniaUrl, visibilidad, numeroMaquinas, tipoEliminacion, finalizado, notificaciones, anclarInicio, temporizadorActivo, temporizadorMinutos, modoJornadas, puntosPorPosicion, imagenEliminadoUrl, imagenCampeonUrl, imagenBienvenidaUrl, configuracionHerramienta, videoDirectoUrl, mensajesAvisos } = req.body;
+  const { nombre, descripcion, fechaInicio, fechaFin, insigniaUrl, visibilidad, numeroMaquinas, tipoEliminacion, finalizado, notificaciones, acero, anclarInicio, temporizadorActivo, temporizadorMinutos, modoJornadas, puntosPorPosicion, imagenEliminadoUrl, imagenCampeonUrl, imagenBienvenidaUrl, configuracionHerramienta, videoDirectoUrl, mensajesAvisos } = req.body;
   const puntos = validarPuntosPorPosicion(puntosPorPosicion);
   if (!puntos.ok) return res.status(400).json({ error: puntos.error });
   const herramienta = validarConfiguracionHerramienta(configuracionHerramienta);
@@ -411,6 +412,7 @@ router.put("/:id", requireAdmin, async (req, res) => {
         tipoEliminacion: tipoEliminacion || undefined,
         finalizado: finalizado !== undefined ? !!finalizado : undefined,
         notificaciones: notificaciones !== undefined ? !!notificaciones : undefined,
+        acero: acero !== undefined ? !!acero : undefined,
         anclarInicio: anclarInicio !== undefined ? !!anclarInicio : undefined,
         temporizadorActivo: temporizadorActivo !== undefined ? !!temporizadorActivo : undefined,
         temporizadorMinutos: temporizadorActivo !== undefined ? temporizador.valor : undefined,

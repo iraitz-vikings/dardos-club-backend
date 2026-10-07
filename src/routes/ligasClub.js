@@ -59,7 +59,7 @@ router.get("/privados", requireAuth, async (_req, res) => {
   const ligas = await prisma.ligaClub.findMany({
     where: { visibilidad: "privado", finalizado: true, borradoEn: null },
     orderBy: { fechaInicio: "desc" },
-    select: { id: true, nombre: true, fechaInicio: true, fechaFin: true },
+    select: { id: true, nombre: true, fechaInicio: true, fechaFin: true, acero: true },
   });
   res.json(ligas);
 });
@@ -69,7 +69,7 @@ router.get("/activos", requireAuth, async (_req, res) => {
   const ligas = await prisma.ligaClub.findMany({
     where: { finalizado: false, borradoEn: null },
     orderBy: { fechaInicio: "desc" },
-    select: { id: true, nombre: true, fechaInicio: true, fechaFin: true, modalidad: true },
+    select: { id: true, nombre: true, fechaInicio: true, fechaFin: true, modalidad: true, acero: true },
   });
   res.json(ligas);
 });
@@ -118,7 +118,7 @@ function validarNumeroGrupos(valor) {
 }
 
 router.post("/", requireAdmin, async (req, res) => {
-  const { nombre, descripcion, fechaInicio, fechaFin, insigniaUrl, visibilidad, modalidad, vueltas, numeroParticipantes, numeroGrupos, metodoSorteoParejas, afectaCalendario, notificaciones, imagenEliminadoUrl, imagenCampeonUrl, imagenBienvenidaUrl, configuracionHerramienta, videoDirectoUrl, mensajesAvisos } = req.body;
+  const { nombre, descripcion, fechaInicio, fechaFin, insigniaUrl, visibilidad, modalidad, vueltas, numeroParticipantes, numeroGrupos, metodoSorteoParejas, afectaCalendario, notificaciones, acero, imagenEliminadoUrl, imagenCampeonUrl, imagenBienvenidaUrl, configuracionHerramienta, videoDirectoUrl, mensajesAvisos } = req.body;
   if (!nombre || !fechaInicio || !fechaFin || !numeroParticipantes) {
     return res.status(400).json({ error: "Faltan campos obligatorios" });
   }
@@ -152,6 +152,7 @@ router.post("/", requireAdmin, async (req, res) => {
       metodoSorteoParejas: metodosValidos.includes(metodoSorteoParejas) ? metodoSorteoParejas : null,
       afectaCalendario: afectaCalendario !== undefined ? !!afectaCalendario : true,
       notificaciones: notificaciones !== undefined ? !!notificaciones : true,
+      acero: !!acero,
       imagenEliminadoUrl: imagenEliminadoUrl || null,
       imagenCampeonUrl: imagenCampeonUrl || null,
       imagenBienvenidaUrl: imagenBienvenidaUrl || null,
@@ -165,7 +166,7 @@ router.post("/", requireAdmin, async (req, res) => {
 
 router.put("/:id", requireAdmin, async (req, res) => {
   const { id } = req.params;
-  const { nombre, descripcion, fechaInicio, fechaFin, insigniaUrl, visibilidad, finalizado, numeroGrupos, notificaciones, anclarInicio, imagenEliminadoUrl, imagenCampeonUrl, imagenBienvenidaUrl, configuracionHerramienta, videoDirectoUrl, mensajesAvisos } = req.body;
+  const { nombre, descripcion, fechaInicio, fechaFin, insigniaUrl, visibilidad, finalizado, numeroGrupos, notificaciones, acero, anclarInicio, imagenEliminadoUrl, imagenCampeonUrl, imagenBienvenidaUrl, configuracionHerramienta, videoDirectoUrl, mensajesAvisos } = req.body;
 
   let numeroGruposData;
   if (numeroGrupos !== undefined) {
@@ -193,6 +194,7 @@ router.put("/:id", requireAdmin, async (req, res) => {
         finalizado: finalizado !== undefined ? !!finalizado : undefined,
         numeroGrupos: numeroGrupos !== undefined ? numeroGruposData : undefined,
         notificaciones: notificaciones !== undefined ? !!notificaciones : undefined,
+        acero: acero !== undefined ? !!acero : undefined,
         anclarInicio: anclarInicio !== undefined ? !!anclarInicio : undefined,
         imagenEliminadoUrl: imagenEliminadoUrl !== undefined ? imagenEliminadoUrl || null : undefined,
         imagenCampeonUrl: imagenCampeonUrl !== undefined ? imagenCampeonUrl || null : undefined,

@@ -28,7 +28,7 @@ router.get("/", requireAuth, async (req, res) => {
 
   const externos = await prisma.partido.findMany({
     where: { fijado: true, fecha: rango },
-    include: { maquina: true, equipoTorneo: { include: { torneo: { include: { plataforma: true } } } } },
+    include: { maquina: true, equipoTorneo: { include: { equipoClub: true, torneo: { include: { plataforma: true } } } } },
   });
 
   const internosTorneo = await prisma.cuadroPartido.findMany({
@@ -51,7 +51,9 @@ router.get("/", requireAuth, async (req, res) => {
       id: `ext-${p.id}`,
       fecha: p.fecha,
       maquina: p.maquina?.nombre || null,
-      titulo: `${p.equipoTorneo.nombreEquipo || CLUB_NOMBRE} vs ${p.rival || "?"}`,
+      // equipoClub.nombre primero: en las inscripciones nuevas nombreEquipo
+      // va vacío, y si no salía "Vikings vs …" sin decir qué equipo juega.
+      titulo: `${p.equipoTorneo.equipoClub?.nombre || p.equipoTorneo.nombreEquipo || CLUB_NOMBRE} vs ${p.rival || "?"}`,
       competicion: `${p.equipoTorneo.torneo?.nombre || ""}${p.equipoTorneo.torneo?.plataforma ? ` (${p.equipoTorneo.torneo.plataforma.nombre})` : ""}`,
       // Las competiciones externas no tienen página propia en la web del
       // club, así que no se enlazan.

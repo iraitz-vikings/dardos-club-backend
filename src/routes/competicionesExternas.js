@@ -3,7 +3,7 @@ import { prisma } from "../lib/prisma.js";
 import { requireAuth, verificarTokenSocio } from "./auth.js";
 import { requireAdmin, adminRateLimiter } from "../middleware/requireAdmin.js";
 import { actualizarClasificacionTorneo, actualizarTodasLasClasificaciones } from "../scrapers/actualizarClasificaciones.js";
-import { notificarJugadores } from "./notificar.js";
+import { notificarJugadores, TTL_AVISO_NORMAL } from "./notificar.js";
 import { JUGADOR_PUBLICO, JUGADOR_CON_USUARIO } from "../lib/selectsJugador.js";
 import { CLUB_NOMBRE } from "../lib/club.js";
 
@@ -370,16 +370,22 @@ router.put("/partidos/:id", requireAdminOSocio, async (req, res) => {
       .then((roster) => {
         const nombreEquipo = partido.equipoTorneo.equipoClub?.nombre || "Tu equipo";
         const nombreTorneo = partido.equipoTorneo.torneo?.nombre || "";
-        const fechaTexto = new Date(actualizado.fecha).toLocaleDateString("es-ES", {
-          day: "2-digit",
-          month: "2-digit",
-        });
+        // Día de la semana, fecha y hora en hora de España (el servidor va
+        // en UTC: sin timeZone, la hora salía 1-2 h antes y el día podía
+        // cambiar cerca de medianoche). Antes solo se ponía "dd/mm".
+        const fecha = new Date(actualizado.fecha);
+        const zona = { timeZone: "Europe/Madrid" };
+        const diaTexto = fecha.toLocaleDateString("es-ES", { ...zona, weekday: "long", day: "numeric", month: "numeric" }).replace(",", "");
+        const horaTexto = fecha.toLocaleTimeString("es-ES", { ...zona, hour: "2-digit", minute: "2-digit" });
+        const maquinaTexto = actualizado.maquina?.nombre ? `, en ${actualizado.maquina.nombre}` : "";
         return notificarJugadores(
           roster.map((r) => r.jugadorId),
           {
             titulo: `Partido fijado: ${nombreEquipo}`,
             tipo: "partidoFijado",
-            cuerpo: `${actualizado.rival ? `Contra ${actualizado.rival}` : "Partido"} el ${fechaTexto}${nombreTorneo ? ` (${nombreTorneo})` : ""}.`,
+            cuerpo: `${actualizado.rival ? `Contra ${actualizado.rival}` : "Partido"} el ${diaTexto} a las ${horaTexto}${maquinaTexto}${nombreTorneo ? ` (${nombreTorneo})` : ""}.`,
+            tag: `partido-ext-${actualizado.id}`,
+            ttl: TTL_AVISO_NORMAL,
           }
         );
       })

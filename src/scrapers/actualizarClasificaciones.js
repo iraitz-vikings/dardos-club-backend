@@ -330,7 +330,7 @@ async function equiposConPartidoPorActualizar(equipos, ahora = new Date()) {
 // null.
 async function motivoActualizarLigaIndividual(torneo, ahora = new Date()) {
   if (torneo.equipos.length === 0) return "primera sincronización";
-  if (ahora.getDay() === 1) return "cierre de jornada (lunes)";
+  if (ahora.getDay() === 6) return "sincronización completa (sábado)";
   const confirmadosJugados = await prisma.partido.count({
     where: {
       equipoTorneoId: { in: torneo.equipos.map((e) => e.id) },
@@ -380,13 +380,13 @@ export async function actualizarTodasLasClasificaciones({ cron = false, otrasPla
       //  - la mañana siguiente a un partido CONFIRMADO (fijado, con fecha ya
       //    pasada y sin resultado; si Connection tarda en publicarlo se
       //    reintenta hasta una semana), o
-      //  - los lunes, tras el cierre de jornada (domingo 23:55): recoge los
-      //    resultados de partidos que nadie confirmó en la web, el calendario
-      //    y a los jugadores nuevos. También si aún no tiene inscripciones
-      //    (primera sincronización).
+      //  - los sábados por la mañana, entera (decisión de Iraitz): recoge
+      //    los resultados de partidos que nadie confirmó en la web, el
+      //    calendario y a los jugadores nuevos. También si aún no tiene
+      //    inscripciones (primera sincronización).
       const motivo = await motivoActualizarLigaIndividual(torneo);
       if (motivo) torneos.push(torneo);
-      else saltados.push({ torneo: torneo.nombre, motivo: "ningún partido confirmado jugado ayer (se revisa entera los lunes)" });
+      else saltados.push({ torneo: torneo.nombre, motivo: "ningún partido confirmado jugado ayer (se revisa entera los sábados)" });
     } else {
       // Los equipos marcados como inactivos ya terminaron: no se miran.
       const activos = torneo.equipos.filter((eq) => eq.equipoClub?.activo !== false);

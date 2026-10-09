@@ -325,6 +325,23 @@ async function equiposConPartidoPorActualizar(equipos, ahora = new Date()) {
   });
 }
 
+// ¿Toca actualizar hoy esta liga individual de Connection en el cron? Ver
+// el comentario en actualizarTodasLasClasificaciones. Devuelve el motivo o
+// null.
+async function motivoActualizarLigaIndividual(torneo, ahora = new Date()) {
+  if (torneo.equipos.length === 0) return "primera sincronización";
+  if (ahora.getDay() === 1) return "cierre de jornada (lunes)";
+  const confirmadosJugados = await prisma.partido.count({
+    where: {
+      equipoTorneoId: { in: torneo.equipos.map((e) => e.id) },
+      fijado: true,
+      resultado: null,
+      fecha: { lte: ahora, gt: new Date(ahora.getTime() - VENTANA_RESULTADO_MS) },
+    },
+  });
+  return confirmadosJugados > 0 ? "partido confirmado jugado" : null;
+}
+
 // Recorre todos los torneos/ligas externos NO terminados y actualiza la
 // clasificación de cada uno, uno detrás de otro (no en paralelo: cada
 // actualización abre su propio navegador Playwright, y lanzar varios a la
@@ -357,11 +374,19 @@ export async function actualizarTodasLasClasificaciones({ cron = false, otrasPla
       if (otrasPlataformas) torneos.push(torneo);
       else saltados.push({ torneo: torneo.nombre, motivo: "fin de semana: solo se actualiza de lunes a viernes" });
     } else if (!torneo.equipos.some((eq) => eq.equipoClubId)) {
-      // Liga INDIVIDUAL de Connection (ej. Super One): los partidos se
-      // juegan cualquier día de la ventana de cada jornada y pueden entrar
-      // jugadores nuevos, así que se revisa cada mañana (es ligero: solo
-      // llamadas a la API, una sesión de navegador).
-      torneos.push(torneo);
+      // Liga INDIVIDUAL de Connection (ej. Super One): cada jugador juega
+      // cuando queda con su rival dentro de la ventana de la jornada. Se
+      // actualiza solo:
+      //  - la mañana siguiente a un partido CONFIRMADO (fijado, con fecha ya
+      //    pasada y sin resultado; si Connection tarda en publicarlo se
+      //    reintenta hasta una semana), o
+      //  - los lunes, tras el cierre de jornada (domingo 23:55): recoge los
+      //    resultados de partidos que nadie confirmó en la web, el calendario
+      //    y a los jugadores nuevos. También si aún no tiene inscripciones
+      //    (primera sincronización).
+      const motivo = await motivoActualizarLigaIndividual(torneo);
+      if (motivo) torneos.push(torneo);
+      else saltados.push({ torneo: torneo.nombre, motivo: "ningún partido confirmado jugado ayer (se revisa entera los lunes)" });
     } else {
       // Los equipos marcados como inactivos ya terminaron: no se miran.
       const activos = torneo.equipos.filter((eq) => eq.equipoClub?.activo !== false);

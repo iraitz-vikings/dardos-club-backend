@@ -421,29 +421,51 @@ async function apiGet(page, getCabeceras, ruta) {
   return JSON.parse(r.texto);
 }
 
-function filaDesdeRanking(t) {
-  return {
-    posicion: t.position,
-    nombreEquipo: t.team_name,
-    puntos: t.points ?? null,
-    partidosJugados: t.played ?? null,
-    partidosGanados: t.won ?? null,
-    partidosPerdidos: t.lost ?? null,
-    partidosEmpatados: t.drawn ?? null,
-    juegosGanados: t.score_for ?? null,
-    juegosPerdidos: t.score_against ?? null,
-  };
+// Quita el prefijo de liga que Connection pone a todos los nombres
+// ("CB26V-LOS PITOCHAS" → "LOS PITOCHAS", "SU262-Walter" → "Walter").
+function sinPrefijo(nombre) {
+  return String(nombre || "").replace(/^[A-Z0-9]{3,8}-/i, "").trim() || String(nombre || "");
+}
+
+// En los grupos impares Connection mete un "equipo" ficticio de descanso
+// (ej. "SU262-PLATA4", ciudad "ATSEDENA", provincia "DESCANSO").
+function esDescanso(nombre, ciudad, provincia) {
+  return /descanso|atsedena/i.test(`${ciudad || ""} ${provincia || ""}`);
+}
+
+function filasRanking(rankings) {
+  return [...(rankings || [])]
+    .filter((t) => !esDescanso(t.team_name, t.team_city, t.team_region))
+    .sort((a, b) => a.position - b.position)
+    .map((t) => ({
+      posicion: t.position,
+      nombreEquipo: sinPrefijo(t.team_name),
+      puntos: t.points ?? null,
+      partidosJugados: t.played ?? null,
+      partidosGanados: t.won ?? null,
+      partidosPerdidos: t.lost ?? null,
+      partidosEmpatados: t.drawn ?? null,
+      juegosGanados: t.score_for ?? null,
+      juegosPerdidos: t.score_against ?? null,
+    }));
 }
 
 // Calendario de un grupo (GET /league/{l}/group/{g}/calendar):
 //   { calendar: { days: [{ day_number, matches: [{ match_id, match_start,
-//     match_state (0 pendiente, 1 en juego, 2 terminado), local_team_id,
-//     local_name, visitor_team_id, visitor_name, local_score,
-//     visitor_score, ... }] }] } }
-// match_start es el inicio de la jornada (ej. viernes 18:00 hora España).
-// Devuelve solo los partidos en los que juega `teamId`, desde el punto de
-// vista de nuestro equipo: { idExterno, fecha, rival, enCasa, terminado,
-// resultado ("nuestros-suyos" o null) }.
+//     match_end, match_state (0 pendiente, 1 en juego, 2 terminado),
+//     local_team_id, local_name, local_region, visitor_team_id,
+//     visitor_name, visitor_region, local_score, visitor_score }] }] } }
+//
+// Dos tipos de jornada:
+//  - Ligas de equipos (Combo): match_start es el día y hora fijos de la
+//    jornada (ej. viernes 18:00) → esa es la fecha.
+//  - Ligas individuales (Super One): la jornada es una VENTANA de varias
+//    semanas (match_start = apertura, match_end = fecha límite) y cada
+//    jugador queda con su rival → se usa la FECHA LÍMITE; el jugador pone la
+//    fecha real al confirmar.
+// Se descartan los "partidos" contra el equipo de descanso.
+// idExterno incluye nuestro team_id porque en una liga individual dos
+// jugadores del club pueden enfrentarse entre sí (mismo match_id).
 function partidosDeEquipo(cal, teamId) {
   const dias = cal?.calendar?.days || [];
   const lista = [];
@@ -451,14 +473,23 @@ function partidosDeEquipo(cal, teamId) {
     for (const m of d.matches || []) {
       const enCasa = String(m.local_team_id) === teamId;
       if (!enCasa && String(m.visitor_team_id) !== teamId) continue;
+      const rivalNombre = enCasa ? m.visitor_name : m.local_name;
+      const rivalCiudad = enCasa ? m.visitor_city : m.local_city;
+      const rivalProvincia = enCasa ? m.visitor_region : m.local_region;
+      if (esDescanso(rivalNombre, rivalCiudad, rivalProvincia)) continue;
+      const inicio = Number(m.match_start);
+      const fin = Number(m.match_end);
+      const esVentana = fin && fin - inicio > 2 * 24 * 3600 * 1000;
       const terminado = Number(m.match_state) === 2;
       const nuestros = enCasa ? m.local_score : m.visitor_score;
       const suyos = enCasa ? m.visitor_score : m.local_score;
       lista.push({
-        idExterno: `connection:${m.match_id}`,
+        idExterno: `connection:${m.match_id}:${teamId}`,
+        idExternoAntiguo: `connection:${m.match_id}`,
         jornada: Number(m.day_number) + 1,
-        fecha: new Date(Number(m.match_start)),
-        rival: enCasa ? m.visitor_name : m.local_name,
+        fecha: new Date(esVentana ? fin : inicio),
+        fechaEsLimite: !!esVentana,
+        rival: sinPrefijo(rivalNombre),
         enCasa,
         terminado,
         resultado: terminado ? `${nuestros}-${suyos}` : null,
@@ -542,7 +573,7 @@ export async function extraerClasificacionEquiposConnection(ligaIdsTexto, equipo
           equipoTorneoId: eq.id,
           ok: true,
           grupo: `${g.ligaId} · ${g.nombreGrupo}`,
-          filas: [...g.rankings].sort((a, b) => a.position - b.position).map(filaDesdeRanking),
+          filas: filasRanking(g.rankings),
           partidos,
           avisoPartidos,
         });
@@ -558,6 +589,134 @@ export async function extraerClasificacionEquiposConnection(ligaIdsTexto, equipo
             ? `"${quien}" no aparece en ningún grupo de las ligas ${ligaIds.join(", ")}. Pon su nombre exacto de Connection en la inscripción del equipo.${extra}`
             : `"${quien}" coincide con varios equipos de Connection. Pon su nombre exacto en la inscripción del equipo.`,
       });
+    }
+    return resultados;
+  } finally {
+    await browser.close();
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Ligas INDIVIDUALES (ej. SUPER ONE 2026 ORO/PLATA/BRONCE, ids 25233-25235)
+//
+// No se casa por equipos: se parte de los jugadores del club que tienen
+// alias de Connection guardado en su perfil. Para cada uno:
+//   1. GET /community/{miPlayerId}?filter={alias}&pageNumber=1 → su player id
+//      (coincidencia exacta de alias). La cuenta logueada no se encuentra a
+//      sí misma en ese buscador: se reconoce comparando con su propio alias
+//      (GET /player/{miPlayerId}/data).
+//   2. GET /player/{id}/leagues → ligas en las que juega, con teamId,
+//      groupId y groupName. En una liga individual cada jugador es un
+//      "equipo" de una persona (ej. "SU262-Fabyts").
+//   3. Si juega en alguna de las ligas indicadas: tabla de su grupo y sus
+//      partidos (mismo formato que en las ligas de equipos).
+//
+// jugadores: [{ jugadorId, alias, localidad? }]. Devuelve [{ jugadorId, alias,
+// encontrado, juega, nombreConnection?, grupo?, filas?, partidos?,
+// avisoPartidos?, error? }].
+// Mayúsculas y sin tildes, para comparar localidades ("Beraun" ≈ "BERAUN").
+function normalizarTexto(t) {
+  return String(t || "")
+    .normalize("NFD")
+    .replace(/[\u0300-\u036f]/g, "")
+    .toUpperCase()
+    .replace(/[^A-Z0-9Ñ]+/g, " ")
+    .trim();
+}
+
+export async function extraerLigaIndividualConnection(ligaIdsTexto, jugadores) {
+  const ligaIds = String(ligaIdsTexto || "")
+    .split(/[^0-9]+/)
+    .filter(Boolean);
+  if (ligaIds.length === 0) {
+    throw new Error(
+      'Falta el "Id externo" del torneo: los ids de liga de Connection Darts separados por comas (ej. 25233,25234,25235).'
+    );
+  }
+
+  const browser = await chromium.launch({ headless: true });
+  try {
+    const context = await browser.newContext(CONTEXT_OPTIONS);
+    const page = await context.newPage();
+    const getCabeceras = await abrirSesionApiConnection(page);
+    const api = (ruta) => apiGet(page, getCabeceras, ruta);
+    const miId = getCabeceras().playerid;
+
+    let miAlias = "";
+    try {
+      const yo = await api(`/player/${miId}/data`);
+      miAlias = (yo.players?.[0]?.alias || "").trim().toUpperCase();
+    } catch {
+      /* sin alias propio: solo afecta a la autobúsqueda */
+    }
+
+    const cacheGrupos = new Map(); // `${ligaId}:${grupoId}` → { rankings, calendario }
+    const resultados = [];
+
+    for (const { jugadorId, alias, localidad } of jugadores) {
+      const aliasNorm = (alias || "").trim().toUpperCase();
+      try {
+        let playerId = null;
+        const busqueda = await api(`/community/${miId}?filter=${encodeURIComponent(alias.trim())}&pageNumber=1`);
+        // Connection permite alias repetidos: si hay varios exactos, se
+        // elige por la localidad guardada en el perfil del socio
+        // (notaBusqueda, la misma que usan las medias).
+        const exactos = (busqueda.community?.data || []).filter((p) => (p.alias || "").trim().toUpperCase() === aliasNorm);
+        const loc = normalizarTexto(localidad);
+        const candidatos = loc
+          ? exactos.filter((p) => normalizarTexto(`${p.city || ""} ${p.region || ""}`).includes(loc))
+          : exactos;
+        if (candidatos.length > 1) {
+          resultados.push({
+            jugadorId,
+            alias,
+            encontrado: false,
+            error: `hay ${candidatos.length} jugadores "${alias}" en Connection; indica tu localidad en el perfil para saber cuál eres`,
+          });
+          continue;
+        }
+        if (candidatos.length === 1) playerId = candidatos[0].id;
+        else if (exactos.length === 0 && miAlias && (miAlias === aliasNorm || miAlias.startsWith(aliasNorm + " "))) playerId = miId;
+        if (!playerId) {
+          resultados.push({ jugadorId, alias, encontrado: false });
+          continue;
+        }
+
+        const { leagues = [] } = await api(`/player/${playerId}/leagues`);
+        const liga = leagues.find((l) => ligaIds.includes(String(l.id)));
+        if (!liga) {
+          resultados.push({ jugadorId, alias, encontrado: true, juega: false });
+          continue;
+        }
+
+        const clave = `${liga.id}:${liga.groupId}`;
+        if (!cacheGrupos.has(clave)) {
+          const archivada = liga.archived ? 1 : 0;
+          const r = await api(`/league/${liga.id}/group/${liga.groupId}/ranking?teamName=&archived=${archivada}`);
+          let calendario = null;
+          let errorCal = null;
+          try {
+            calendario = await api(`/league/${liga.id}/group/${liga.groupId}/calendar?archived=${archivada}`);
+          } catch (err) {
+            errorCal = err.message;
+          }
+          cacheGrupos.set(clave, { rankings: r.rankings || [], calendario, errorCal });
+        }
+        const g = cacheGrupos.get(clave);
+        resultados.push({
+          jugadorId,
+          alias,
+          encontrado: true,
+          juega: true,
+          nombreConnection: liga.teamName,
+          grupo: `${liga.name} · ${liga.groupName}`,
+          filas: filasRanking(g.rankings),
+          partidos: g.calendario ? partidosDeEquipo(g.calendario, String(liga.teamId)) : null,
+          avisoPartidos: g.errorCal ? `no se pudo leer el calendario (${g.errorCal})` : null,
+        });
+      } catch (err) {
+        resultados.push({ jugadorId, alias, encontrado: false, error: err.message || "Error consultando Connection Darts" });
+      }
     }
     return resultados;
   } finally {

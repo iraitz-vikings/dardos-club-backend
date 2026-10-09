@@ -1,7 +1,7 @@
 import { PrismaClient } from "@prisma/client";
 import { extraerClasificacionEquiposRadikal } from "./radikalDarts.js";
 import { extraerClasificacionEquiposPhoenix } from "./phoenixDarts.js";
-import { extraerClasificacionEquiposConnection } from "./connectionDarts.js";
+import { extraerClasificacionEquiposConnection, extraerLigaIndividualConnection } from "./connectionDarts.js";
 
 const prisma = new PrismaClient();
 
@@ -62,6 +62,14 @@ export async function actualizarClasificacionTorneo(torneo) {
   }
 
   const esConnection = nombrePlataforma.includes("connection");
+
+  // Connection sin ningún equipo del club inscrito = liga INDIVIDUAL (ej.
+  // Super One): se buscan los jugadores del club en ella (ver
+  // actualizarLigaIndividualConnection).
+  if (esConnection && !torneo.equipos.some((e) => e.equipoClubId)) {
+    return actualizarLigaIndividualConnection(torneo);
+  }
+
   if (nombrePlataforma.includes("phoenix") || esConnection) {
     if (torneo.equipos.length === 0) {
       return {
@@ -158,7 +166,15 @@ export async function actualizarClasificacionTorneo(torneo) {
 // Nunca borra partidos.
 async function sincronizarPartidosConnection(equipoTorneoId, partidos) {
   for (const p of partidos) {
-    const existente = await prisma.partido.findUnique({ where: { idExterno: p.idExterno } });
+    let existente = await prisma.partido.findUnique({ where: { idExterno: p.idExterno } });
+    // Partidos guardados con el formato antiguo de idExterno
+    // ("connection:{match_id}", sin team_id): se pasan al nuevo.
+    if (!existente && p.idExternoAntiguo) {
+      const antiguo = await prisma.partido.findUnique({ where: { idExterno: p.idExternoAntiguo } });
+      if (antiguo && antiguo.equipoTorneoId === equipoTorneoId) {
+        existente = await prisma.partido.update({ where: { id: antiguo.id }, data: { idExterno: p.idExterno } });
+      }
+    }
     if (!existente) {
       await prisma.partido.create({
         data: {
@@ -169,6 +185,9 @@ async function sincronizarPartidosConnection(equipoTorneoId, partidos) {
           resultado: p.resultado,
           fijado: false,
           origenActualizacion: "scraper",
+          // Ligas individuales: la fecha que da Connection es la fecha
+          // LÍMITE de la jornada, no la del partido.
+          notaCapitan: p.fechaEsLimite ? "Fecha límite de la jornada en Connection: cambia la fecha cuando quedes con tu rival." : null,
         },
       });
       continue;
@@ -179,11 +198,98 @@ async function sincronizarPartidosConnection(equipoTorneoId, partidos) {
     if (editable && existente.rival !== p.rival) datos.rival = p.rival;
     if (p.resultado && existente.resultado !== p.resultado) datos.resultado = p.resultado;
     if (Object.keys(datos).length > 0) {
-      // Prisma pondría @updatedAt igual; origenActualizacion no se toca para
-      // no "robarle" al capitán un partido que ya editó.
+      // origenActualizacion no se toca para no "robarle" al capitán un
+      // partido que ya editó.
       await prisma.partido.update({ where: { id: existente.id }, data: datos });
     }
   }
+}
+
+// Liga INDIVIDUAL de Connection (Torneo de Connection sin equipos del club
+// inscritos, ej. Super One). Torneo.idExterno = ids de liga (ej.
+// "25233,25234,25235"). Se recorren todos los jugadores del club con alias
+// de Connection guardado; a los que juegan en alguna de esas ligas se les
+// crea (la primera vez) su propia inscripción individual en este Torneo:
+// un EquipoTorneo sin equipo del club, con el jugador como único integrante
+// y como "capitán" — así es él mismo quien confirma sus partidos en
+// Competiciones, igual que un capitán. Luego se guarda la tabla de su grupo
+// y se sincronizan sus partidos (mismas reglas que en las ligas de
+// equipos). No borra inscripciones de jugadores que dejen de aparecer.
+async function actualizarLigaIndividualConnection(torneo) {
+  const conAlias = await prisma.jugadorFabricanteId.findMany({
+    where: { fabricante: { nombre: { contains: "connection", mode: "insensitive" } } },
+    include: { jugador: true },
+  });
+  const jugadores = conAlias
+    .filter((f) => (f.idExterno || "").trim())
+    .map((f) => ({ jugadorId: f.jugadorId, alias: f.idExterno.trim(), jugador: f.jugador }));
+  if (jugadores.length === 0) {
+    return { ok: false, error: "Ningún jugador del club tiene guardado su alias de Connection Darts." };
+  }
+
+  let resultados;
+  try {
+    resultados = await extraerLigaIndividualConnection(
+      torneo.idExterno,
+      jugadores.map(({ jugadorId, alias }) => ({ jugadorId, alias }))
+    );
+  } catch (err) {
+    return { ok: false, error: err.message || "Error consultando Connection Darts" };
+  }
+
+  const avisos = [];
+  let actualizados = 0;
+  for (const r of resultados) {
+    if (r.error) {
+      avisos.push(`${r.alias}: ${r.error}`);
+      continue;
+    }
+    if (!r.encontrado) {
+      avisos.push(`${r.alias}: alias no encontrado en Connection`);
+      continue;
+    }
+    if (!r.juega) continue;
+
+    const jugador = jugadores.find((j) => j.jugadorId === r.jugadorId)?.jugador;
+    let inscripcion = await prisma.equipoTorneo.findFirst({
+      where: { torneoId: torneo.id, equipoClubId: null, capitanId: r.jugadorId },
+    });
+    if (!inscripcion) {
+      inscripcion = await prisma.equipoTorneo.create({
+        data: {
+          torneoId: torneo.id,
+          nombreEquipo: jugador?.apodo || jugador?.nombre || r.alias,
+          idExternoEquipo: r.nombreConnection,
+          capitanId: r.jugadorId,
+          jugadores: { create: { jugadorId: r.jugadorId } },
+        },
+      });
+    }
+
+    await prisma.$transaction([
+      prisma.clasificacionEquipo.deleteMany({ where: { equipoTorneoId: inscripcion.id } }),
+      prisma.clasificacionEquipo.createMany({
+        data: r.filas.map((f) => ({ torneoId: torneo.id, equipoTorneoId: inscripcion.id, ...filaClasificacion(f) })),
+      }),
+    ]);
+    if (r.avisoPartidos) avisos.push(`${r.alias}: ${r.avisoPartidos}`);
+    if (r.partidos) {
+      try {
+        await sincronizarPartidosConnection(inscripcion.id, r.partidos);
+      } catch (err) {
+        avisos.push(`${r.alias}: error guardando partidos (${err.message})`);
+      }
+    }
+    actualizados++;
+  }
+
+  if (actualizados === 0) {
+    return {
+      ok: false,
+      error: `Ningún jugador del club aparece en las ligas ${torneo.idExterno || "(sin ids)"}.${avisos.length ? ` Avisos: ${avisos.join(" · ")}` : ""}`,
+    };
+  }
+  return { ok: true, avisos };
 }
 
 // Recorre TODOS los torneos/ligas externos dados de alta y actualiza la

@@ -492,7 +492,7 @@ const iceLimiter = rateLimit({
   message: { error: "Demasiadas peticiones. Espera unos minutos." },
 });
 async function puedeUsarTurn(req) {
-  if (jugadorPartidaDeLaPeticion(req)) return true;
+  if (jugadorPartidaDeLaPeticion(req) || camaraAuxiliarDeLaPeticion(req)) return true;
   const partidaId = typeof req.query.partida === "string" ? req.query.partida : null;
   if (!partidaId) return false;
   const partida = await prisma.partidaHerramienta.findUnique({
@@ -741,8 +741,15 @@ function esParticipanteDe(partida, jugadorId) {
 // viewers: { [viewerId]: {...} } } } }. El rival (o quien sea) que quiere ver
 // las cámaras de un emisor se registra como espectador de ESE emisor.
 // camarasActivas (columna) queda como "hay algún emisor activo".
+//
+// auxiliares: { [jugadorId]: {...} } — cámara auxiliar de ese emisor (otro
+// dispositivo, típicamente un móvil en un trípode mirando a la diana), ver
+// "Cámara auxiliar" más abajo.
 function normalizarSenal(senalCamara) {
-  return { emisores: (senalCamara && senalCamara.emisores) || {} };
+  return {
+    emisores: (senalCamara && senalCamara.emisores) || {},
+    auxiliares: (senalCamara && senalCamara.auxiliares) || {},
+  };
 }
 
 function hayEmisorActivo(senal) {
@@ -1020,6 +1027,187 @@ router.delete("/:id/camara/senal/:viewerId", async (req, res) => {
   });
   if (r.fallo) return responderFallo(res, r);
   res.status(204).end();
+});
+
+// --- Cámara auxiliar --------------------------------------------------------
+//
+// Pedido de Iraitz (2026-10-09): poder usar DOS dispositivos para las
+// cámaras. El principal (p. ej. una tablet bajo la diana, con el marcador)
+// usa su propia cámara para el lanzador, y otro dispositivo (p. ej. un móvil
+// en un trípode) solo pone la cámara de la diana. El auxiliar NO habla con
+// el rival ni con el público: manda su vídeo al principal por WebRTC, y el
+// principal lo reenvía como si fuera su propia cámara de la diana — así el
+// resto (espectadores, rival, directo público) no cambia.
+//
+// El principal genera un enlace (QR) con un token propio, de un solo
+// emparejamiento: vale solo para esta partida, este emisor y esta "sesión"
+// (generar un QR nuevo invalida el anterior), y solo para la señalización de
+// la cámara auxiliar — nunca lleva el PIN ni el token de partida del jugador.
+//
+// Señalización (por polling, como el resto) en senalCamara.auxiliares
+// [jugadorId] = { sesion, intento, offer, answer, iceAux, iceTablet,
+// reinicio, actualizadoEn }. Ofrece el auxiliar (es quien tiene la pista);
+// cada oferta nueva sube `intento` y vacía lo demás, y los candidatos o
+// respuestas de un intento anterior se descartan. `reinicio` lo sube el
+// principal para pedir al auxiliar una oferta nueva (p. ej. si ha recargado
+// la página y ha perdido la conexión).
+function firmarTokenAuxiliar(partidaId, jugadorId, sesion) {
+  return jwt.sign({ tipo: "camaraAux", partidaId, jugadorId, sesion }, process.env.JWT_SECRET, { expiresIn: "12h" });
+}
+
+function camaraAuxiliarDeLaPeticion(req) {
+  const header = req.headers.authorization || "";
+  const token = header.startsWith("Bearer ") ? header.slice(7) : null;
+  if (!token) return null;
+  try {
+    const payload = jwt.verify(token, process.env.JWT_SECRET);
+    return payload.tipo === "camaraAux" && payload.partidaId && payload.jugadorId && payload.sesion ? payload : null;
+  } catch {
+    return null;
+  }
+}
+
+function requireCamaraAuxiliar(req, res, next) {
+  const aux = camaraAuxiliarDeLaPeticion(req);
+  if (!aux || aux.partidaId !== req.params.id) {
+    return res.status(401).json({ error: "Este enlace de cámara no es válido. Escanea el QR otra vez." });
+  }
+  req.camaraAux = aux;
+  next();
+}
+
+// La entrada del auxiliar de la petición, o null si ese QR ya no es el vigente.
+function entradaAuxiliar(senal, aux) {
+  const entrada = senal.auxiliares[aux.jugadorId];
+  return entrada && entrada.sesion === aux.sesion ? entrada : null;
+}
+
+const ENLACE_AUX_CADUCADO = [401, "Este enlace de cámara ya no es válido (se ha generado otro). Escanea el QR nuevo."];
+
+// POST /api/partidas-herramienta/:id/camara/auxiliar - el PRINCIPAL genera un
+// enlace nuevo para su cámara auxiliar (invalida el anterior). Devuelve el
+// token que va en el QR.
+router.post("/:id/camara/auxiliar", requireJugadorPartida, async (req, res) => {
+  const sesion = crypto.randomUUID();
+  const r = await modificarSenal(req.params.id, (senal, partida) => {
+    if (!esParticipanteDe(partida, req.jugadorPartidaId)) return { fallo: [403, "No eres parte de este partido."] };
+    if (partida.finalizada) return { fallo: [409, "El partido ya ha terminado."] };
+    senal.auxiliares[req.jugadorPartidaId] = {
+      sesion,
+      intento: 0,
+      offer: null,
+      answer: null,
+      iceAux: [],
+      iceTablet: [],
+      reinicio: 0,
+      actualizadoEn: new Date().toISOString(),
+    };
+    return {};
+  });
+  if (r.fallo) return responderFallo(res, r);
+  res.status(201).json({ token: firmarTokenAuxiliar(req.params.id, req.jugadorPartidaId, sesion) });
+});
+
+// GET /api/partidas-herramienta/:id/camara/auxiliar - el PRINCIPAL lee la
+// oferta y los candidatos de su auxiliar.
+router.get("/:id/camara/auxiliar", requireJugadorPartida, async (req, res) => {
+  const partida = await prisma.partidaHerramienta.findUnique({
+    where: { id: req.params.id },
+    select: { jugadoresId1: true, jugadoresId2: true, senalCamara: true },
+  });
+  if (!partida) return res.status(404).json({ error: "Partida no encontrada" });
+  if (!esParticipanteDe(partida, req.jugadorPartidaId)) {
+    return res.status(403).json({ error: "No eres parte de este partido." });
+  }
+  const entrada = normalizarSenal(partida.senalCamara).auxiliares[req.jugadorPartidaId];
+  if (!entrada) return res.status(404).json({ error: "No hay cámara auxiliar." });
+  res.json({
+    sesion: entrada.sesion,
+    intento: entrada.intento,
+    offer: entrada.offer,
+    iceAux: entrada.iceAux || [],
+    actualizadoEn: entrada.actualizadoEn,
+  });
+});
+
+// PUT /api/partidas-herramienta/:id/camara/auxiliar - el PRINCIPAL manda su
+// respuesta y/o candidatos (body: { intento, answer?, iceTablet?: [...] }),
+// o pide al auxiliar que vuelva a ofrecer (body: { reinicio: true }).
+router.put("/:id/camara/auxiliar", requireJugadorPartida, async (req, res) => {
+  const { intento, answer, iceTablet, reinicio } = req.body || {};
+  const r = await modificarSenal(req.params.id, (senal, partida) => {
+    if (!esParticipanteDe(partida, req.jugadorPartidaId)) return { fallo: [403, "No eres parte de este partido."] };
+    const entrada = senal.auxiliares[req.jugadorPartidaId];
+    if (!entrada) return { fallo: [404, "No hay cámara auxiliar."] };
+    if (reinicio) {
+      entrada.reinicio = (entrada.reinicio || 0) + 1;
+    } else {
+      if (intento !== entrada.intento) return { fallo: [409, "La cámara auxiliar ha vuelto a conectar."] };
+      if (answer) entrada.answer = answer;
+      if (Array.isArray(iceTablet)) entrada.iceTablet = [...(entrada.iceTablet || []), ...iceTablet];
+    }
+    entrada.actualizadoEn = new Date().toISOString();
+    return {};
+  });
+  if (r.fallo) return responderFallo(res, r);
+  res.status(204).end();
+});
+
+// DELETE /api/partidas-herramienta/:id/camara/auxiliar - el PRINCIPAL deja de
+// usar la cámara auxiliar (su enlace deja de valer). Idempotente.
+router.delete("/:id/camara/auxiliar", requireJugadorPartida, async (req, res) => {
+  const r = await modificarSenal(req.params.id, (senal, partida) => {
+    if (!esParticipanteDe(partida, req.jugadorPartidaId)) return { fallo: [403, "No eres parte de este partido."] };
+    delete senal.auxiliares[req.jugadorPartidaId];
+    return {};
+  });
+  if (r.fallo) return responderFallo(res, r);
+  res.status(204).end();
+});
+
+// GET /api/partidas-herramienta/:id/camara/auxiliar/movil - el AUXILIAR (con
+// el token del QR) lee la respuesta y los candidatos del principal.
+router.get("/:id/camara/auxiliar/movil", requireCamaraAuxiliar, async (req, res) => {
+  res.set("Cache-Control", "no-store");
+  const partida = await prisma.partidaHerramienta.findUnique({
+    where: { id: req.params.id },
+    select: { senalCamara: true, finalizada: true },
+  });
+  if (!partida) return res.status(404).json({ error: "Partida no encontrada" });
+  const entrada = entradaAuxiliar(normalizarSenal(partida.senalCamara), req.camaraAux);
+  if (!entrada) return res.status(ENLACE_AUX_CADUCADO[0]).json({ error: ENLACE_AUX_CADUCADO[1] });
+  res.json({
+    intento: entrada.intento,
+    answer: entrada.answer,
+    iceTablet: entrada.iceTablet || [],
+    reinicio: entrada.reinicio || 0,
+    finalizada: !!partida.finalizada,
+  });
+});
+
+// PUT /api/partidas-herramienta/:id/camara/auxiliar/movil - el AUXILIAR manda
+// una oferta nueva (body: { offer }, responde { intento }) o candidatos de
+// la oferta en curso (body: { intento, iceAux: [...] }).
+router.put("/:id/camara/auxiliar/movil", requireCamaraAuxiliar, async (req, res) => {
+  const { offer, intento, iceAux } = req.body || {};
+  const r = await modificarSenal(req.params.id, (senal) => {
+    const entrada = entradaAuxiliar(senal, req.camaraAux);
+    if (!entrada) return { fallo: ENLACE_AUX_CADUCADO };
+    if (offer) {
+      entrada.intento = (entrada.intento || 0) + 1;
+      entrada.offer = offer;
+      entrada.answer = null;
+      entrada.iceAux = [];
+      entrada.iceTablet = [];
+    } else {
+      if (intento !== entrada.intento) return { fallo: [409, "Conexión antigua."] };
+      if (Array.isArray(iceAux)) entrada.iceAux = [...(entrada.iceAux || []), ...iceAux];
+    }
+    entrada.actualizadoEn = new Date().toISOString();
+    return { intento: entrada.intento };
+  });
+  if (r.fallo) return responderFallo(res, r);
+  res.json({ intento: r.intento });
 });
 
 export default router;

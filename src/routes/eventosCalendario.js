@@ -1,8 +1,7 @@
 import { Router } from "express";
-import { PrismaClient } from "@prisma/client";
+import { prisma } from "../lib/prisma.js";
 import { requireAdmin } from "../middleware/requireAdmin.js";
 
-const prisma = new PrismaClient();
 const router = Router();
 
 // Eventos sueltos en el calendario del club, puestos a mano por el admin
@@ -16,7 +15,7 @@ const router = Router();
 router.get("/", requireAdmin, async (_req, res) => {
   const eventos = await prisma.eventoCalendario.findMany({
     include: { maquina: true },
-    orderBy: { fecha: "desc" },
+    orderBy: { fecha: "asc" },
   });
   res.json(eventos);
 });

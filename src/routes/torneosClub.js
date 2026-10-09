@@ -1,10 +1,10 @@
 import { Router } from "express";
-import { PrismaClient } from "@prisma/client";
+import { prisma } from "../lib/prisma.js";
 import { randomUUID } from "crypto";
 import { requireAuth } from "./auth.js";
 import { sortearParejasPorGrupos, resolverNombresJugadores } from "../lib/sorteoParejasGrupos.js";
 import { calcularClasificacionCuadrante } from "../lib/clasificacionCuadrante.js";
-import { notificarJugadores } from "./notificar.js";
+import { notificarJugadores, avisoRepetido, TTL_AVISO_EN_CURSO, TTL_AVISO_NORMAL } from "./notificar.js";
 import { diasRestantesPapelera } from "../lib/papelera.js";
 import { urlPublicaCuadrante } from "../lib/enlacesPublicos.js";
 import { requireAdmin } from "../middleware/requireAdmin.js";
@@ -12,8 +12,8 @@ import { validarConfiguracionHerramienta } from "../lib/configuracionHerramienta
 import { validarMensajesAvisos, resolverMensaje } from "../lib/mensajesAvisos.js";
 import { validarVideoDirectoUrl } from "../lib/videoDirecto.js";
 import { generarEnlaceCheckIn } from "./telegram.js";
+import { JUGADOR_PUBLICO } from "../lib/selectsJugador.js";
 
-const prisma = new PrismaClient();
 const router = Router();
 
 // Valida la tabla de puntos por posición del modo "por jornadas" (ver
@@ -62,8 +62,14 @@ const includeCompleto = {
   cuadrantes: {
     orderBy: { creadoEn: "asc" },
     include: {
-      partidos: { orderBy: [{ rama: "asc" }, { ronda: "asc" }, { posicion: "asc" }] },
-      participantes: { include: { jugador1: true, jugador2: true }, orderBy: { creadoEn: "asc" } },
+      // partidaHerramienta: para que la página pública sepa qué partidos se
+      // están jugando con la herramienta y pueda abrir el marcador en directo
+      // (GET /api/partidas-herramienta/:id/directo).
+      partidos: {
+        orderBy: [{ rama: "asc" }, { ronda: "asc" }, { posicion: "asc" }],
+        include: { partidaHerramienta: { select: { id: true, finalizada: true } } },
+      },
+      participantes: { include: { jugador1: JUGADOR_PUBLICO, jugador2: JUGADOR_PUBLICO }, orderBy: { creadoEn: "asc" } },
       // Puntos ya asignados (ver POST /cuadrantes/:id/asignar-puntos) — se
       // incluyen aquí para que la página pública del torneo pueda mostrar la
       // clasificación oficial de cada jornada sin llamadas aparte. Solo
@@ -278,7 +284,7 @@ router.get("/privados", requireAuth, async (_req, res) => {
   const torneos = await prisma.torneoClub.findMany({
     where: { visibilidad: "privado", finalizado: true, borradoEn: null },
     orderBy: { fechaInicio: "desc" },
-    select: { id: true, nombre: true, fechaInicio: true, fechaFin: true },
+    select: { id: true, nombre: true, fechaInicio: true, fechaFin: true, acero: true },
   });
   res.json(torneos);
 });
@@ -289,7 +295,7 @@ router.get("/activos", requireAuth, async (_req, res) => {
   const torneos = await prisma.torneoClub.findMany({
     where: { finalizado: false, borradoEn: null },
     orderBy: { fechaInicio: "desc" },
-    select: { id: true, nombre: true, fechaInicio: true, fechaFin: true, modalidad: true },
+    select: { id: true, nombre: true, fechaInicio: true, fechaFin: true, modalidad: true, acero: true },
   });
   res.json(torneos);
 });
@@ -319,6 +325,10 @@ router.get("/papelera", requireAdmin, async (_req, res) => {
 router.get("/:id", async (req, res) => {
   const { id } = req.params;
   const torneo = await prisma.torneoClub.findUnique({ where: { id }, include: includeCompleto });
+  // Sin comprobar visibilidad a propósito: "privado" significa que no sale
+  // en los listados públicos, pero quien tenga el enlace lo ve (invitados
+  // sin cuenta incluidos, que reciben enlaces a esta página en sus avisos y
+  // usan desde aquí la herramienta) — decisión de Iraitz, 2026-09-26.
   if (!torneo || torneo.borradoEn) {
     return res.status(404).json({ error: "Torneo no encontrado" });
   }
@@ -326,7 +336,7 @@ router.get("/:id", async (req, res) => {
 });
 
 router.post("/", requireAdmin, async (req, res) => {
-  const { nombre, descripcion, fechaInicio, fechaFin, insigniaUrl, visibilidad, numeroMaquinas, tipoEliminacion, modalidad, afectaCalendario, notificaciones, temporizadorActivo, temporizadorMinutos, modoJornadas, puntosPorPosicion, imagenEliminadoUrl, imagenCampeonUrl, imagenBienvenidaUrl, configuracionHerramienta, videoDirectoUrl, mensajesAvisos } = req.body;
+  const { nombre, descripcion, fechaInicio, fechaFin, insigniaUrl, visibilidad, numeroMaquinas, tipoEliminacion, modalidad, afectaCalendario, notificaciones, acero, temporizadorActivo, temporizadorMinutos, modoJornadas, puntosPorPosicion, imagenEliminadoUrl, imagenCampeonUrl, imagenBienvenidaUrl, configuracionHerramienta, videoDirectoUrl, mensajesAvisos } = req.body;
   if (!nombre || !fechaInicio || !fechaFin) {
     return res.status(400).json({ error: "Faltan campos obligatorios" });
   }
@@ -354,6 +364,7 @@ router.post("/", requireAdmin, async (req, res) => {
       modalidad: modalidadesValidas.includes(modalidad) ? modalidad : "individual",
       afectaCalendario: afectaCalendario !== undefined ? !!afectaCalendario : true,
       notificaciones: notificaciones !== undefined ? !!notificaciones : true,
+      acero: !!acero,
       temporizadorActivo: !!temporizadorActivo,
       temporizadorMinutos: temporizador.valor,
       modoJornadas: !!modoJornadas,
@@ -371,7 +382,7 @@ router.post("/", requireAdmin, async (req, res) => {
 
 router.put("/:id", requireAdmin, async (req, res) => {
   const { id } = req.params;
-  const { nombre, descripcion, fechaInicio, fechaFin, insigniaUrl, visibilidad, numeroMaquinas, tipoEliminacion, finalizado, notificaciones, anclarInicio, temporizadorActivo, temporizadorMinutos, modoJornadas, puntosPorPosicion, imagenEliminadoUrl, imagenCampeonUrl, imagenBienvenidaUrl, configuracionHerramienta, videoDirectoUrl, mensajesAvisos } = req.body;
+  const { nombre, descripcion, fechaInicio, fechaFin, insigniaUrl, visibilidad, numeroMaquinas, tipoEliminacion, finalizado, notificaciones, acero, anclarInicio, temporizadorActivo, temporizadorMinutos, modoJornadas, puntosPorPosicion, imagenEliminadoUrl, imagenCampeonUrl, imagenBienvenidaUrl, configuracionHerramienta, videoDirectoUrl, mensajesAvisos } = req.body;
   const puntos = validarPuntosPorPosicion(puntosPorPosicion);
   if (!puntos.ok) return res.status(400).json({ error: puntos.error });
   const herramienta = validarConfiguracionHerramienta(configuracionHerramienta);
@@ -401,6 +412,7 @@ router.put("/:id", requireAdmin, async (req, res) => {
         tipoEliminacion: tipoEliminacion || undefined,
         finalizado: finalizado !== undefined ? !!finalizado : undefined,
         notificaciones: notificaciones !== undefined ? !!notificaciones : undefined,
+        acero: acero !== undefined ? !!acero : undefined,
         anclarInicio: anclarInicio !== undefined ? !!anclarInicio : undefined,
         temporizadorActivo: temporizadorActivo !== undefined ? !!temporizadorActivo : undefined,
         temporizadorMinutos: temporizadorActivo !== undefined ? temporizador.valor : undefined,
@@ -562,7 +574,7 @@ router.get("/cuadrantes/:cuadranteId/participantes", requireAdmin, async (req, r
   const { cuadranteId } = req.params;
   const participantes = await prisma.participanteCuadrante.findMany({
     where: { cuadranteId },
-    include: { jugador1: true, jugador2: true },
+    include: { jugador1: JUGADOR_PUBLICO, jugador2: JUGADOR_PUBLICO },
     orderBy: { creadoEn: "asc" },
   });
   res.json(participantes);
@@ -771,9 +783,9 @@ async function notificarSorteoCuadrante(cuadranteId, posiciones) {
 
   const mensaje = resolverMensaje(mensajesAvisos, "bienvenida", {
     titulo: {
-      es: `¡Ya estás en el cuadro! {competicion}`,
-      eu: `Jada koadroan zaude! {competicion}`,
-      fr: `Tu es dans le tableau ! {competicion}`,
+      es: `¡Ya estás en el cuadro! · {competicion}`,
+      eu: `Jada koadroan zaude! · {competicion}`,
+      fr: `Tu es dans le tableau ! · {competicion}`,
     },
     cuerpo: {
       es: "Se ha hecho el sorteo y ya tienes tu sitio en el cuadro. ¡Mucha suerte!",
@@ -787,6 +799,9 @@ async function notificarSorteoCuadrante(cuadranteId, posiciones) {
     cuerpo: mensaje.cuerpo,
     imagen,
     url: urlPublicaCuadrante(cuadrante),
+    tag: `cuadrante-${cuadrante.id}`,
+    tipo: "bienvenida",
+    ttl: TTL_AVISO_NORMAL,
   });
 }
 
@@ -1062,7 +1077,7 @@ router.get("/cuadrantes/:cuadranteId/clasificacion", requireAdmin, async (req, r
     where: { id: cuadranteId },
     include: {
       partidos: true,
-      participantes: { include: { jugador1: true, jugador2: true } },
+      participantes: { include: { jugador1: JUGADOR_PUBLICO, jugador2: JUGADOR_PUBLICO } },
     },
   });
   if (!cuadrante) return res.status(404).json({ error: "Cuadrante no encontrado" });
@@ -1084,7 +1099,7 @@ router.post("/cuadrantes/:cuadranteId/asignar-puntos", requireAdmin, async (req,
     include: {
       torneoClub: true,
       partidos: true,
-      participantes: { include: { jugador1: true, jugador2: true } },
+      participantes: { include: { jugador1: JUGADOR_PUBLICO, jugador2: JUGADOR_PUBLICO } },
     },
   });
   if (!cuadrante) return res.status(404).json({ error: "Cuadrante no encontrado" });
@@ -1145,8 +1160,8 @@ router.get("/:id/clasificacion-general", async (req, res) => {
   const puntos = await prisma.puntoJornada.findMany({
     where: { cuadrante: { torneoClubId: id } },
     include: {
-      jugador1: true,
-      jugador2: true,
+      jugador1: JUGADOR_PUBLICO,
+      jugador2: JUGADOR_PUBLICO,
       cuadrante: { select: { id: true, nombre: true } },
     },
   });
@@ -1211,6 +1226,9 @@ async function notificarPartidoDeCuadrante(partido, motivo = "programado") {
   const mensajesAvisos = cuadrante?.torneoClub?.mensajesAvisos || cuadrante?.liga?.mensajesAvisos;
 
   if (motivo === "en_curso") {
+    // Si el admin desmarca y vuelve a marcar "en curso" el mismo partido, no
+    // se repite el aviso (ver avisoRepetido en notificar.js).
+    if (avisoRepetido(`en_curso-${partido.id}`)) return;
     // Temporizador de partidos (ver TorneoClub.temporizadorActivo/
     // temporizadorMinutos en schema.prisma): si está activo para este
     // torneo, se añade al aviso cuántos minutos tiene el jugador para
@@ -1219,18 +1237,7 @@ async function notificarPartidoDeCuadrante(partido, motivo = "programado") {
     const minutosTemporizador = cuadrante?.torneoClub?.temporizadorActivo
       ? cuadrante.torneoClub.temporizadorMinutos
       : null;
-    const mensaje = resolverMensaje(mensajesAvisos, "enCurso", {
-      titulo: {
-        es: `¡Tu partido empieza ahora! {competicion}`,
-        eu: `Zure partida orain hasten da! {competicion}`,
-        fr: `Ton match commence maintenant ! {competicion}`,
-      },
-      cuerpo: {
-        es: `{enfrentamiento}{maquina}.{minutos}`,
-        eu: `{enfrentamiento}{maquina}.{minutos}`,
-        fr: `{enfrentamiento}{maquina}.{minutos}`,
-      },
-    }, {
+    const valoresEnCurso = {
       competicion: nombreCompeticion,
       enfrentamiento,
       maquina: partido.maquina
@@ -1238,16 +1245,31 @@ async function notificarPartidoDeCuadrante(partido, motivo = "programado") {
         : "",
       minutos: minutosTemporizador
         ? {
-            es: ` Tienes ${minutosTemporizador} min para empezar.`,
-            eu: ` ${minutosTemporizador} min dituzu hasteko.`,
-            fr: ` Tu as ${minutosTemporizador} min pour commencer.`,
+            es: ` Tienes ${minutosTemporizador} min para empezar. Si no empezáis antes de que se acabe el tiempo, el partido se dará por perdido.`,
+            eu: ` ${minutosTemporizador} min dituzu hasteko. Denbora amaitu aurretik hasten ez bazarete, partida galdutzat emango da.`,
+            fr: ` Tu as ${minutosTemporizador} min pour commencer. Si vous ne commencez pas avant la fin du temps, le match sera déclaré perdu.`,
           }
         : "",
-    });
+    };
+    const mensaje = resolverMensaje(mensajesAvisos, "enCurso", {
+      titulo: {
+        es: `¡Tu partido empieza ahora! · {competicion}`,
+        eu: `Zure partida orain hasten da! · {competicion}`,
+        fr: `Ton match commence maintenant ! · {competicion}`,
+      },
+      cuerpo: {
+        es: `{enfrentamiento}{maquina}.{minutos}`,
+        eu: `{enfrentamiento}{maquina}.{minutos}`,
+        fr: `{enfrentamiento}{maquina}.{minutos}`,
+      },
+    }, valoresEnCurso, { ...valoresEnCurso, maquina: partido.maquina || "" });
     await notificarJugadores(jugadorIds, {
       titulo: mensaje.titulo,
       cuerpo: mensaje.cuerpo,
       url,
+      tag: `partido-${partido.id}`,
+      tipo: "enCurso",
+      ttl: TTL_AVISO_EN_CURSO,
     });
     return;
   }
@@ -1279,11 +1301,21 @@ async function notificarPartidoDeCuadrante(partido, motivo = "programado") {
           fr: ` sur ${partido.maquinaCalendario.nombre}`,
         }
       : "",
+  }, {
+    // Texto escrito por el admin: solo el dato, sin palabra de enlace (ver
+    // resolverMensaje).
+    competicion: nombreCompeticion,
+    enfrentamiento,
+    fecha: fechaTexto || "",
+    maquina: partido.maquinaCalendario?.nombre || "",
   });
   await notificarJugadores(jugadorIds, {
     titulo: mensaje.titulo,
     cuerpo: mensaje.cuerpo,
     url,
+    tag: `partido-${partido.id}`,
+    tipo: "programado",
+    ttl: TTL_AVISO_NORMAL,
   });
 }
 
@@ -1372,6 +1404,11 @@ async function notificarEliminacionCuadrante(partido, etiquetaEliminado) {
     cuerpo: mensaje.cuerpo,
     imagen,
     url: urlPublicaCuadrante(cuadrante),
+    // Mismo tag que los avisos del partido que lo decide: sustituye a su
+    // "empieza ahora" / "falta 1 minuto" en vez de sumarse.
+    tag: `partido-${partido.id}`,
+    tipo: "eliminado",
+    ttl: TTL_AVISO_NORMAL,
   });
 }
 
@@ -1395,9 +1432,9 @@ async function notificarCampeonCuadrante(partido, etiquetaCampeon) {
 
   const mensaje = resolverMensaje(mensajesAvisos, "campeon", {
     titulo: {
-      es: `¡Campeón! {competicion}`,
-      eu: `Txapelduna! {competicion}`,
-      fr: `Champion ! {competicion}`,
+      es: `¡Campeón! · {competicion}`,
+      eu: `Txapelduna! · {competicion}`,
+      fr: `Champion ! · {competicion}`,
     },
     cuerpo: {
       es: "¡Enhorabuena, has ganado el cuadrante!",
@@ -1411,6 +1448,11 @@ async function notificarCampeonCuadrante(partido, etiquetaCampeon) {
     cuerpo: mensaje.cuerpo,
     imagen,
     url: urlPublicaCuadrante(cuadrante),
+    // Mismo tag que los avisos del partido que lo decide: sustituye a su
+    // "empieza ahora" / "falta 1 minuto" en vez de sumarse.
+    tag: `partido-${partido.id}`,
+    tipo: "campeon",
+    ttl: TTL_AVISO_NORMAL,
   });
 }
 

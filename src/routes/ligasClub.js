@@ -1,9 +1,9 @@
 import { Router } from "express";
-import { PrismaClient } from "@prisma/client";
+import { prisma } from "../lib/prisma.js";
 import { generarPartidos, aplicarPosicionesRonda1 } from "./torneosClub.js";
 import { requireAuth } from "./auth.js";
 import { sortearParejasPorGrupos, resolverNombresJugadores } from "../lib/sorteoParejasGrupos.js";
-import { notificarJugadores } from "./notificar.js";
+import { notificarJugadores, avisoRepetido, TTL_AVISO_EN_CURSO, TTL_AVISO_NORMAL } from "./notificar.js";
 import { clasificacionPorGrupos } from "../lib/clasificacionLiga.js";
 import { construirRondaUnoConGrupos } from "../lib/cruceGruposFinal.js";
 import { diasRestantesPapelera } from "../lib/papelera.js";
@@ -11,24 +11,32 @@ import { urlPublicaLiga } from "../lib/enlacesPublicos.js";
 import { requireAdmin } from "../middleware/requireAdmin.js";
 import { validarConfiguracionHerramienta } from "../lib/configuracionHerramienta.js";
 import { validarVideoDirectoUrl } from "../lib/videoDirecto.js";
-import { validarMensajesAvisos } from "../lib/mensajesAvisos.js";
+import { validarMensajesAvisos, resolverMensaje } from "../lib/mensajesAvisos.js";
+import { JUGADOR_PUBLICO } from "../lib/selectsJugador.js";
 
 // "A", "B", "C"... — nombres de grupo para `numeroGrupos` grupos.
 function letrasDeGrupos(numeroGrupos) {
   return Array.from({ length: numeroGrupos }, (_, i) => String.fromCharCode(65 + i));
 }
 
-const prisma = new PrismaClient();
 const router = Router();
 
 const includeCompleto = {
-  participantes: { include: { jugador1: true, jugador2: true }, orderBy: { creadoEn: "asc" } },
-  partidos: { orderBy: [{ jornada: "asc" }, { posicion: "asc" }] },
+  participantes: { include: { jugador1: JUGADOR_PUBLICO, jugador2: JUGADOR_PUBLICO }, orderBy: { creadoEn: "asc" } },
+  // partidaHerramienta: ver el comentario equivalente en torneosClub.js
+  // (marcador en directo en la página pública).
+  partidos: {
+    orderBy: [{ jornada: "asc" }, { posicion: "asc" }],
+    include: { partidaHerramienta: { select: { id: true, finalizada: true } } },
+  },
   cuadrantes: {
     orderBy: { creadoEn: "asc" },
     include: {
-      partidos: { orderBy: [{ rama: "asc" }, { ronda: "asc" }, { posicion: "asc" }] },
-      participantes: { include: { jugador1: true, jugador2: true } },
+      partidos: {
+        orderBy: [{ rama: "asc" }, { ronda: "asc" }, { posicion: "asc" }],
+        include: { partidaHerramienta: { select: { id: true, finalizada: true } } },
+      },
+      participantes: { include: { jugador1: JUGADOR_PUBLICO, jugador2: JUGADOR_PUBLICO } },
     },
   },
 };
@@ -51,7 +59,7 @@ router.get("/privados", requireAuth, async (_req, res) => {
   const ligas = await prisma.ligaClub.findMany({
     where: { visibilidad: "privado", finalizado: true, borradoEn: null },
     orderBy: { fechaInicio: "desc" },
-    select: { id: true, nombre: true, fechaInicio: true, fechaFin: true },
+    select: { id: true, nombre: true, fechaInicio: true, fechaFin: true, acero: true },
   });
   res.json(ligas);
 });
@@ -61,7 +69,7 @@ router.get("/activos", requireAuth, async (_req, res) => {
   const ligas = await prisma.ligaClub.findMany({
     where: { finalizado: false, borradoEn: null },
     orderBy: { fechaInicio: "desc" },
-    select: { id: true, nombre: true, fechaInicio: true, fechaFin: true, modalidad: true },
+    select: { id: true, nombre: true, fechaInicio: true, fechaFin: true, modalidad: true, acero: true },
   });
   res.json(ligas);
 });
@@ -89,6 +97,8 @@ router.get("/papelera", requireAdmin, async (_req, res) => {
 
 router.get("/:id", async (req, res) => {
   const liga = await prisma.ligaClub.findUnique({ where: { id: req.params.id }, include: includeCompleto });
+  // Sin comprobar visibilidad a propósito, ver el comentario equivalente en
+  // torneosClub.js (GET /:id).
   if (!liga || liga.borradoEn) return res.status(404).json({ error: "Liga no encontrada" });
   res.json(liga);
 });
@@ -108,7 +118,7 @@ function validarNumeroGrupos(valor) {
 }
 
 router.post("/", requireAdmin, async (req, res) => {
-  const { nombre, descripcion, fechaInicio, fechaFin, insigniaUrl, visibilidad, modalidad, vueltas, numeroParticipantes, numeroGrupos, metodoSorteoParejas, afectaCalendario, notificaciones, imagenEliminadoUrl, imagenCampeonUrl, imagenBienvenidaUrl, configuracionHerramienta, videoDirectoUrl, mensajesAvisos } = req.body;
+  const { nombre, descripcion, fechaInicio, fechaFin, insigniaUrl, visibilidad, modalidad, vueltas, numeroParticipantes, numeroGrupos, metodoSorteoParejas, afectaCalendario, notificaciones, acero, imagenEliminadoUrl, imagenCampeonUrl, imagenBienvenidaUrl, configuracionHerramienta, videoDirectoUrl, mensajesAvisos } = req.body;
   if (!nombre || !fechaInicio || !fechaFin || !numeroParticipantes) {
     return res.status(400).json({ error: "Faltan campos obligatorios" });
   }
@@ -142,6 +152,7 @@ router.post("/", requireAdmin, async (req, res) => {
       metodoSorteoParejas: metodosValidos.includes(metodoSorteoParejas) ? metodoSorteoParejas : null,
       afectaCalendario: afectaCalendario !== undefined ? !!afectaCalendario : true,
       notificaciones: notificaciones !== undefined ? !!notificaciones : true,
+      acero: !!acero,
       imagenEliminadoUrl: imagenEliminadoUrl || null,
       imagenCampeonUrl: imagenCampeonUrl || null,
       imagenBienvenidaUrl: imagenBienvenidaUrl || null,
@@ -155,7 +166,7 @@ router.post("/", requireAdmin, async (req, res) => {
 
 router.put("/:id", requireAdmin, async (req, res) => {
   const { id } = req.params;
-  const { nombre, descripcion, fechaInicio, fechaFin, insigniaUrl, visibilidad, finalizado, numeroGrupos, notificaciones, anclarInicio, imagenEliminadoUrl, imagenCampeonUrl, imagenBienvenidaUrl, configuracionHerramienta, videoDirectoUrl, mensajesAvisos } = req.body;
+  const { nombre, descripcion, fechaInicio, fechaFin, insigniaUrl, visibilidad, finalizado, numeroGrupos, notificaciones, acero, anclarInicio, imagenEliminadoUrl, imagenCampeonUrl, imagenBienvenidaUrl, configuracionHerramienta, videoDirectoUrl, mensajesAvisos } = req.body;
 
   let numeroGruposData;
   if (numeroGrupos !== undefined) {
@@ -183,6 +194,7 @@ router.put("/:id", requireAdmin, async (req, res) => {
         finalizado: finalizado !== undefined ? !!finalizado : undefined,
         numeroGrupos: numeroGrupos !== undefined ? numeroGruposData : undefined,
         notificaciones: notificaciones !== undefined ? !!notificaciones : undefined,
+        acero: acero !== undefined ? !!acero : undefined,
         anclarInicio: anclarInicio !== undefined ? !!anclarInicio : undefined,
         imagenEliminadoUrl: imagenEliminadoUrl !== undefined ? imagenEliminadoUrl || null : undefined,
         imagenCampeonUrl: imagenCampeonUrl !== undefined ? imagenCampeonUrl || null : undefined,
@@ -527,12 +539,42 @@ async function notificarPartidoDeLiga(partido, motivo = "programado") {
   const nombreLiga = liga?.nombre || "Liga del club";
   const enfrentamiento = `${partido.participante1 || "?"} vs ${partido.participante2 || "?"}`;
   const url = urlPublicaLiga(partido.ligaId);
+  // Mensajes personalizados de la liga (panel "Mensajes de avisos") y
+  // traducción al idioma de cada jugador, igual que en los torneos (ver
+  // notificarPartidoDeCuadrante en torneosClub.js). Antes estos dos avisos
+  // de jornada iban siempre en castellano fijo y el panel no les afectaba
+  // (auditoría 2026-09-26).
+  const mensajesAvisos = liga?.mensajesAvisos;
 
   if (motivo === "en_curso") {
+    // No repetir si se desmarca y vuelve a marcar (ver avisoRepetido).
+    if (avisoRepetido(`en_curso-liga-${partido.id}`)) return;
+    const valores = {
+      competicion: nombreLiga,
+      enfrentamiento,
+      maquina: partido.maquina
+        ? { es: ` en ${partido.maquina}`, eu: ` (${partido.maquina} makinan)`, fr: ` sur ${partido.maquina}` }
+        : "",
+    };
+    const mensaje = resolverMensaje(mensajesAvisos, "enCurso", {
+      titulo: {
+        es: `¡Tu partido empieza ahora! · {competicion}`,
+        eu: `Zure partida orain hasten da! · {competicion}`,
+        fr: `Ton match commence maintenant ! · {competicion}`,
+      },
+      cuerpo: {
+        es: `{enfrentamiento}{maquina}.`,
+        eu: `{enfrentamiento}{maquina}.`,
+        fr: `{enfrentamiento}{maquina}.`,
+      },
+    }, valores, { ...valores, maquina: partido.maquina || "" });
     await notificarJugadores(jugadorIds, {
-      titulo: `¡Tu partido empieza ahora! ${nombreLiga}`,
-      cuerpo: `${enfrentamiento}${partido.maquina ? ` en ${partido.maquina}` : ""}.`,
+      titulo: mensaje.titulo,
+      cuerpo: mensaje.cuerpo,
       url,
+      tag: `partido-liga-${partido.id}`,
+      tipo: "enCurso",
+      ttl: TTL_AVISO_EN_CURSO,
     });
     return;
   }
@@ -540,12 +582,39 @@ async function notificarPartidoDeLiga(partido, motivo = "programado") {
   const fechaTexto = partido.fechaCalendario
     ? new Date(partido.fechaCalendario).toLocaleDateString("es-ES", { day: "2-digit", month: "2-digit" })
     : null;
+  const nombreMaquina = partido.maquinaCalendario?.nombre;
+  const mensaje = resolverMensaje(mensajesAvisos, "programado", {
+    titulo: {
+      es: `Partido programado: {competicion}`,
+      eu: `Partida programatuta: {competicion}`,
+      fr: `Match programmé : {competicion}`,
+    },
+    cuerpo: {
+      es: `{enfrentamiento}{fecha}{maquina}.`,
+      eu: `{enfrentamiento}{fecha}{maquina}.`,
+      fr: `{enfrentamiento}{fecha}{maquina}.`,
+    },
+  }, {
+    competicion: nombreLiga,
+    enfrentamiento,
+    fecha: fechaTexto ? { es: ` el ${fechaTexto}`, eu: ` (${fechaTexto})`, fr: ` le ${fechaTexto}` } : "",
+    maquina: nombreMaquina
+      ? { es: ` en ${nombreMaquina}`, eu: ` — ${nombreMaquina} makina`, fr: ` sur ${nombreMaquina}` }
+      : "",
+  }, {
+    // Texto escrito por el admin: solo el dato (ver resolverMensaje).
+    competicion: nombreLiga,
+    enfrentamiento,
+    fecha: fechaTexto || "",
+    maquina: nombreMaquina || "",
+  });
   await notificarJugadores(jugadorIds, {
-    titulo: `Partido programado: ${nombreLiga}`,
-    cuerpo: `${enfrentamiento}${fechaTexto ? ` el ${fechaTexto}` : ""}${
-      partido.maquinaCalendario ? ` en ${partido.maquinaCalendario.nombre}` : ""
-    }.`,
+    titulo: mensaje.titulo,
+    cuerpo: mensaje.cuerpo,
     url,
+    tag: `partido-liga-${partido.id}`,
+    tipo: "programado",
+    ttl: TTL_AVISO_NORMAL,
   });
 }
 

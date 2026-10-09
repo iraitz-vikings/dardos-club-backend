@@ -1,9 +1,10 @@
 import { Router } from "express";
-import { PrismaClient } from "@prisma/client";
+import { prisma } from "../lib/prisma.js";
 import bcrypt from "bcryptjs";
 import jwt from "jsonwebtoken";
 import crypto from "node:crypto";
-import { loginLimiter } from "../middleware/loginLimiter.js";
+import rateLimit from "express-rate-limit";
+import { pinLimiter } from "../middleware/loginLimiter.js";
 import {
   partidosPendientesDeJugador,
   localizarPartidoConConfig,
@@ -16,6 +17,9 @@ import { aplicarResultadoPartidoLiga } from "./ligasClub.js";
 import { pinValido } from "./jugadores.js";
 import { requireAuth } from "./auth.js";
 import { notificarJugador } from "./notificar.js";
+import { leerIdsFabricantes, guardarIdsFabricantes } from "../lib/fabricanteMedias.js";
+import { IDIOMAS_AVISOS_VALIDOS } from "./perfil.js";
+import { generarEnlaceCheckIn } from "./telegram.js";
 
 // Flujo público de juego con la herramienta de marcador (Slice 3+4 del plan
 // "herramienta-marcador-torneos-ligas", guardado en el proyecto): un jugador
@@ -34,11 +38,24 @@ import { notificarJugador } from "./notificar.js";
 // login de socio pueda hacer. Vida corta pensada para una sesión de juego en
 // un dispositivo compartido, no para dejar sesión abierta días.
 
-const prisma = new PrismaClient();
 const router = Router();
 
 function firmarTokenPartida(jugador) {
   return jwt.sign({ tipo: "partida", jugadorId: jugador.id }, process.env.JWT_SECRET, { expiresIn: "12h" });
+}
+
+// jugadorId del token de PIN de la petición, o null si no trae uno válido
+// (para rutas públicas que dan algo más a los jugadores identificados).
+function jugadorPartidaDeLaPeticion(req) {
+  const header = req.headers.authorization || "";
+  const token = header.startsWith("Bearer ") ? header.slice(7) : null;
+  if (!token) return null;
+  try {
+    const payload = jwt.verify(token, process.env.JWT_SECRET);
+    return payload.tipo === "partida" && payload.jugadorId ? payload.jugadorId : null;
+  } catch {
+    return null;
+  }
 }
 
 function requireJugadorPartida(req, res, next) {
@@ -77,8 +94,8 @@ router.get("/jugadores", async (_req, res) => {
 // antes desde AdminJugadores.jsx, o que el propio socio fuera a su perfil).
 // Si ya tiene uno puesto, no se puede cambiar por aquí (para eso está el
 // admin o el perfil, que si requieren sesión de socio) — solo sirve para la
-// puesta en marcha inicial. loginLimiter por IP, igual que /login.
-router.post("/pin", loginLimiter, async (req, res) => {
+// puesta en marcha inicial. pinLimiter por IP + jugador, igual que /login.
+router.post("/pin", pinLimiter, async (req, res) => {
   const { jugadorId, pin } = req.body;
   if (!jugadorId || !pinValido(pin)) {
     return res.status(400).json({ error: "Elige quién eres y un PIN de 4 dígitos." });
@@ -96,10 +113,10 @@ router.post("/pin", loginLimiter, async (req, res) => {
 });
 
 // POST /api/partidas-herramienta/login - identificación con PIN (no es un
-// login de socio: ver el comentario de arriba). loginLimiter por IP, igual
-// que el login de socios, para que probar PINs de 4 dígitos uno detrás de
-// otro no sea viable.
-router.post("/login", loginLimiter, async (req, res) => {
+// login de socio: ver el comentario de arriba). pinLimiter por IP + jugador,
+// para que probar PINs de 4 dígitos uno detrás de otro no sea viable (ver
+// middleware/loginLimiter.js).
+router.post("/login", pinLimiter, async (req, res) => {
   const { jugadorId, pin } = req.body;
   if (!jugadorId || !pin) return res.status(400).json({ error: "Faltan datos" });
   const jugador = await prisma.jugador.findUnique({ where: { id: jugadorId } });
@@ -121,6 +138,79 @@ router.get("/pendientes", requireJugadorPartida, async (req, res) => {
   if (entidadTipo) pendientes = pendientes.filter((p) => p.entidadTipo === entidadTipo);
   if (entidadId) pendientes = pendientes.filter((p) => p.entidadId === entidadId);
   res.json(pendientes);
+});
+
+// GET /api/partidas-herramienta/mi-perfil - perfil del jugador identificado
+// con PIN (pestaña pública "Invitados"). Pensado para amigos/invitados sin
+// cuenta de socio: pueden editar su ficha (foto, nombre, apodo) y sus alias
+// de fabricante para las medias, igual que un socio en su perfil. Los
+// miembros (con usuarioId) tienen su perfil completo en la zona de socios, así
+// que aquí solo se les indica que lo gestionen allí (esMiembro: true).
+router.get("/mi-perfil", requireJugadorPartida, async (req, res) => {
+  const jugador = await prisma.jugador.findUnique({ where: { id: req.jugadorPartidaId } });
+  if (!jugador) return res.status(404).json({ error: "No se ha encontrado tu ficha de jugador." });
+  res.json({
+    id: jugador.id,
+    nombre: jugador.nombre,
+    apodo: jugador.apodo,
+    avatarUrl: jugador.avatarUrl,
+    esMiembro: !!jugador.usuarioId,
+    idiomaAvisos: jugador.idiomaAvisos,
+    idsFabricantes: await leerIdsFabricantes(jugador.id),
+  });
+});
+
+// GET /api/partidas-herramienta/mi-perfil/telegram - el invitado identificado
+// con PIN consulta si tiene los avisos por Telegram vinculados y obtiene su
+// deep-link al bot, para darse de alta él mismo desde su perfil sin esperar a
+// que el admin le mande el enlace (/aviso/:token sigue funcionando igual: es
+// el mismo token de check-in, ver generarEnlaceCheckIn en telegram.js).
+router.get("/mi-perfil/telegram", requireJugadorPartida, async (req, res) => {
+  const jugador = await prisma.jugador.findUnique({
+    where: { id: req.jugadorPartidaId },
+    include: { suscripcionTelegram: { select: { id: true } } },
+  });
+  if (!jugador) return res.status(404).json({ error: "No se ha encontrado tu ficha de jugador." });
+  const enlace = await generarEnlaceCheckIn(jugador.id);
+  res.json({ telegramVinculado: !!jugador.suscripcionTelegram, urlTelegram: enlace.urlTelegram });
+});
+
+// PUT /api/partidas-herramienta/mi-perfil - el jugador identificado con PIN
+// edita su propia ficha. Solo para amigos/invitados: si es un miembro
+// (usuarioId), se rechaza y se le remite a la zona de socios, donde su
+// nombre/foto ya se gestionan con su cuenta.
+router.put("/mi-perfil", requireJugadorPartida, async (req, res) => {
+  const jugador = await prisma.jugador.findUnique({ where: { id: req.jugadorPartidaId } });
+  if (!jugador) return res.status(404).json({ error: "No se ha encontrado tu ficha de jugador." });
+  if (jugador.usuarioId) {
+    return res.status(403).json({ error: "Tu perfil de miembro se gestiona desde la zona de socios." });
+  }
+  const { nombre, apodo, avatarUrl, idsFabricantes, idiomaAvisos } = req.body || {};
+  if (nombre !== undefined && !String(nombre).trim()) {
+    return res.status(400).json({ error: "El nombre no puede quedar vacío." });
+  }
+  if (idiomaAvisos !== undefined && !IDIOMAS_AVISOS_VALIDOS.includes(idiomaAvisos)) {
+    return res.status(400).json({ error: "Idioma de avisos no válido." });
+  }
+  const actualizado = await prisma.jugador.update({
+    where: { id: jugador.id },
+    data: {
+      nombre: nombre !== undefined ? String(nombre).trim() : undefined,
+      apodo: apodo !== undefined ? String(apodo).trim() || null : undefined,
+      avatarUrl: avatarUrl !== undefined ? avatarUrl || null : undefined,
+      idiomaAvisos: idiomaAvisos !== undefined ? idiomaAvisos : undefined,
+    },
+  });
+  await guardarIdsFabricantes(jugador.id, idsFabricantes);
+  res.json({
+    id: actualizado.id,
+    nombre: actualizado.nombre,
+    apodo: actualizado.apodo,
+    avatarUrl: actualizado.avatarUrl,
+    esMiembro: false,
+    idiomaAvisos: actualizado.idiomaAvisos,
+    idsFabricantes: await leerIdsFabricantes(jugador.id),
+  });
 });
 
 // GET /api/partidas-herramienta/mis-competiciones - torneos y ligas en los
@@ -388,8 +478,32 @@ const ICE_STUN = [
   { urls: "stun:stun.cloudflare.com:3478" },
 ];
 let iceCache = { hasta: 0, servidores: ICE_STUN };
-router.get("/ice", async (_req, res) => {
+// Auditoría 2026-09-26: antes esto daba las credenciales del TURN (de pago
+// por uso en Cloudflare) a cualquiera que lo pidiera. Ahora solo se dan a
+// quien las necesita de verdad: un jugador identificado con su PIN (emisor
+// o rival de un amistoso) o un espectador de una partida con las cámaras
+// encendidas en este momento (?partida=<id>). Al resto, solo STUN (gratis).
+// Con límite de peticiones por IP, y credenciales de vida corta.
+const iceLimiter = rateLimit({
+  windowMs: 15 * 60 * 1000,
+  max: 60,
+  standardHeaders: true,
+  legacyHeaders: false,
+  message: { error: "Demasiadas peticiones. Espera unos minutos." },
+});
+async function puedeUsarTurn(req) {
+  if (jugadorPartidaDeLaPeticion(req)) return true;
+  const partidaId = typeof req.query.partida === "string" ? req.query.partida : null;
+  if (!partidaId) return false;
+  const partida = await prisma.partidaHerramienta.findUnique({
+    where: { id: partidaId },
+    select: { camarasActivas: true, finalizada: true },
+  });
+  return !!(partida && partida.camarasActivas && !partida.finalizada);
+}
+router.get("/ice", iceLimiter, async (req, res) => {
   res.set("Cache-Control", "no-store");
+  if (!(await puedeUsarTurn(req).catch(() => false))) return res.json({ iceServers: ICE_STUN });
   if (Date.now() < iceCache.hasta) return res.json({ iceServers: iceCache.servidores });
   try {
     let servidores = ICE_STUN;
@@ -401,7 +515,7 @@ router.get("/ice", async (_req, res) => {
         {
           method: "POST",
           headers: { Authorization: `Bearer ${CF_TURN_API_TOKEN}`, "Content-Type": "application/json" },
-          body: JSON.stringify({ ttl: 86400 }),
+          body: JSON.stringify({ ttl: 4 * 60 * 60 }),
         }
       );
       if (!resp.ok) throw new Error(`Cloudflare TURN respondió ${resp.status}`);
@@ -411,7 +525,7 @@ router.get("/ice", async (_req, res) => {
         // Se conservan los STUN propios y se añade el TURN de Cloudflare
         // (sus entradas stun: se descartan por duplicadas).
         servidores = [...ICE_STUN, ...lista.filter((s) => [].concat(s.urls).some((u) => !String(u).startsWith("stun:")))];
-        vigenciaMs = 6 * 60 * 60 * 1000;
+        vigenciaMs = 60 * 60 * 1000; // se renuevan cada hora (duran 4 h)
       }
     } else if (TURN_URLS && TURN_USERNAME && TURN_CREDENTIAL) {
       servidores = [
@@ -484,7 +598,20 @@ router.post("/:id/legs", requireJugadorPartida, async (req, res) => {
     partida.jugadoresId1.includes(req.jugadorPartidaId) || partida.jugadoresId2.includes(req.jugadorPartidaId);
   if (!esParticipante) return res.status(403).json({ error: "No eres parte de este partido." });
 
-  const legs = [...partida.legs, { numero: partida.legs.length + 1, ladoGanador, estadisticas: estadisticas || {} }];
+  // registradoPor/registradoEn: quién metió este leg (sesión de PIN) y
+  // cuándo. En torneos/ligas se juega en un dispositivo compartido con la
+  // sesión de uno de los dos, así que no se exige confirmación del rival,
+  // pero queda constancia por si hay una reclamación (auditoría 2026-09-26).
+  const legs = [
+    ...partida.legs,
+    {
+      numero: partida.legs.length + 1,
+      ladoGanador,
+      estadisticas: estadisticas || {},
+      registradoPor: req.jugadorPartidaId,
+      registradoEn: new Date().toISOString(),
+    },
+  ];
   const legsGanados1 = partida.legsGanados1 + (ladoGanador === 1 ? 1 : 0);
   const legsGanados2 = partida.legsGanados2 + (ladoGanador === 2 ? 1 : 0);
   // Mayoría de "al mejor de N" (p.ej. al mejor de 5 -> hacen falta 3).
@@ -503,6 +630,10 @@ router.post("/:id/legs", requireJugadorPartida, async (req, res) => {
   if (finalizada) {
     const ganadorEtiqueta = legsGanados1 >= legsParaGanar ? partida.etiqueta1 : partida.etiqueta2;
     const resultado = `${legsGanados1}-${legsGanados2}`;
+    console.log(
+      `[herramienta] partida ${partida.id} terminada ${resultado} (${partida.etiqueta1} vs ${partida.etiqueta2}), ` +
+        `gana ${ganadorEtiqueta}; último leg registrado por jugador ${req.jugadorPartidaId}`
+    );
     if (partida.cuadroPartidoId) {
       await aplicarResultadoCuadroPartido(partida.cuadroPartidoId, { resultado, ganador: ganadorEtiqueta });
     } else if (partida.partidoLigaId) {
@@ -536,12 +667,28 @@ router.put("/:id/visita", requireJugadorPartida, async (req, res) => {
     partida.jugadoresId1.includes(req.jugadorPartidaId) || partida.jugadoresId2.includes(req.jugadorPartidaId);
   if (!esParticipante) return res.status(403).json({ error: "No eres parte de este partido." });
 
-  const turnoActual = partida.visitaEnCurso?.turnoJugadorId;
-  if (turnoActual && turnoActual !== req.jugadorPartidaId) {
-    return res.status(403).json({ error: "No es tu turno." });
-  }
   if (!req.body || !req.body.turnoJugadorId) {
     return res.status(400).json({ error: "Falta indicar de quién es el turno." });
+  }
+  if (partida.amistosa) {
+    const turnoActual = partida.visitaEnCurso?.turnoJugadorId;
+    if (turnoActual && turnoActual !== req.jugadorPartidaId) {
+      return res.status(403).json({ error: "No es tu turno." });
+    }
+  } else {
+    // Torneo/liga (marcador en directo para la página pública, ver GET
+    // /:id/directo): se juega en un único dispositivo compartido, con la
+    // sesión de uno solo de los dos jugadores, así que no hay control de
+    // turno. Se manda dardo a dardo, y dos envíos seguidos pueden llegar
+    // desordenados: se descarta uno más antiguo (por `secuencia`) que el ya
+    // guardado, o uno de un leg que ya ha terminado.
+    const guardada = partida.visitaEnCurso;
+    if (typeof req.body.leg === "number" && req.body.leg !== partida.legs.length + 1) {
+      return res.json(formatearPartida(partida));
+    }
+    if (guardada && typeof guardada.secuencia === "number" && !(req.body.secuencia > guardada.secuencia)) {
+      return res.json(formatearPartida(partida));
+    }
   }
 
   const actualizada = await prisma.partidaHerramienta.update({
@@ -549,6 +696,20 @@ router.put("/:id/visita", requireJugadorPartida, async (req, res) => {
     data: { visitaEnCurso: req.body },
   });
   res.json(formatearPartida(actualizada));
+});
+
+// GET /api/partidas-herramienta/:id/directo - público, solo lectura: estado
+// de una partida de torneo/liga para el marcador en directo de la página
+// pública (ventanita "En directo" del cuadro/jornada). Sin PIN — no incluye
+// nada que no se vea ya en la página pública más allá del marcador. Los
+// amistosos no se exponen (no cuelgan de ninguna página pública).
+router.get("/:id/directo", async (req, res) => {
+  res.set("Cache-Control", "no-store");
+  const partida = await prisma.partidaHerramienta.findUnique({ where: { id: req.params.id } });
+  if (!partida || partida.amistosa) return res.status(404).json({ error: "Partida no encontrada" });
+  const p = formatearPartida(partida);
+  delete p.listosInicio;
+  res.json({ ...p, camarasActivas: !!partida.camarasActivas });
 });
 
 // --- Cámaras en directo (plan "camaras-partidas", guardado en el proyecto) -
@@ -613,13 +774,28 @@ function responderFallo(res, r) {
   return res.status(r.fallo[0]).json({ error: r.fallo[1] });
 }
 
-// Descarta espectadores con más de 10 minutos sin actividad de un emisor,
-// para que la señalización no crezca sin límite.
+// Espectadores del público (ventanita "En directo" de la página del
+// torneo/liga, ver DirectoPartida.jsx en el frontend): como cada uno es una
+// conexión aparte desde el dispositivo de la diana (más subida y más
+// codificación de vídeo por cada uno), se limitan a unos pocos a la vez. Van
+// mandando un latido cada ~15s mientras miran (PUT /senal/:viewerId sin
+// datos) y se dan de baja al cerrar (DELETE); si dejan de latir (pestaña
+// cerrada de golpe), a los 45s dejan libre su plaza y el emisor corta su
+// conexión (ya no le aparecen en GET /senal).
+const MAX_ESPECTADORES_PUBLICOS = 3;
+const VIDA_ESPECTADOR_PUBLICO_MS = 45 * 1000;
+
+function viewerVivo(v, ahora = Date.now()) {
+  const vida = v.publico ? VIDA_ESPECTADOR_PUBLICO_MS : 10 * 60 * 1000;
+  return new Date(v.actualizadoEn || 0).getTime() >= ahora - vida;
+}
+
+// Descarta espectadores sin actividad (10 minutos, o 45s los del público —
+// ver arriba), para que la señalización no crezca sin límite.
 function podarViewers(emisor) {
-  const limite = Date.now() - 10 * 60 * 1000;
   const vivos = {};
   for (const [id, v] of Object.entries(emisor.viewers || {})) {
-    if (new Date(v.actualizadoEn || 0).getTime() >= limite) vivos[id] = v;
+    if (viewerVivo(v)) vivos[id] = v;
   }
   emisor.viewers = vivos;
 }
@@ -694,14 +870,37 @@ router.post("/:id/camara/revisada", requireJugadorPartida, async (req, res) => {
 // POST /api/partidas-herramienta/:id/camara/ver - público: un espectador se
 // registra para ver las cámaras de UN emisor (body: { emisorId }) y recibe su
 // viewerId (a partir de aquí, solo puede leer/escribir su propia entrada).
+//
+// body.publico = true: espectador de la página pública (no el rival de un
+// amistoso). Solo recibe la cámara de la diana, y hay un máximo de
+// MAX_ESPECTADORES_PUBLICOS a la vez por emisor (409 con completo: true).
+//
+// Sin publico (el rival de un amistoso, que recibe las dos cámaras a más
+// calidad y sin límite de cupo) hace falta el token de PIN de un
+// participante de la partida que no sea el propio emisor. Antes cualquiera
+// podía registrarse así sin límite, y el dispositivo emisor abría una
+// conexión con las dos cámaras por cada registro (auditoría 2026-09-26).
 router.post("/:id/camara/ver", async (req, res) => {
   const { emisorId } = req.body || {};
+  const publico = !!(req.body && req.body.publico);
+  const jugadorId = publico ? null : jugadorPartidaDeLaPeticion(req);
+  if (!publico && !jugadorId) {
+    return res.status(401).json({ error: "Identifícate con tu PIN para ver las cámaras de tu rival." });
+  }
   const viewerId = crypto.randomUUID();
-  const r = await modificarSenal(req.params.id, (senal) => {
+  const r = await modificarSenal(req.params.id, (senal, partida) => {
+    if (!publico && (!esParticipanteDe(partida, jugadorId) || jugadorId === emisorId)) {
+      return { fallo: [403, "No eres el rival en este partido."] };
+    }
     const emisor = emisorId && senal.emisores[emisorId];
     if (!emisor || !emisor.activas) return { fallo: [409, "Las cámaras no están activas ahora mismo."] };
     podarViewers(emisor);
+    if (publico) {
+      const publicos = Object.values(emisor.viewers).filter((v) => v.publico).length;
+      if (publicos >= MAX_ESPECTADORES_PUBLICOS) return { completo: true };
+    }
     emisor.viewers[viewerId] = {
+      publico,
       estado: "esperando",
       offer: null,
       answer: null,
@@ -712,6 +911,12 @@ router.post("/:id/camara/ver", async (req, res) => {
     return {};
   });
   if (r.fallo) return responderFallo(res, r);
+  if (r.completo) {
+    return res.status(409).json({
+      error: `Ya hay ${MAX_ESPECTADORES_PUBLICOS} personas viendo la cámara. Prueba otra vez en un rato.`,
+      completo: true,
+    });
+  }
   res.status(201).json({ viewerId });
 });
 
@@ -728,7 +933,15 @@ router.get("/:id/camara/senal", requireJugadorPartida, async (req, res) => {
     return res.status(403).json({ error: "No eres parte de este partido." });
   }
   const emisor = normalizarSenal(partida.senalCamara).emisores[req.jugadorPartidaId];
-  res.json({ viewers: (emisor && emisor.viewers) || {} });
+  // Sin los espectadores del público que ya se han ido (sin latido, ver
+  // viewerVivo): el emisor cierra su conexión al dejar de verlos aquí. Los
+  // demás (rival de un amistoso) se devuelven siempre, como hasta ahora: no
+  // mandan latido y su conexión no debe cortarse por inactividad.
+  const ahora = Date.now();
+  const viewers = Object.fromEntries(
+    Object.entries((emisor && emisor.viewers) || {}).filter(([, v]) => !v.publico || viewerVivo(v, ahora))
+  );
+  res.json({ viewers });
 });
 
 // PUT /api/partidas-herramienta/:id/camara/senal - el EMISOR manda su oferta
@@ -789,6 +1002,20 @@ router.put("/:id/camara/senal/:viewerId", async (req, res) => {
       iceReceptor: [...(actual.iceReceptor || []), ...(iceReceptor || [])],
       actualizadoEn: new Date().toISOString(),
     };
+    return {};
+  });
+  if (r.fallo) return responderFallo(res, r);
+  res.status(204).end();
+});
+
+// DELETE /api/partidas-herramienta/:id/camara/senal/:viewerId - público: el
+// espectador se da de baja al cerrar (deja libre su plaza, ver
+// MAX_ESPECTADORES_PUBLICOS). Idempotente.
+router.delete("/:id/camara/senal/:viewerId", async (req, res) => {
+  const r = await modificarSenal(req.params.id, (senal) => {
+    for (const emisor of Object.values(senal.emisores)) {
+      if (emisor.viewers) delete emisor.viewers[req.params.viewerId];
+    }
     return {};
   });
   if (r.fallo) return responderFallo(res, r);

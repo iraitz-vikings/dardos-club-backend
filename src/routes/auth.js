@@ -1,23 +1,68 @@
 import { Router } from "express";
-import { PrismaClient } from "@prisma/client";
+import { prisma } from "../lib/prisma.js";
 import bcrypt from "bcryptjs";
 import jwt from "jsonwebtoken";
+import crypto from "node:crypto";
 import { requireAdmin } from "../middleware/requireAdmin.js";
-import { loginLimiter } from "../middleware/loginLimiter.js";
+import { loginLimiter, registroLimiter } from "../middleware/loginLimiter.js";
 
-const prisma = new PrismaClient();
 const router = Router();
 
-// Middleware para rutas que requieren socio logueado (se reutilizará en fases futuras)
-export function requireAuth(req, res, next) {
+// Verifica que `token` sea un token de SESIÓN DE SOCIO (el de firmarToken:
+// { sub, rol }) y devuelve su payload; lanza si no. Con la misma
+// JWT_SECRET se firman también el token de la herramienta de marcador
+// ({ tipo: "partida" }, partidasHerramienta.js) y el de re-suscripción de
+// avisos ({ tipo: "push-resub" }, webPush.js). Antes bastaba con que la
+// firma fuera válida, así que un token de PIN — que cualquiera puede
+// conseguir poniéndole PIN a un jugador que aún no lo tenga — abría toda la
+// zona de socios y la subida de archivos (auditoría 2026-09-26). Usar esto
+// en cualquier sitio que acepte un token de socio.
+export function verificarTokenSocio(token) {
+  const payload = jwt.verify(token, process.env.JWT_SECRET);
+  if (!payload || payload.tipo || !payload.sub || !payload.rol) {
+    throw new Error("El token no es de sesión de socio");
+  }
+  return payload;
+}
+
+// Payload de la sesión de socio si la petición trae un token de socio
+// válido, o null si no trae ninguno o no vale (no es un error: sirve para
+// rutas públicas que muestran algo más a los socios, como los torneos y
+// ligas privados o el buscador).
+export function socioDeLaPeticion(req) {
+  const header = req.headers.authorization || "";
+  const token = header.startsWith("Bearer ") ? header.slice(7) : null;
+  if (!token) return null;
+  try {
+    return verificarTokenSocio(token);
+  } catch {
+    return null;
+  }
+}
+
+// Middleware para rutas que requieren socio logueado. Además de verificar
+// el token, comprueba en la base de datos que la cuenta sigue existiendo y
+// aprobada, y toma el rol ACTUAL de ahí: el token dura 30 días y lleva el
+// rol del momento del login, así que antes quitarle a alguien el rol de
+// admin/capitán, o borrar su cuenta, no tenía efecto hasta que caducara
+// (auditoría 2026-09-26).
+export async function requireAuth(req, res, next) {
   const header = req.headers.authorization || "";
   const token = header.startsWith("Bearer ") ? header.slice(7) : null;
   if (!token) return res.status(401).json({ error: "No autenticado" });
+  let payload;
   try {
-    req.usuario = jwt.verify(token, process.env.JWT_SECRET);
-    next();
+    payload = verificarTokenSocio(token);
   } catch {
     return res.status(401).json({ error: "Token inválido o caducado" });
+  }
+  try {
+    const usuario = await prisma.usuario.findUnique({ where: { id: payload.sub }, select: { rol: true, aprobado: true } });
+    if (!usuario || !usuario.aprobado) return res.status(401).json({ error: "Tu cuenta ya no está activa" });
+    req.usuario = { ...payload, rol: usuario.rol };
+    next();
+  } catch (err) {
+    next(err);
   }
 }
 
@@ -31,6 +76,9 @@ export function requireRole(...roles) {
   };
 }
 
+const ROLES_VALIDOS = ["jugador", "capitan", "admin"];
+const LONGITUD_MINIMA_PASSWORD = 6;
+
 function firmarToken(usuario) {
   return jwt.sign({ sub: usuario.id, rol: usuario.rol }, process.env.JWT_SECRET, {
     expiresIn: "30d",
@@ -38,12 +86,16 @@ function firmarToken(usuario) {
 }
 
 // POST /api/auth/registro - alta pública con código de invitación, queda pendiente de aprobación
-// loginLimiter también aquí: el código de invitación es otro secreto fijo que
+// registroLimiter: el código de invitación es otro secreto fijo que
 // se podría intentar adivinar a base de intentos, igual que una contraseña.
-router.post("/registro", loginLimiter, async (req, res) => {
+router.post("/registro", registroLimiter, async (req, res) => {
   const { nombre, email, password, codigoInvitacion } = req.body;
-  if (!nombre || !email || !password || !codigoInvitacion) {
+  if (!nombre || !email || !password || !codigoInvitacion ||
+      typeof email !== "string" || typeof password !== "string" || typeof nombre !== "string") {
     return res.status(400).json({ error: "Faltan datos" });
+  }
+  if (typeof password !== "string" || password.length < LONGITUD_MINIMA_PASSWORD) {
+    return res.status(400).json({ error: `La contraseña debe tener al menos ${LONGITUD_MINIMA_PASSWORD} caracteres` });
   }
   if (codigoInvitacion !== process.env.CODIGO_INVITACION) {
     return res.status(403).json({ error: "Código de invitación incorrecto" });
@@ -66,7 +118,7 @@ router.post("/registro", loginLimiter, async (req, res) => {
 // POST /api/auth/login
 router.post("/login", loginLimiter, async (req, res) => {
   const { email, password } = req.body;
-  if (!email || !password) {
+  if (!email || !password || typeof email !== "string" || typeof password !== "string") {
     return res.status(400).json({ error: "Faltan datos" });
   }
   const usuario = await prisma.usuario.findUnique({ where: { email: email.trim().toLowerCase() } });
@@ -122,20 +174,59 @@ router.get("/pendientes", requireAdmin, async (_req, res) => {
   res.json(pendientes);
 });
 
+// Ficha de Jugador de un miembro. Antes solo se creaba la primera vez que
+// el miembro entraba en su perfil (obtenerOCrearJugador en perfil.js), así
+// que hasta entonces no salía en "Jugadores del club", y si ya jugaba como
+// amigo acababa con dos fichas. Ahora se resuelve al aprobar o dar de alta
+// la cuenta: con `jugadorId` se le asigna esa ficha de amigo (sin cuenta);
+// sin él se le crea una nueva con su nombre.
+//
+// comprobarFichaVinculable devuelve un mensaje de error (o null) para poder
+// validarlo ANTES de aprobar/crear la cuenta y no dejarla a medias.
+async function comprobarFichaVinculable(jugadorId) {
+  if (typeof jugadorId !== "string" || !jugadorId) return "Ficha de jugador inválida.";
+  const jugador = await prisma.jugador.findUnique({ where: { id: jugadorId } });
+  if (!jugador) return "Jugador no encontrado";
+  if (jugador.usuarioId) return "Esa ficha ya pertenece a otro miembro.";
+  return null;
+}
+
+async function asignarFichaJugador(usuario, jugadorId) {
+  const existente = await prisma.jugador.findUnique({ where: { usuarioId: usuario.id } });
+  if (existente) return existente;
+  if (jugadorId) {
+    // oculto: false porque una ficha oculta (invitado puntual de Telegram)
+    // que pasa a ser de un miembro debe salir ya en el directorio.
+    return prisma.jugador.update({ where: { id: jugadorId }, data: { usuarioId: usuario.id, oculto: false } });
+  }
+  return prisma.jugador.create({ data: { nombre: usuario.nombre, usuarioId: usuario.id } });
+}
+
 // POST /api/auth/:id/aprobar - aprueba una cuenta y le asigna rol (admin)
 router.post("/:id/aprobar", requireAdmin, async (req, res) => {
-  const { rol } = req.body; // "jugador" | "capitan" | "admin", opcional (por defecto jugador)
+  const { rol, jugadorId } = req.body; // rol: "jugador" | "capitan" | "admin", opcional (por defecto jugador)
+  if (rol !== undefined && !ROLES_VALIDOS.includes(rol)) {
+    return res.status(400).json({ error: "Rol inválido" });
+  }
+  if (jugadorId) {
+    const error = await comprobarFichaVinculable(jugadorId);
+    if (error) return res.status(409).json({ error });
+  }
   const usuario = await prisma.usuario.update({
     where: { id: req.params.id },
     data: { aprobado: true, ...(rol ? { rol } : {}) },
   });
+  await asignarFichaJugador(usuario, jugadorId);
   res.json({ id: usuario.id, nombre: usuario.nombre, rol: usuario.rol, aprobado: usuario.aprobado });
 });
 
 // POST /api/auth/:id/resetear-password - el admin genera una contraseña
 // provisional para un socio (por ejemplo, si la ha olvidado)
 router.post("/:id/resetear-password", requireAdmin, async (req, res) => {
-  const provisional = Math.random().toString(36).slice(-8);
+  // Generador criptográfico (antes Math.random, que no lo es): 8 caracteres
+  // sin los que se confunden al dictarlos (0/O, 1/l/I).
+  const alfabeto = "abcdefghjkmnpqrstuvwxyz23456789";
+  const provisional = Array.from(crypto.randomBytes(8), (b) => alfabeto[b % alfabeto.length]).join("");
   const passwordHash = await bcrypt.hash(provisional, 10);
   const usuario = await prisma.usuario.update({
     where: { id: req.params.id },
@@ -151,8 +242,8 @@ router.put("/cambiar-password", requireAuth, async (req, res) => {
   if (!passwordActual || !passwordNueva) {
     return res.status(400).json({ error: "Faltan datos" });
   }
-  if (passwordNueva.length < 6) {
-    return res.status(400).json({ error: "La contraseña nueva debe tener al menos 6 caracteres" });
+  if (typeof passwordNueva !== "string" || passwordNueva.length < LONGITUD_MINIMA_PASSWORD) {
+    return res.status(400).json({ error: `La contraseña nueva debe tener al menos ${LONGITUD_MINIMA_PASSWORD} caracteres` });
   }
   const usuario = await prisma.usuario.findUnique({ where: { id: req.usuario.sub } });
   if (!usuario) return res.status(404).json({ error: "Usuario no encontrado" });
@@ -212,6 +303,8 @@ router.get("/socios", requireAdmin, async (_req, res) => {
       creadoEn: true,
       jugador: {
         select: {
+          id: true,
+          nombre: true,
           idsFabricantes: {
             select: {
               idExterno: true,
@@ -233,6 +326,8 @@ router.get("/socios", requireAdmin, async (_req, res) => {
   });
   const conIdsFabricantes = socios.map(({ jugador, ...s }) => ({
     ...s,
+    // null = todavía sin ficha de jugador (no sale en "Jugadores del club").
+    jugador: jugador ? { id: jugador.id, nombre: jugador.nombre } : null,
     idsFabricantes: (jugador?.idsFabricantes || []).map((i) => ({
       nombreFabricante: i.fabricante.nombre,
       logoUrl: i.fabricante.logoUrl,
@@ -254,23 +349,63 @@ router.get("/socios", requireAdmin, async (_req, res) => {
 // PATCH /api/auth/:id/rol - cambia el rol de un socio ya aprobado (admin)
 router.patch("/:id/rol", requireAdmin, async (req, res) => {
   const { rol } = req.body;
-  if (!["jugador", "capitan", "admin"].includes(rol)) {
+  if (!ROLES_VALIDOS.includes(rol)) {
     return res.status(400).json({ error: "Rol inválido" });
   }
   const usuario = await prisma.usuario.update({ where: { id: req.params.id }, data: { rol } });
   res.json({ id: usuario.id, nombre: usuario.nombre, rol: usuario.rol });
 });
 
+// POST /api/auth/:id/vincular-jugador - vincula la cuenta :id a una ficha de
+// Jugador ya existente sin cuenta (body: { jugadorId }), normalmente la de
+// "amigo" que ya jugaba en el club antes de darse de alta como miembro. Así
+// el miembro sale en "Jugadores del club" con todo su historial, en vez de
+// esperar a que entre en su perfil y se le cree una ficha nueva vacía (ver
+// obtenerOCrearJugador en perfil.js). Si la cuenta ya tiene ficha propia se
+// rechaza: en ese caso lo que toca es fusionar la de amigo en ella
+// (POST /api/jugadores/:id/fusionar).
+router.post("/:id/vincular-jugador", requireAdmin, async (req, res) => {
+  const { jugadorId } = req.body || {};
+  if (!jugadorId || typeof jugadorId !== "string") {
+    return res.status(400).json({ error: "Falta la ficha de jugador a vincular." });
+  }
+  const [usuario, fichaActual] = await Promise.all([
+    prisma.usuario.findUnique({ where: { id: req.params.id } }),
+    prisma.jugador.findUnique({ where: { usuarioId: req.params.id } }),
+  ]);
+  if (!usuario) return res.status(404).json({ error: "Cuenta no encontrada" });
+  if (fichaActual) {
+    return res.status(409).json({
+      error: "Esta cuenta ya tiene ficha de jugador: fusiona la otra ficha en ella desde Admin → Jugadores.",
+    });
+  }
+  const error = await comprobarFichaVinculable(jugadorId);
+  if (error) return res.status(409).json({ error });
+  const actualizado = await asignarFichaJugador(usuario, jugadorId);
+  res.json({ id: actualizado.id, nombre: actualizado.nombre, usuarioId: actualizado.usuarioId });
+});
+
 // POST /api/auth/crear-manual - el admin crea una cuenta directamente, ya aprobada (admin)
 router.post("/crear-manual", requireAdmin, async (req, res) => {
-  const { nombre, email, password, rol } = req.body;
-  if (!nombre || !email || !password) {
+  const { nombre, email, password, rol, jugadorId } = req.body;
+  if (!nombre || !email || !password ||
+      typeof email !== "string" || typeof password !== "string" || typeof nombre !== "string") {
     return res.status(400).json({ error: "Faltan datos" });
+  }
+  if (typeof password !== "string" || password.length < LONGITUD_MINIMA_PASSWORD) {
+    return res.status(400).json({ error: `La contraseña debe tener al menos ${LONGITUD_MINIMA_PASSWORD} caracteres` });
+  }
+  if (rol !== undefined && rol !== "" && !ROLES_VALIDOS.includes(rol)) {
+    return res.status(400).json({ error: "Rol inválido" });
   }
   const emailNormalizado = email.trim().toLowerCase();
   const existente = await prisma.usuario.findUnique({ where: { email: emailNormalizado } });
   if (existente) {
     return res.status(409).json({ error: "Ya existe una cuenta con ese email" });
+  }
+  if (jugadorId) {
+    const error = await comprobarFichaVinculable(jugadorId);
+    if (error) return res.status(409).json({ error });
   }
   const passwordHash = await bcrypt.hash(password, 10);
   const usuario = await prisma.usuario.create({
@@ -282,6 +417,7 @@ router.post("/crear-manual", requireAdmin, async (req, res) => {
       aprobado: true,
     },
   });
+  await asignarFichaJugador(usuario, jugadorId);
   res.status(201).json({ id: usuario.id, nombre: usuario.nombre, email: usuario.email, rol: usuario.rol });
 });
 

@@ -5,10 +5,9 @@
 // crónica) — se dejó fuera "jugadores del club" porque hoy no existe una
 // ficha pública/de socio por jugador a la que llevar el resultado.
 import { Router } from "express";
-import { PrismaClient } from "@prisma/client";
-import jwt from "jsonwebtoken";
+import { prisma } from "../lib/prisma.js";
+import { socioDeLaPeticion } from "./auth.js";
 
-const prisma = new PrismaClient();
 const router = Router();
 
 const LIMITE_POR_CATEGORIA = 6;
@@ -19,21 +18,14 @@ const LIMITE_POR_CATEGORIA = 6;
 // solo para socios), además de los públicos. Un token ausente, caducado o
 // inválido no es un error — simplemente se busca como visitante anónimo.
 function socioOpcional(req, _res, next) {
-  const header = req.headers.authorization || "";
-  const token = header.startsWith("Bearer ") ? header.slice(7) : null;
-  if (token) {
-    try {
-      req.usuario = jwt.verify(token, process.env.JWT_SECRET);
-    } catch {
-      // sigue como anónimo
-    }
-  }
+  req.usuario = socioDeLaPeticion(req) || undefined;
   next();
 }
 
 // GET /api/buscar?q=texto
 router.get("/", socioOpcional, async (req, res) => {
-  const q = (req.query.q || "").trim();
+  // req.query.q puede llegar como array (?q[]=a&q[]=b): se ignora, no es texto.
+  const q = (typeof req.query.q === "string" ? req.query.q : "").trim();
   if (q.length < 2) {
     return res.json({ noticias: [], torneos: [], ligas: [] });
   }

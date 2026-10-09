@@ -7,11 +7,11 @@
 // añade un segundo aviso, la mañana del propio día del partido, para los
 // tres tipos de enfrentamiento del club (torneos, ligas, competiciones
 // externas). Se llama desde el cron matutino de src/index.js.
-import { PrismaClient } from "@prisma/client";
-import { notificarJugadores } from "../routes/notificar.js";
+import { prisma } from "./prisma.js";
+import { notificarJugadores, TTL_AVISO_RECORDATORIO } from "../routes/notificar.js";
 import { urlPublicaCuadrante, urlPublicaLiga } from "./enlacesPublicos.js";
+import { CLUB_NOMBRE } from "./club.js";
 
-const prisma = new PrismaClient();
 
 // Límites [inicio, fin) del día de HOY en la España peninsular
 // (Europe/Madrid), como instantes UTC reales. El servidor (Railway) corre
@@ -66,6 +66,9 @@ async function recordatoriosExternos(rangoHoy) {
       await notificarJugadores(jugadorIds, {
         titulo: `Hoy juegas: ${nombreEquipo}`,
         cuerpo: `${p.rival ? `Contra ${p.rival}` : "Partido"} hoy a las ${textoHora(p.fecha)}${nombreTorneo ? ` (${nombreTorneo})` : ""}.`,
+        tag: `partido-ext-${p.id}`,
+        tipo: "recordatorio",
+        ttl: TTL_AVISO_RECORDATORIO,
       });
       enviados++;
     }
@@ -105,11 +108,14 @@ async function recordatoriosTorneosClub(rangoHoy) {
       });
       const jugadorIds = participantes.flatMap((pt) => [pt.jugador1Id, pt.jugador2Id]).filter(Boolean);
       if (jugadorIds.length > 0) {
-        const nombreCompeticion = p.cuadrante.torneoClub?.nombre || p.cuadrante.liga?.nombre || "Torneo Vikings";
+        const nombreCompeticion = p.cuadrante.torneoClub?.nombre || p.cuadrante.liga?.nombre || `Torneo ${CLUB_NOMBRE}`;
         await notificarJugadores(jugadorIds, {
           titulo: `Hoy juegas: ${nombreCompeticion}`,
           cuerpo: `${p.jugador1 || "?"} vs ${p.jugador2 || "?"} hoy a las ${textoHora(p.fechaCalendario)}.`,
           url: urlPublicaCuadrante(p.cuadrante),
+          tag: `partido-${p.id}`,
+          tipo: "recordatorio",
+          ttl: TTL_AVISO_RECORDATORIO,
         });
         enviados++;
       }
@@ -151,6 +157,9 @@ async function recordatoriosLigasClub(rangoHoy) {
           titulo: `Hoy juegas: ${nombreLiga}`,
           cuerpo: `${p.participante1 || "?"} vs ${p.participante2 || "?"} hoy a las ${textoHora(p.fechaCalendario)}.`,
           url: urlPublicaLiga(p.ligaId),
+          tag: `partido-liga-${p.id}`,
+          tipo: "recordatorio",
+          ttl: TTL_AVISO_RECORDATORIO,
         });
         enviados++;
       }

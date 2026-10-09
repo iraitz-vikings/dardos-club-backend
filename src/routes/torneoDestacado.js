@@ -1,8 +1,7 @@
 import { Router } from "express";
-import { PrismaClient } from "@prisma/client";
+import { prisma } from "../lib/prisma.js";
 import { requireAdmin } from "../middleware/requireAdmin.js";
 
-const prisma = new PrismaClient();
 const router = Router();
 
 // GET /api/torneo-destacado - público, devuelve el torneo actual (o null si no hay ninguno)

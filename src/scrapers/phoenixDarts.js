@@ -1,4 +1,5 @@
 import { chromium } from "playwright";
+import { indiceLineaAlias } from "./coincidenciaAlias.js";
 
 // Scraper de Phoenix Darts. A diferencia de Connection Darts, aquí no hay un
 // "alias" propiamente dicho: el buscador de jugadores (cabecera > "Jugador")
@@ -67,8 +68,10 @@ function parsearResultado(texto, alias) {
     .split("\n")
     .map((l) => l.trim())
     .filter(Boolean);
-  const aliasUpper = alias.trim().toUpperCase();
-  const idx = lineas.findIndex((l) => l.toUpperCase().includes(aliasUpper));
+  // Alias exacto o como palabra completa, nunca dentro de otra palabra: con
+  // un simple "contiene", buscar "mañu" cogía las medias de "erMAÑUe" si
+  // salía antes en la lista (ver coincidenciaAlias.js).
+  const idx = indiceLineaAlias(lineas, alias);
   if (idx === -1) return null;
 
   let ppd = null;

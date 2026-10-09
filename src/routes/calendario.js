@@ -1,8 +1,8 @@
 import { Router } from "express";
-import { PrismaClient } from "@prisma/client";
+import { prisma } from "../lib/prisma.js";
 import { requireAuth } from "./auth.js";
+import { CLUB_NOMBRE } from "../lib/club.js";
 
-const prisma = new PrismaClient();
 const router = Router();
 
 function inicioDeSemana(fechaBase) {
@@ -28,7 +28,7 @@ router.get("/", requireAuth, async (req, res) => {
 
   const externos = await prisma.partido.findMany({
     where: { fijado: true, fecha: rango },
-    include: { maquina: true, equipoTorneo: { include: { torneo: { include: { plataforma: true } } } } },
+    include: { maquina: true, equipoTorneo: { include: { equipoClub: true, torneo: { include: { plataforma: true } } } } },
   });
 
   const internosTorneo = await prisma.cuadroPartido.findMany({
@@ -51,7 +51,9 @@ router.get("/", requireAuth, async (req, res) => {
       id: `ext-${p.id}`,
       fecha: p.fecha,
       maquina: p.maquina?.nombre || null,
-      titulo: `${p.equipoTorneo.nombreEquipo || "Vikings"} vs ${p.rival || "?"}`,
+      // equipoClub.nombre primero: en las inscripciones nuevas nombreEquipo
+      // va vacío, y si no salía "Vikings vs …" sin decir qué equipo juega.
+      titulo: `${p.equipoTorneo.equipoClub?.nombre || p.equipoTorneo.nombreEquipo || CLUB_NOMBRE} vs ${p.rival || "?"}`,
       competicion: `${p.equipoTorneo.torneo?.nombre || ""}${p.equipoTorneo.torneo?.plataforma ? ` (${p.equipoTorneo.torneo.plataforma.nombre})` : ""}`,
       // Las competiciones externas no tienen página propia en la web del
       // club, así que no se enlazan.
@@ -62,7 +64,7 @@ router.get("/", requireAuth, async (req, res) => {
       fecha: p.fechaCalendario,
       maquina: p.maquinaCalendario?.nombre || null,
       titulo: `${p.jugador1 || "?"} vs ${p.jugador2 || "?"}`,
-      competicion: p.cuadrante.torneoClub?.nombre || p.cuadrante.liga?.nombre || "Torneo Vikings",
+      competicion: p.cuadrante.torneoClub?.nombre || p.cuadrante.liga?.nombre || `Torneo ${CLUB_NOMBRE}`,
       // Un cuadrante de eliminatoria pertenece a un torneo O a una liga (la
       // gran final de algunas ligas también usa cuadrante) — de ahí sale a
       // qué página enlazar. Sin enlace (null) si por lo que sea no tiene
@@ -92,6 +94,11 @@ router.get("/", requireAuth, async (req, res) => {
       enlace: null,
     })),
   ];
+
+  // Orden cronológico (por fecha/hora): antes cada fuente (partidos fijados,
+  // de cuadrante, de liga, eventos manuales) se concatenaba en bloque, así
+  // que dentro de una misma máquina/día los eventos no salían por hora.
+  eventos.sort((a, b) => new Date(a.fecha) - new Date(b.fecha));
 
   res.json({ inicioSemana, eventos });
 });

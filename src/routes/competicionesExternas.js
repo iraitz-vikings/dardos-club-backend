@@ -1,12 +1,12 @@
 import { Router } from "express";
-import { PrismaClient } from "@prisma/client";
-import jwt from "jsonwebtoken";
-import { requireAuth } from "./auth.js";
+import { prisma } from "../lib/prisma.js";
+import { requireAuth, verificarTokenSocio } from "./auth.js";
 import { requireAdmin, adminRateLimiter } from "../middleware/requireAdmin.js";
 import { actualizarClasificacionTorneo, actualizarTodasLasClasificaciones } from "../scrapers/actualizarClasificaciones.js";
-import { notificarJugadores } from "./notificar.js";
+import { notificarJugadores, TTL_AVISO_NORMAL } from "./notificar.js";
+import { JUGADOR_PUBLICO, JUGADOR_CON_USUARIO } from "../lib/selectsJugador.js";
+import { CLUB_NOMBRE } from "../lib/club.js";
 
-const prisma = new PrismaClient();
 const router = Router();
 
 // Acepta o bien el admin (panel), o bien la sesión de un socio (para que el
@@ -29,7 +29,7 @@ function continuarRequireAdminOSocio(req, res, next) {
   const token = header.startsWith("Bearer ") ? header.slice(7) : null;
   if (token) {
     try {
-      req.usuario = jwt.verify(token, process.env.JWT_SECRET);
+      req.usuario = verificarTokenSocio(token);
       return next();
     } catch {
       // sigue abajo
@@ -46,9 +46,16 @@ const includeTorneo = {
       // el desplegable de capitán por inscripción (EquipoTorneo.capitan) no
       // se usa en la práctica, así que se incluyen los dos para poder
       // comprobar cualquiera de ellos.
-      equipoClub: { include: { capitan: true } },
-      capitan: true,
-      jugadores: { include: { jugador: true } },
+      // cocapitanes: los miembros de la plantilla marcados como
+      // co-capitán, con los mismos permisos que el capitán.
+      equipoClub: {
+        include: {
+          capitan: JUGADOR_CON_USUARIO,
+          miembros: { where: { cocapitan: true }, include: { jugador: JUGADOR_CON_USUARIO } },
+        },
+      },
+      capitan: JUGADOR_CON_USUARIO,
+      jugadores: { include: { jugador: JUGADOR_PUBLICO } },
       partidos: { include: { maquina: true }, orderBy: { fecha: "asc" } },
       clasificacion: { orderBy: { posicion: "asc" } },
     },
@@ -126,7 +133,7 @@ router.post("/torneos", requireAdmin, async (req, res) => {
 });
 router.put("/torneos/:id", requireAdmin, async (req, res) => {
   const { id } = req.params;
-  const { nombre, nivel, temporada, idExterno } = req.body;
+  const { nombre, nivel, temporada, idExterno, terminado } = req.body;
   try {
     const torneo = await prisma.torneo.update({
       where: { id },
@@ -135,6 +142,7 @@ router.put("/torneos/:id", requireAdmin, async (req, res) => {
         nivel: nivel !== undefined ? nivel || null : undefined,
         temporada: temporada !== undefined ? temporada || null : undefined,
         idExterno: idExterno !== undefined ? idExterno || null : undefined,
+        terminado: terminado !== undefined ? !!terminado : undefined,
       },
       include: includeTorneo,
     });
@@ -169,6 +177,11 @@ router.post("/torneos/:id/actualizar-clasificacion", requireAdmin, async (req, r
     include: { plataforma: true, equipos: { include: { equipoClub: true } } },
   });
   if (!torneo) return res.status(404).json({ error: "Torneo no encontrado" });
+  // Una competición terminada (histórico) ya no se actualiza; hay que
+  // reabrirla primero si de verdad hace falta.
+  if (torneo.terminado) {
+    return res.status(400).json({ error: "Esta competición está marcada como terminada. Reábrela para actualizar su clasificación." });
+  }
 
   const resultado = await actualizarClasificacionTorneo(torneo);
 
@@ -184,8 +197,8 @@ router.post("/torneos/:id/actualizar-clasificacion", requireAdmin, async (req, r
 
 // POST /api/competiciones-externas/actualizar-todas-clasificaciones - lanza
 // a mano la actualización de la clasificación de TODOS los torneos/ligas
-// externos dados de alta (Radikal y Phoenix; Connection Darts se omite hasta
-// que tenga scraper). También se ejecuta sola cada noche (ver el cron en
+// externos dados de alta que no estén terminados (Radikal, Phoenix y
+// Connection Darts). También se ejecuta sola cada noche (ver el cron en
 // index.js). Puede tardar bastante si hay muchos torneos, porque cada uno
 // abre su propio navegador y se procesan de uno en uno.
 router.post("/actualizar-todas-clasificaciones", requireAdmin, async (_req, res) => {
@@ -254,19 +267,41 @@ router.delete("/equipos/:id/jugadores/:jugadorId", requireAdmin, async (req, res
 
 // ---------- Partidos ----------
 
-// Comprueba si `usuarioSub` es el capitán de esta inscripción: el de la
-// inscripción concreta (poco usado) o, el caso real, el capitán de la
-// plantilla del equipo del club. Devuelve también el equipoTorneo por si
-// hace falta (null si no existe).
+// include de EquipoTorneo con todo lo que hace falta para saber quién manda
+// en él (ver tieneMandoEnEquipo).
+const includeMandoEquipo = {
+  capitan: JUGADOR_CON_USUARIO,
+  equipoClub: {
+    include: {
+      capitan: JUGADOR_CON_USUARIO,
+      miembros: { where: { cocapitan: true }, include: { jugador: JUGADOR_CON_USUARIO } },
+    },
+  },
+};
+
+// ¿`usuarioSub` es capitán o co-capitán de esta inscripción? Capitán puede
+// ser el de la inscripción concreta (poco usado) o, el caso real, el de la
+// plantilla del equipo del club; co-capitanes son los miembros de esa
+// plantilla marcados como tal. `equipoTorneo` debe venir con
+// includeMandoEquipo.
+function tieneMandoEnEquipo(equipoTorneo, usuarioSub) {
+  if (!usuarioSub) return false;
+  return (
+    equipoTorneo.capitan?.usuarioId === usuarioSub ||
+    equipoTorneo.equipoClub?.capitan?.usuarioId === usuarioSub ||
+    (equipoTorneo.equipoClub?.miembros || []).some((m) => m.jugador?.usuarioId === usuarioSub)
+  );
+}
+
+// Devuelve el equipoTorneo (null si no existe) y si `usuarioSub` es su
+// capitán o co-capitán.
 async function esCapitanDeEquipo(equipoTorneoId, usuarioSub) {
   const equipoTorneo = await prisma.equipoTorneo.findUnique({
     where: { id: equipoTorneoId },
-    include: { capitan: true, equipoClub: { include: { capitan: true } } },
+    include: includeMandoEquipo,
   });
   if (!equipoTorneo) return { equipoTorneo: null, esCapitan: false };
-  const esCapitan =
-    equipoTorneo.capitan?.usuarioId === usuarioSub || equipoTorneo.equipoClub?.capitan?.usuarioId === usuarioSub;
-  return { equipoTorneo, esCapitan };
+  return { equipoTorneo, esCapitan: tieneMandoEnEquipo(equipoTorneo, usuarioSub) };
 }
 
 // El admin, o el capitán de este equipo, pueden crear el partido (fecha +
@@ -282,7 +317,7 @@ router.post("/equipos/:id/partidos", requireAdminOSocio, async (req, res) => {
     const { equipoTorneo, esCapitan } = await esCapitanDeEquipo(id, req.usuario?.sub);
     if (!equipoTorneo) return res.status(404).json({ error: "Equipo no encontrado" });
     if (!esAdmin && !esCapitan) {
-      return res.status(403).json({ error: "Solo el capitán de este equipo o un admin pueden añadir partidos" });
+      return res.status(403).json({ error: "Solo el capitán o un co-capitán de este equipo, o un admin, pueden añadir partidos" });
     }
   }
 
@@ -298,22 +333,16 @@ router.put("/partidos/:id", requireAdminOSocio, async (req, res) => {
   const partido = await prisma.partido.findUnique({
     where: { id },
     include: {
-      equipoTorneo: {
-        include: { capitan: true, equipoClub: { include: { capitan: true } }, torneo: true },
-      },
+      equipoTorneo: { include: { ...includeMandoEquipo, torneo: true } },
     },
   });
   if (!partido) return res.status(404).json({ error: "Partido no encontrado" });
 
   if (!req.esAdminPanel) {
     const esAdmin = req.usuario?.rol === "admin";
-    // El capitán puede ser el de esta inscripción concreta (poco usado) o,
-    // el caso real, el capitán de la plantilla del equipo del club.
-    const esCapitan =
-      partido.equipoTorneo.capitan?.usuarioId === req.usuario?.sub ||
-      partido.equipoTorneo.equipoClub?.capitan?.usuarioId === req.usuario?.sub;
+    const esCapitan = tieneMandoEnEquipo(partido.equipoTorneo, req.usuario?.sub);
     if (!esAdmin && !esCapitan) {
-      return res.status(403).json({ error: "Solo el capitán de este equipo o un admin pueden confirmar este partido" });
+      return res.status(403).json({ error: "Solo el capitán o un co-capitán de este equipo, o un admin, pueden confirmar este partido" });
     }
   }
 
@@ -341,15 +370,22 @@ router.put("/partidos/:id", requireAdminOSocio, async (req, res) => {
       .then((roster) => {
         const nombreEquipo = partido.equipoTorneo.equipoClub?.nombre || "Tu equipo";
         const nombreTorneo = partido.equipoTorneo.torneo?.nombre || "";
-        const fechaTexto = new Date(actualizado.fecha).toLocaleDateString("es-ES", {
-          day: "2-digit",
-          month: "2-digit",
-        });
+        // Día de la semana, fecha y hora en hora de España (el servidor va
+        // en UTC: sin timeZone, la hora salía 1-2 h antes y el día podía
+        // cambiar cerca de medianoche). Antes solo se ponía "dd/mm".
+        const fecha = new Date(actualizado.fecha);
+        const zona = { timeZone: "Europe/Madrid" };
+        const diaTexto = fecha.toLocaleDateString("es-ES", { ...zona, weekday: "long", day: "numeric", month: "numeric" }).replace(",", "");
+        const horaTexto = fecha.toLocaleTimeString("es-ES", { ...zona, hour: "2-digit", minute: "2-digit" });
+        const maquinaTexto = actualizado.maquina?.nombre ? `, en ${actualizado.maquina.nombre}` : "";
         return notificarJugadores(
           roster.map((r) => r.jugadorId),
           {
             titulo: `Partido fijado: ${nombreEquipo}`,
-            cuerpo: `${actualizado.rival ? `Contra ${actualizado.rival}` : "Partido"} el ${fechaTexto}${nombreTorneo ? ` (${nombreTorneo})` : ""}.`,
+            tipo: "partidoFijado",
+            cuerpo: `${actualizado.rival ? `Contra ${actualizado.rival}` : "Partido"} el ${diaTexto} a las ${horaTexto}${maquinaTexto}${nombreTorneo ? ` (${nombreTorneo})` : ""}.`,
+            tag: `partido-ext-${actualizado.id}`,
+            ttl: TTL_AVISO_NORMAL,
           }
         );
       })
@@ -375,7 +411,7 @@ router.get("/calendario", requireAuth, async (_req, res) => {
 
   const partidosExternos = await prisma.partido.findMany({
     where: { fijado: true, fecha: { gte: inicioSemana, lt: finSemana } },
-    include: { maquina: true, equipoTorneo: { include: { torneo: { include: { plataforma: true } } } } },
+    include: { maquina: true, equipoTorneo: { include: { equipoClub: true, torneo: { include: { plataforma: true } } } } },
   });
 
   const cuadroPartidosEnCurso = await prisma.cuadroPartido.findMany({
@@ -394,7 +430,7 @@ router.get("/calendario", requireAuth, async (_req, res) => {
       fecha: p.fecha,
       maquina: p.maquina?.nombre || null,
       rival: p.rival,
-      equipo: p.equipoTorneo.nombreEquipo || "Vikings",
+      equipo: p.equipoTorneo.equipoClub?.nombre || p.equipoTorneo.nombreEquipo || CLUB_NOMBRE,
       torneo: p.equipoTorneo.torneo?.nombre,
       plataforma: p.equipoTorneo.torneo?.plataforma?.nombre,
     })),

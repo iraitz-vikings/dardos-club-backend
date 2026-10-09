@@ -1,14 +1,16 @@
 import { Router } from "express";
-import { PrismaClient } from "@prisma/client";
+import { prisma } from "../lib/prisma.js";
 import { requireAuth } from "./auth.js";
 import { requireAdmin } from "../middleware/requireAdmin.js";
+import { JUGADOR_PUBLICO, JUGADOR_CON_USUARIO } from "../lib/selectsJugador.js";
 
-const prisma = new PrismaClient();
 const router = Router();
 
+const TIPOS_EQUIPO = ["equipo", "pareja"];
+
 const includeCompleto = {
-  capitan: true,
-  miembros: { include: { jugador: true }, orderBy: { creadoEn: "asc" } },
+  capitan: JUGADOR_CON_USUARIO,
+  miembros: { include: { jugador: JUGADOR_PUBLICO }, orderBy: { creadoEn: "asc" } },
   inscripciones: {
     include: {
       // "equipoTorneoId: null" filtra a la tabla compartida por todo el
@@ -17,8 +19,8 @@ const includeCompleto = {
       // ya se muestran por separado abajo (clasificacion, en esta misma
       // inscripción).
       torneo: { include: { plataforma: true, clasificacion: { where: { equipoTorneoId: null }, orderBy: { posicion: "asc" } } } },
-      capitan: true,
-      jugadores: { include: { jugador: true } },
+      capitan: JUGADOR_CON_USUARIO,
+      jugadores: { include: { jugador: JUGADOR_PUBLICO } },
       partidos: { include: { maquina: true }, orderBy: { fecha: "asc" } },
       // Clasificación propia de ESTA inscripción (solo tiene filas en
       // plataformas por equipo como Phoenix, donde cada equipo del club
@@ -41,10 +43,13 @@ router.get("/admin", requireAdmin, async (_req, res) => {
 });
 
 router.post("/", requireAdmin, async (req, res) => {
-  const { nombre, descripcion, escudoUrl } = req.body;
+  const { nombre, descripcion, escudoUrl, tipo } = req.body;
   if (!nombre) return res.status(400).json({ error: "Falta el nombre del equipo" });
+  if (tipo !== undefined && !TIPOS_EQUIPO.includes(tipo)) {
+    return res.status(400).json({ error: "Tipo no válido (equipo o pareja)." });
+  }
   const equipo = await prisma.equipoClub.create({
-    data: { nombre, descripcion: descripcion || null, escudoUrl: escudoUrl || null },
+    data: { nombre, descripcion: descripcion || null, escudoUrl: escudoUrl || null, tipo: tipo || "equipo" },
     include: includeCompleto,
   });
   res.status(201).json(equipo);
@@ -52,7 +57,10 @@ router.post("/", requireAdmin, async (req, res) => {
 
 router.put("/:id", requireAdmin, async (req, res) => {
   const { id } = req.params;
-  const { nombre, descripcion, escudoUrl, capitanId } = req.body;
+  const { nombre, descripcion, escudoUrl, capitanId, tipo, activo } = req.body;
+  if (tipo !== undefined && !TIPOS_EQUIPO.includes(tipo)) {
+    return res.status(400).json({ error: "Tipo no válido (equipo o pareja)." });
+  }
   try {
     const equipo = await prisma.equipoClub.update({
       where: { id },
@@ -61,6 +69,8 @@ router.put("/:id", requireAdmin, async (req, res) => {
         descripcion: descripcion !== undefined ? descripcion || null : undefined,
         escudoUrl: escudoUrl !== undefined ? escudoUrl || null : undefined,
         capitanId: capitanId !== undefined ? capitanId || null : undefined,
+        tipo: tipo !== undefined ? tipo : undefined,
+        activo: activo !== undefined ? !!activo : undefined,
       },
       include: includeCompleto,
     });
@@ -93,6 +103,18 @@ router.post("/:id/miembros", requireAdmin, async (req, res) => {
   } catch {
     res.status(409).json({ error: "Ese jugador ya está en el equipo" });
   }
+});
+
+// PUT /api/equipos-club/:id/miembros/:jugadorId - marca o desmarca a un
+// miembro de la plantilla como co-capitán (body: { cocapitan: true|false }).
+router.put("/:id/miembros/:jugadorId", requireAdmin, async (req, res) => {
+  const { id, jugadorId } = req.params;
+  const { cocapitan } = req.body || {};
+  if (typeof cocapitan !== "boolean") return res.status(400).json({ error: "Falta cocapitan (true/false)" });
+  const { count } = await prisma.miembroEquipoClub.updateMany({ where: { equipoId: id, jugadorId }, data: { cocapitan } });
+  if (count === 0) return res.status(404).json({ error: "Ese jugador no está en la plantilla" });
+  const equipo = await prisma.equipoClub.findUnique({ where: { id }, include: includeCompleto });
+  res.json(equipo);
 });
 
 router.delete("/:id/miembros/:jugadorId", requireAdmin, async (req, res) => {

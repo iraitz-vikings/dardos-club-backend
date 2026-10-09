@@ -1,10 +1,11 @@
 import { Router } from "express";
-import { PrismaClient } from "@prisma/client";
+import { prisma } from "../lib/prisma.js";
 import bcrypt from "bcryptjs";
 import { requireAuth } from "./auth.js";
 import { requireAdmin } from "../middleware/requireAdmin.js";
+import { actualizarMediasDeJugador } from "../scrapers/actualizarMedias.js";
+import { leerIdsFabricantes, guardarIdsFabricantes } from "../lib/fabricanteMedias.js";
 
-const prisma = new PrismaClient();
 const router = Router();
 
 // PIN de partidas: 4 dígitos exactos. Usado por jugadores.js (aquí, para que
@@ -50,7 +51,7 @@ router.post("/", requireAdmin, async (req, res) => {
 // permitirlo desde este endpoint los desincronizaría (el nombre del socio se
 // usa también para el login/gestión de socios).
 router.put("/:id", requireAdmin, async (req, res) => {
-  const { nombre, apodo } = req.body;
+  const { nombre, apodo, avatarUrl, idsFabricantes } = req.body;
   if (!nombre || !nombre.trim()) {
     return res.status(400).json({ error: "Falta el nombre" });
   }
@@ -61,9 +62,51 @@ router.put("/:id", requireAdmin, async (req, res) => {
   }
   const actualizado = await prisma.jugador.update({
     where: { id: req.params.id },
-    data: { nombre: nombre.trim(), ...(apodo !== undefined ? { apodo: apodo.trim() || null } : {}) },
+    data: {
+      nombre: nombre.trim(),
+      ...(apodo !== undefined ? { apodo: apodo.trim() || null } : {}),
+      ...(avatarUrl !== undefined ? { avatarUrl: avatarUrl || null } : {}),
+    },
   });
+  // Alias/medias de fabricante del amigo/invitado (ver
+  // src/lib/fabricanteMedias.js), para poder rellenarle las medias desde el
+  // panel igual que lo haría él en la pestaña "Invitados".
+  await guardarIdsFabricantes(jugador.id, idsFabricantes);
   res.json(actualizado);
+});
+
+// GET /api/jugadores/:id/perfil - foto y alias de fabricante de un jugador,
+// para poder editarlos desde el panel de admin (pestaña "Jugadores del club").
+router.get("/:id/perfil", requireAdmin, async (req, res) => {
+  const jugador = await prisma.jugador.findUnique({ where: { id: req.params.id } });
+  if (!jugador) return res.status(404).json({ error: "Jugador no encontrado" });
+  res.json({
+    id: jugador.id,
+    nombre: jugador.nombre,
+    apodo: jugador.apodo,
+    avatarUrl: jugador.avatarUrl,
+    esMiembro: !!jugador.usuarioId,
+    idsFabricantes: await leerIdsFabricantes(jugador.id),
+  });
+});
+
+// GET /api/jugadores/:id/ficha - ficha pública de un jugador (nombre, foto,
+// apodo, bio y medias) para el socio logueado. La usa el modal de perfil que
+// se abre al pulsar un nombre en el cuadrante (mismo modal que en "Jugadores
+// del club"). Requiere sesión de socio: las medias solo se enseñan a quien se
+// ha identificado, no a un visitante anónimo de la página pública del torneo.
+router.get("/:id/ficha", requireAuth, async (req, res) => {
+  const jugador = await prisma.jugador.findUnique({ where: { id: req.params.id } });
+  if (!jugador) return res.status(404).json({ error: "Jugador no encontrado" });
+  res.json({
+    id: jugador.id,
+    nombre: jugador.nombre,
+    apodo: jugador.apodo,
+    avatarUrl: jugador.avatarUrl,
+    bio: jugador.bio,
+    usuarioId: jugador.usuarioId,
+    idsFabricantes: await leerIdsFabricantes(jugador.id),
+  });
 });
 
 // PUT /api/jugadores/:id/pin - el admin pone o cambia el PIN de partidas de
@@ -79,6 +122,22 @@ router.put("/:id/pin", requireAdmin, async (req, res) => {
   const pinPartidasHash = await bcrypt.hash(pin, 10);
   await prisma.jugador.update({ where: { id: jugador.id }, data: { pinPartidasHash } });
   res.json({ ok: true });
+});
+
+// POST /api/jugadores/:id/actualizar-medias - refresca las medias/estadísticas
+// SOLO de este jugador consultando sus alias en las webs de fabricante con
+// scraper (Connection/Phoenix), en vez de recorrer a todo el club como el
+// botón general de "Actualizar medias" o el cron nocturno. Más rápido y con
+// menos consumo de servidor cuando solo hace falta refrescar a una persona.
+router.post("/:id/actualizar-medias", requireAdmin, async (req, res) => {
+  const jugador = await prisma.jugador.findUnique({ where: { id: req.params.id } });
+  if (!jugador) return res.status(404).json({ error: "Jugador no encontrado" });
+  try {
+    const resumen = await actualizarMediasDeJugador(jugador.id);
+    res.json(resumen);
+  } catch (err) {
+    res.status(500).json({ error: err.message || "No se pudo actualizar las medias de este jugador" });
+  }
 });
 
 // GET /api/jugadores/directorio - lista pública para socios logueados (sin datos

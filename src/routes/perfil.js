@@ -1,10 +1,10 @@
 import { Router } from "express";
-import { PrismaClient } from "@prisma/client";
+import { prisma } from "../lib/prisma.js";
 import bcrypt from "bcryptjs";
 import { requireAuth } from "./auth.js";
 import { pinValido } from "./jugadores.js";
+import { leerIdsFabricantes, guardarIdsFabricantes } from "../lib/fabricanteMedias.js";
 
-const prisma = new PrismaClient();
 const router = Router();
 
 async function obtenerOCrearJugador(usuarioId) {
@@ -22,10 +22,6 @@ async function obtenerOCrearJugador(usuarioId) {
 router.get("/", requireAuth, async (req, res) => {
   const jugador = await obtenerOCrearJugador(req.usuario.sub);
   const usuario = await prisma.usuario.findUnique({ where: { id: req.usuario.sub } });
-  const idsFabricantes = await prisma.jugadorFabricanteId.findMany({
-    where: { jugadorId: jugador.id },
-    include: { fabricante: true },
-  });
   res.json({
     id: jugador.id,
     nombre: jugador.nombre,
@@ -36,22 +32,7 @@ router.get("/", requireAuth, async (req, res) => {
     rol: usuario.rol,
     tienePinPartidas: !!jugador.pinPartidasHash,
     idiomaAvisos: jugador.idiomaAvisos,
-    idsFabricantes: idsFabricantes.map((i) => ({
-      fabricanteId: i.fabricanteId,
-      nombreFabricante: i.fabricante.nombre,
-      urlPerfilPlantilla: i.fabricante.urlPerfilPlantilla,
-      logoUrl: i.fabricante.logoUrl,
-      idExterno: i.idExterno,
-      notaBusqueda: i.notaBusqueda,
-      mpr: i.mpr,
-      ppd: i.ppd,
-      mprVirtual: i.mprVirtual,
-      ppdVirtual: i.ppdVirtual,
-      mprPresencial: i.mprPresencial,
-      ppdPresencial: i.ppdPresencial,
-      statsActualizadoEn: i.statsActualizadoEn,
-      statsError: i.statsError,
-    })),
+    idsFabricantes: await leerIdsFabricantes(jugador.id),
   });
 });
 
@@ -153,18 +134,34 @@ router.get("/historial", requireAuth, async (req, res) => {
 // selector de idioma de la web (Nav.jsx), pero es un dato aparte: uno es de
 // navegación (localStorage) y el otro de a quién avisar en qué idioma (base
 // de datos). Ver comentario de Jugador.idiomaAvisos en schema.prisma.
-const IDIOMAS_AVISOS_VALIDOS = ["es", "eu", "fr"];
+export const IDIOMAS_AVISOS_VALIDOS = ["es", "eu", "fr"];
 
 // PUT /api/perfil - el socio edita su propio perfil
 router.put("/", requireAuth, async (req, res) => {
-  const { apodo, avatarUrl, bio, idiomaAvisos, idsFabricantes } = req.body;
+  const { nombre, apodo, avatarUrl, bio, idiomaAvisos, idsFabricantes } = req.body;
   if (idiomaAvisos !== undefined && !IDIOMAS_AVISOS_VALIDOS.includes(idiomaAvisos)) {
     return res.status(400).json({ error: "Idioma de avisos no válido." });
   }
+  if (nombre !== undefined && !String(nombre).trim()) {
+    return res.status(400).json({ error: "El nombre no puede quedar vacío." });
+  }
+
   const jugador = await obtenerOCrearJugador(req.usuario.sub);
+
+  // El nombre vive en la cuenta (Usuario.nombre) y además se copia al Jugador,
+  // que es el que se muestra en toda la web (cuadrantes, ranking…), para que
+  // no queden desincronizados. El correo (login) no se edita desde aquí.
+  if (nombre !== undefined) {
+    await prisma.usuario.update({
+      where: { id: req.usuario.sub },
+      data: { nombre: String(nombre).trim() },
+    });
+  }
+
   const actualizado = await prisma.jugador.update({
     where: { id: jugador.id },
     data: {
+      nombre: nombre !== undefined ? String(nombre).trim() : undefined,
       apodo: apodo !== undefined ? apodo || null : undefined,
       avatarUrl: avatarUrl !== undefined ? avatarUrl || null : undefined,
       bio: bio !== undefined ? bio || null : undefined,
@@ -172,62 +169,22 @@ router.put("/", requireAuth, async (req, res) => {
     },
   });
 
-  // idsFabricantes: array de { fabricanteId, idExterno, notaBusqueda, mpr?,
-  // ppd? }. Un idExterno vacío borra el ID guardado para ese fabricante; si
-  // no, se crea/actualiza. notaBusqueda es opcional (hoy solo la usa
-  // Radikal Darts, ver comentario en schema.prisma) y se guarda tal cual,
-  // incluso vacía, para poder borrarla si el socio la quita.
-  //
-  // mpr/ppd son opcionales y solo se tocan si el frontend los manda de
-  // verdad (item.mpr/item.ppd !== undefined): hoy es una entrada manual que
-  // solo expone el formulario de Radikal Darts (ver SocioPerfil.jsx),
-  // porque su scraper automático no puede iniciar sesión (bloqueado por la
-  // propia web de Radikal). Si no se mandan, no se pisan los valores que ya
-  // hubiera puesto el scraper automático de otro fabricante (Connection,
-  // Phoenix). Al guardar un valor manual se marca como si fuese una
-  // actualización automática correcta (statsActualizadoEn a ahora,
-  // statsError a null) para que desaparezca cualquier error de scraping
-  // anterior en cuanto el socio pone su media a mano.
-  if (Array.isArray(idsFabricantes)) {
-    for (const item of idsFabricantes) {
-      if (!item?.fabricanteId) continue;
-      const idExterno = (item.idExterno || "").trim();
-      if (!idExterno) {
-        await prisma.jugadorFabricanteId
-          .delete({ where: { jugadorId_fabricanteId: { jugadorId: jugador.id, fabricanteId: item.fabricanteId } } })
-          .catch(() => {});
-        continue;
-      }
-      const notaBusqueda = (item.notaBusqueda || "").trim() || null;
+  // idsFabricantes: alias/medias de fabricante del socio (ver
+  // guardarIdsFabricantes en src/lib/fabricanteMedias.js).
+  await guardarIdsFabricantes(jugador.id, idsFabricantes);
 
-      const datosManuales = {};
-      if (item.mpr !== undefined) {
-        const mpr = item.mpr === null || item.mpr === "" ? null : Number(item.mpr);
-        datosManuales.mpr = Number.isFinite(mpr) ? mpr : null;
-      }
-      if (item.ppd !== undefined) {
-        const ppd = item.ppd === null || item.ppd === "" ? null : Number(item.ppd);
-        datosManuales.ppd = Number.isFinite(ppd) ? ppd : null;
-      }
-      if (Object.keys(datosManuales).length > 0) {
-        datosManuales.statsActualizadoEn = new Date();
-        datosManuales.statsError = null;
-      }
-
-      // .catch: si el fabricante fue borrado por un admin entre que el
-      // frontend cargó la lista y el socio guardó, ignoramos ese ID en vez
-      // de romper el resto del guardado por una violación de FK.
-      await prisma.jugadorFabricanteId
-        .upsert({
-          where: { jugadorId_fabricanteId: { jugadorId: jugador.id, fabricanteId: item.fabricanteId } },
-          update: { idExterno, notaBusqueda, ...datosManuales },
-          create: { jugadorId: jugador.id, fabricanteId: item.fabricanteId, idExterno, notaBusqueda, ...datosManuales },
-        })
-        .catch(() => {});
-    }
-  }
-
-  res.json(actualizado);
+  // No se devuelve el jugador en crudo: llevaría pinPartidasHash (el hash del
+  // PIN) y usuarioId. Solo lo que la pantalla de perfil necesita (auditoría
+  // 2026-09-26).
+  res.json({
+    id: actualizado.id,
+    nombre: actualizado.nombre,
+    apodo: actualizado.apodo,
+    avatarUrl: actualizado.avatarUrl,
+    bio: actualizado.bio,
+    idiomaAvisos: actualizado.idiomaAvisos,
+    tienePinPartidas: !!actualizado.pinPartidasHash,
+  });
 });
 
 // PUT /api/perfil/pin - el socio logueado se pone o cambia su propio PIN de

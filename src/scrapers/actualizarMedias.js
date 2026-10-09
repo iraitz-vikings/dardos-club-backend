@@ -1,8 +1,7 @@
-import { PrismaClient } from "@prisma/client";
+import { prisma } from "../lib/prisma.js";
 import { actualizarMediasConnection } from "./connectionDarts.js";
 import { actualizarMediasPhoenix } from "./phoenixDarts.js";
 
-const prisma = new PrismaClient();
 
 // Campos de media que puede rellenar un scraper. Phoenix solo devuelve
 // mpr/ppd (una única media); Connection devuelve las 4 variantes
@@ -41,6 +40,22 @@ const SCRAPERS = [
 // Nunca lanza si un fabricante falla entero (ej. login roto): lo recoge en
 // el resumen para que el admin lo vea, y sigue con el resto.
 export async function actualizarTodasLasMedias() {
+  return actualizarMedias();
+}
+
+// Igual que la anterior pero solo para UN jugador: consulta sus alias en
+// cada fabricante con scraper, en vez de recorrer a todo el club. Sirve para
+// el botón "Actualizar medias" de un jugador concreto en el panel de admin,
+// que ahorra tiempo y consumo de servidor (Railway) frente a la pasada
+// completa cuando solo se quiere refrescar a una persona.
+export async function actualizarMediasDeJugador(jugadorId) {
+  return actualizarMedias({ jugadorId });
+}
+
+// Núcleo compartido: si se pasa `jugadorId`, solo mira los alias de ese
+// jugador; si no, los de todos. El resto (por fabricante, tolerante a fallos)
+// es idéntico en ambos casos.
+async function actualizarMedias({ jugadorId } = {}) {
   const resumen = {};
 
   for (const { etiqueta, clave, scraper } of SCRAPERS) {
@@ -53,7 +68,7 @@ export async function actualizarTodasLasMedias() {
     }
 
     const registros = await prisma.jugadorFabricanteId.findMany({
-      where: { fabricanteId: fabricante.id },
+      where: { fabricanteId: fabricante.id, ...(jugadorId ? { jugadorId } : {}) },
       select: { id: true, idExterno: true, notaBusqueda: true },
     });
 

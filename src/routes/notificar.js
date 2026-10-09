@@ -4,11 +4,10 @@
 // por ahí. Un jugador puede no tener ningún canal activo todavía (no ha
 // pasado por "Mi perfil" o no ha hecho el check-in de Telegram) — en ese
 // caso simplemente no se le manda nada, no es un error.
-import { PrismaClient } from "@prisma/client";
+import { prisma } from "../lib/prisma.js";
 import { enviarPushAJugador } from "./webPush.js";
 import { enviarTelegramAJugador } from "./telegram.js";
 
-const prisma = new PrismaClient();
 
 // titulo/cuerpo pueden ser un string (igual para todo el mundo, como hasta
 // ahora) o un objeto { es, eu, fr, ... } con una versión por idioma — en ese
@@ -29,21 +28,52 @@ function resolverTexto(campo, idioma) {
 // aviso: en Web Push como imagen grande (si el sistema operativo/navegador
 // la soporta — se degrada sin más si no), en Telegram mandando la foto con
 // el texto como pie en vez de un mensaje de solo texto.
+//
+// tag y ttl son solo para Web Push (ver enviarPushAJugador en webPush.js):
+// tag hace que los avisos del mismo partido se sustituyan en el móvil en vez
+// de apilarse; ttl (segundos) descarta el aviso si no se ha podido entregar
+// a tiempo. tipo (bienvenida, unMinuto...) solo sirve para el historial de
+// Web Push (RegistroPush), para saber después qué aviso falló.
 export async function notificarJugador(jugadorId, opts = {}) {
   const jugador = await prisma.jugador.findUnique({ where: { id: jugadorId }, select: { idiomaAvisos: true } });
   const idioma = jugador?.idiomaAvisos || "es";
 
   const titulo = resolverTexto(opts.titulo, idioma);
   const cuerpo = resolverTexto(opts.cuerpo, idioma);
-  const { url, imagen } = opts;
+  const { url, imagen, tag, ttl, tipo } = opts;
   const textoTelegram = [titulo, cuerpo, url].filter(Boolean).join("\n\n");
 
   const [push, telegram] = await Promise.all([
-    enviarPushAJugador(jugadorId, { titulo, cuerpo, url, imagen }),
+    enviarPushAJugador(jugadorId, { titulo, cuerpo, url, imagen, tag }, { ttl, tipo }),
     enviarTelegramAJugador(jugadorId, textoTelegram, imagen),
   ]);
 
   return { jugadorId, push, telegram };
+}
+
+// Caducidades (TTL, en segundos) de los avisos de partidos — ver `ttl` más
+// arriba. "Empieza ahora" y "falta 1 minuto" no sirven de nada si llegan
+// tarde; el resto (programado, recordatorio del día, eliminado, campeón...)
+// aguanta más.
+export const TTL_AVISO_EN_CURSO = 15 * 60;
+export const TTL_AVISO_UN_MINUTO = 2 * 60;
+export const TTL_AVISO_RECORDATORIO = 12 * 60 * 60;
+export const TTL_AVISO_NORMAL = 24 * 60 * 60;
+
+// true si ya se mandó un aviso con esta clave hace menos de `ventanaMs` (y si
+// no, la apunta como enviada ahora). Para no repetir el mismo aviso cuando
+// algo se desmarca y se vuelve a marcar (p.ej. "en curso" en el admin):
+// cada repetición es un aviso más que nadie pulsa, justo lo que hace que
+// Chrome/Android acaben quitando el permiso de notificaciones. En memoria:
+// si el servidor se reinicia se olvida, que como mucho supone un aviso de
+// más.
+const avisosRecientes = new Map();
+export function avisoRepetido(clave, ventanaMs = 10 * 60 * 1000) {
+  const ahora = Date.now();
+  for (const [k, t] of avisosRecientes) if (ahora - t > ventanaMs) avisosRecientes.delete(k);
+  if (avisosRecientes.has(clave)) return true;
+  avisosRecientes.set(clave, ahora);
+  return false;
 }
 
 // Manda el mismo aviso a varios jugadores a la vez (p.ej. toda la plantilla

@@ -2,7 +2,10 @@ import { Router } from "express";
 import multer from "multer";
 import { v2 as cloudinary } from "cloudinary";
 import jwt from "jsonwebtoken";
+import { verificarTokenSocio } from "./auth.js";
 import { requireAdmin, adminRateLimiter } from "../middleware/requireAdmin.js";
+import rateLimit from "express-rate-limit";
+import { CLOUDINARY_FOLDER } from "../lib/club.js";
 
 const router = Router();
 
@@ -32,10 +35,28 @@ cloudinary.config({
 // que cada uno pueda subir su propia foto de perfil sin usar la contraseña de
 // admin). adminRateLimiter protege el token fijo también en esta puerta de
 // entrada alternativa (ver src/middleware/requireAdmin.js).
+// Límite de subidas para socios (no admin): cada subida real cuenta (no solo
+// las fallidas), para que un socio no pueda llenar el Cloudinary del club
+// subiendo sin parar (auditoría 2026-09-26). El admin no está limitado.
+const subidaSocioLimiter = rateLimit({
+  windowMs: 15 * 60 * 1000,
+  max: 30,
+  standardHeaders: true,
+  legacyHeaders: false,
+  message: { error: "Has subido demasiados archivos en poco tiempo. Espera unos minutos." },
+});
+
 function requireAdminOAuth(req, res, next) {
   adminRateLimiter(req, res, (err) => {
     if (err) return next(err);
-    continuarRequireAdminOAuth(req, res, next);
+    // Con token de admin no se aplica el límite de socio.
+    if (req.headers["x-admin-token"] === process.env.ADMIN_TOKEN) {
+      return continuarRequireAdminOAuth(req, res, next);
+    }
+    subidaSocioLimiter(req, res, (err2) => {
+      if (err2) return next(err2);
+      continuarRequireAdminOAuth(req, res, next);
+    });
   });
 }
 function continuarRequireAdminOAuth(req, res, next) {
@@ -45,8 +66,20 @@ function continuarRequireAdminOAuth(req, res, next) {
   const token = header.startsWith("Bearer ") ? header.slice(7) : null;
   if (token) {
     try {
-      req.usuario = jwt.verify(token, process.env.JWT_SECRET);
+      req.usuario = verificarTokenSocio(token);
       return next();
+    } catch {
+      // no es un token de socio; se prueba abajo con el de PIN
+    }
+    // Token de PIN de la herramienta (amigo/invitado que sube su foto de
+    // perfil desde la pestaña "Invitados"): { tipo: "partida", jugadorId }.
+    // Igual que un socio, pasa por el límite de subidas de arriba.
+    try {
+      const payload = jwt.verify(token, process.env.JWT_SECRET);
+      if (payload.tipo === "partida" && payload.jugadorId) {
+        req.jugadorPartidaId = payload.jugadorId;
+        return next();
+      }
     } catch {
       // sigue abajo y devuelve 401
     }
@@ -82,7 +115,7 @@ router.post("/", requireAdminOAuth, subirArchivo, async (req, res) => {
   try {
     const resultado = await new Promise((resolve, reject) => {
       const stream = cloudinary.uploader.upload_stream(
-        { folder: "dardos-club", resource_type: "auto" },
+        { folder: CLOUDINARY_FOLDER, resource_type: "auto" },
         (error, result) => (error ? reject(error) : resolve(result))
       );
       stream.end(req.file.buffer);
@@ -110,7 +143,7 @@ router.get("/existentes", requireAdmin, async (_req, res) => {
   try {
     const resultado = await cloudinary.api.resources({
       type: "upload",
-      prefix: "dardos-club/",
+      prefix: `${CLOUDINARY_FOLDER}/`,
       resource_type: "image",
       max_results: 100,
       direction: "desc",

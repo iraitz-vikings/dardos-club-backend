@@ -1,12 +1,21 @@
 import express from "express";
 import cors from "cors";
+import helmet from "helmet";
 import cron from "node-cron";
 import "dotenv/config";
+// Hace que un error lanzado (o una promesa rechazada) dentro de CUALQUIER
+// ruta async se pase al manejador de errores de Express en vez de quedar
+// como "unhandledRejection", que en Node por defecto MATA el proceso. Sin
+// esto, una sola petición malformada (p.ej. POST /auth/login con el email
+// como lista: email.trim() peta) tumbaba el servidor entero para todo el
+// mundo, sin necesidad de estar identificado (auditoría 2026-09-26).
+import "express-async-errors";
 
 import { actualizarTodasLasMedias } from "./scrapers/actualizarMedias.js";
 import { actualizarTodasLasClasificaciones } from "./scrapers/actualizarClasificaciones.js";
 import { iniciarBotTelegram } from "./routes/telegram.js";
 import { limpiarPapelera } from "./lib/limpiarPapelera.js";
+import { purgarRegistroPush } from "./lib/registroPush.js";
 import { enviarRecordatoriosDeHoy } from "./lib/recordatoriosPartidos.js";
 import { enviarAvisosUnMinutoTemporizador } from "./lib/avisoTemporizadorPartidos.js";
 
@@ -35,6 +44,17 @@ import notificacionesRouter from "./routes/notificaciones.js";
 import partidasHerramientaRouter from "./routes/partidasHerramienta.js";
 
 const app = express();
+// Railway pone un proxy delante: sin esto, req.ip es siempre la IP del proxy
+// y los límites de intentos (loginLimiter.js, requireAdmin.js) contaban a
+// todo el mundo como si fuera una sola persona. 1 = confiar solo en el
+// primer salto (el de Railway), no en lo que mande el cliente.
+app.set("trust proxy", 1);
+// Cabeceras de seguridad (X-Content-Type-Options, Referrer-Policy, oculta
+// X-Powered-By, etc.). La API solo devuelve JSON, no HTML, así que se
+// desactiva la CSP de helmet (no aplica y podría estorbar). CORS abierto a
+// propósito: la web del club está en otro dominio y la sesión va por token
+// Bearer (no por cookie), así que abrir CORS no expone la sesión de nadie.
+app.use(helmet({ contentSecurityPolicy: false, crossOriginResourcePolicy: false }));
 app.use(cors());
 // Límite subido de 100kb (por defecto de Express) a 5mb: algunas rutas de
 // admin (torneos/ligas del club) construían su PUT mandando el objeto
@@ -107,30 +127,37 @@ app.get("/api/health", (_req, res) => res.json({ ok: true }));
 // poder recibir el /start de los invitados que hacen check-in.
 iniciarBotTelegram();
 
-// Cada 15 días (días 1 y 16 del mes) a las 04:00 se refrescan las medias de
-// Connection Darts y Phoenix Darts guardadas en los perfiles de los socios
-// (ver src/scrapers/actualizarMedias.js) — las medias no cambian tanto como
-// para justificar hacerlo cada noche. También se puede lanzar a mano en
-// cualquier momento desde el admin con el botón "Actualizar medias".
-cron.schedule("0 4 1,16 * *", () => {
+// Cada 3 meses (día 1 de enero, abril, julio y octubre) a las 04:00 se
+// refrescan las medias de Connection Darts y Phoenix Darts guardadas en los
+// perfiles de los socios (ver src/scrapers/actualizarMedias.js) — las medias
+// cambian muy poco, así que no compensa hacerlo más a menudo. También se
+// puede lanzar a mano en cualquier momento desde el admin con el botón
+// "Actualizar medias".
+cron.schedule("0 4 1 1,4,7,10 *", () => {
   console.log("Actualizando medias de fabricantes (cron nocturno)...");
   actualizarTodasLasMedias()
     .then((resumen) => console.log("Medias actualizadas:", resumen))
     .catch((err) => console.error("Error actualizando medias:", err));
 });
 
-// Cada noche a las 04:30 (media hora después del cron de medias de arriba,
+// Cada día a las 04:30 (media hora después del cron de medias de arriba,
 // para no tener dos navegadores Playwright abiertos a la vez en el mismo
-// servidor) se refresca la clasificación de todos los torneos/ligas
-// externos dados de alta (ver src/scrapers/actualizarClasificaciones.js).
-// Por ahora esto solo actualiza algo en Radikal Darts y Phoenix Darts;
-// Connection Darts se omite hasta que tenga scraper. También se puede
-// lanzar a mano desde el admin, tanto por torneo ("Actualizar
-// clasificación") como para todos a la vez ("Actualizar todas las
-// clasificaciones ahora", en "Comp. externas").
+// servidor) se refrescan las clasificaciones de los torneos/ligas externos
+// (ver src/scrapers/actualizarClasificaciones.js):
+// - Connection Darts: solo los equipos que jugaron ayer (cada equipo tiene
+//   su día de la semana), así que la mayoría de mañanas no abre ni el
+//   navegador. Por eso corre también sábado y domingo: los equipos que
+//   juegan viernes/sábado/domingo se actualizan la mañana siguiente.
+// - Radikal y Phoenix (sin calendario automático): de lunes a viernes, como
+//   antes.
+// También se puede lanzar a mano desde el admin, tanto por torneo
+// ("Actualizar clasificación") como para todos a la vez ("Actualizar todas
+// las clasificaciones ahora", en "Comp. externas"); a mano se actualiza
+// siempre todo.
 cron.schedule("30 4 * * *", () => {
   console.log("Actualizando clasificaciones de equipos (cron nocturno)...");
-  actualizarTodasLasClasificaciones()
+  const dia = new Date().getDay(); // 0 domingo … 6 sábado
+  actualizarTodasLasClasificaciones({ cron: true, otrasPlataformas: dia >= 1 && dia <= 5 })
     .then((resumen) => console.log("Clasificaciones actualizadas:", resumen))
     .catch((err) => console.error("Error actualizando clasificaciones:", err));
 });
@@ -144,6 +171,14 @@ cron.schedule("0 5 * * *", () => {
   limpiarPapelera()
     .then((resumen) => console.log("Papelera purgada:", resumen))
     .catch((err) => console.error("Error purgando papelera:", err));
+});
+
+// Y a la misma hora se borra el historial de Web Push de más de 60 días
+// (ver RegistroPush en schema.prisma y src/lib/registroPush.js).
+cron.schedule("10 5 * * *", () => {
+  purgarRegistroPush()
+    .then((resumen) => console.log("Historial de push purgado:", resumen))
+    .catch((err) => console.error("Error purgando historial de push:", err.message || err));
 });
 
 // Cada mañana a las 08:00 UTC (10:00 en Madrid en verano, 09:00 en
@@ -167,6 +202,21 @@ cron.schedule("* * * * *", () => {
   enviarAvisosUnMinutoTemporizador().catch((err) =>
     console.error("Error enviando avisos de temporizador:", err.message || err)
   );
+});
+
+// Manejador de errores final: cualquier error no controlado en una ruta
+// acaba aquí y se responde 500 sin filtrar la traza al cliente (queda en el
+// log del servidor). Tiene que ir DESPUÉS de montar todas las rutas.
+app.use((err, req, res, _next) => {
+  console.error(`Error no controlado en ${req.method} ${req.originalUrl}:`, err?.message || err);
+  if (res.headersSent) return;
+  res.status(500).json({ error: "Ha ocurrido un error inesperado." });
+});
+
+// Última red de seguridad: si algo se escapa fuera de una ruta (un cron, el
+// bot de Telegram...), se registra pero NO se mata el proceso.
+process.on("unhandledRejection", (motivo) => {
+  console.error("unhandledRejection (no se cierra el proceso):", motivo?.message || motivo);
 });
 
 const PORT = process.env.PORT || 3000;

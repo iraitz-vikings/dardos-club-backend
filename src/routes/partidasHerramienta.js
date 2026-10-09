@@ -20,6 +20,7 @@ import { notificarJugador } from "./notificar.js";
 import { leerIdsFabricantes, guardarIdsFabricantes } from "../lib/fabricanteMedias.js";
 import { IDIOMAS_AVISOS_VALIDOS } from "./perfil.js";
 import { generarEnlaceCheckIn } from "./telegram.js";
+import { JUGADOR_PUBLICO } from "../lib/selectsJugador.js";
 
 // Flujo público de juego con la herramienta de marcador (Slice 3+4 del plan
 // "herramienta-marcador-torneos-ligas", guardado en el proyecto): un jugador
@@ -253,6 +254,98 @@ router.get("/mis-competiciones", requireJugadorPartida, async (req, res) => {
   }
   for (const p of enLigas) anadir("liga", p.liga, p.etiqueta);
   res.json([...vistas.values()].sort((a, b) => new Date(b.fechaInicio) - new Date(a.fechaInicio)));
+});
+
+// GET /api/partidas-herramienta/mis-competiciones-externas - equipos y
+// competiciones externas (ligas/torneos de plataformas como Connection,
+// Radikal o Phoenix) del jugador identificado con PIN, para la pestaña
+// "Competiciones" de la página pública de invitados (pedido de Iraitz,
+// 2026-10-09: hay invitados que juegan en equipos del club en competiciones
+// externas y hasta ahora solo los socios las veían, en su zona). Solo
+// lectura y solo las inscripciones en las que está el jugador: en la
+// plantilla de la inscripción, en la plantilla del equipo del club o como
+// capitán. Sin las notas del capitán (son internas del equipo) ni datos de
+// los jugadores más allá de nombre/apodo.
+router.get("/mis-competiciones-externas", requireJugadorPartida, async (req, res) => {
+  const jugadorId = req.jugadorPartidaId;
+  const inscripciones = await prisma.equipoTorneo.findMany({
+    where: {
+      OR: [
+        { jugadores: { some: { jugadorId } } },
+        { capitanId: jugadorId },
+        { equipoClub: { OR: [{ capitanId: jugadorId }, { miembros: { some: { jugadorId } } }] } },
+      ],
+    },
+    include: {
+      torneo: {
+        include: {
+          plataforma: { select: { id: true, nombre: true } },
+          // Tabla compartida por todo el torneo/liga (Radikal), ver
+          // includeTorneo en competicionesExternas.js.
+          clasificacion: { where: { equipoTorneoId: null }, orderBy: { posicion: "asc" } },
+        },
+      },
+      equipoClub: {
+        select: {
+          id: true,
+          nombre: true,
+          tipo: true,
+          escudoUrl: true,
+          capitan: JUGADOR_PUBLICO,
+          miembros: { include: { jugador: JUGADOR_PUBLICO }, orderBy: { creadoEn: "asc" } },
+        },
+      },
+      capitan: JUGADOR_PUBLICO,
+      jugadores: { include: { jugador: JUGADOR_PUBLICO } },
+      partidos: { include: { maquina: { select: { id: true, nombre: true } } }, orderBy: { fecha: "asc" } },
+      clasificacion: { orderBy: { posicion: "asc" } },
+    },
+  });
+
+  const porTorneo = new Map();
+  for (const ins of inscripciones) {
+    const tx = ins.torneo;
+    if (!porTorneo.has(tx.id)) {
+      porTorneo.set(tx.id, {
+        id: tx.id,
+        nombre: tx.nombre,
+        nivel: tx.nivel,
+        temporada: tx.temporada,
+        terminado: tx.terminado,
+        plataforma: tx.plataforma,
+        clasificacion: tx.clasificacion,
+        equipos: [],
+      });
+    }
+    const equipoClub = ins.equipoClub;
+    const capitan = equipoClub?.capitan || ins.capitan || null;
+    // Plantilla: la de la inscripción si la hay; si no, la del equipo del club.
+    const plantilla = ins.jugadores.length > 0
+      ? ins.jugadores.map((j) => j.jugador)
+      : (equipoClub?.miembros || []).map((m) => m.jugador);
+    porTorneo.get(tx.id).equipos.push({
+      id: ins.id,
+      nombre: equipoClub?.nombre || ins.nombreEquipo || null,
+      tipo: equipoClub?.tipo || null,
+      escudoUrl: equipoClub?.escudoUrl || null,
+      capitan,
+      cocapitanes: (equipoClub?.miembros || []).filter((m) => m.cocapitan && m.jugadorId !== capitan?.id).map((m) => m.jugador),
+      plantilla,
+      clasificacion: ins.clasificacion,
+      partidos: ins.partidos.map((p) => ({
+        id: p.id,
+        fecha: p.fecha,
+        rival: p.rival,
+        resultado: p.resultado,
+        fijado: p.fijado,
+        jornada: p.jornada,
+        maquina: p.maquina,
+      })),
+    });
+  }
+  // En juego primero, luego por nombre.
+  const lista = [...porTorneo.values()].sort((a, b) => (a.terminado - b.terminado) || a.nombre.localeCompare(b.nombre, "es"));
+  res.json(lista);
 });
 
 function formatearPartida(fila) {

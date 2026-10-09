@@ -65,6 +65,24 @@ export function iniciarBotTelegram() {
       return;
     }
 
+    // chatId es único: una misma cuenta de Telegram solo recibe los avisos
+    // de UN jugador. Si ya está vinculada a otro (la misma persona con dos
+    // fichas, o alguien que abre el enlace de su pareja), el upsert de abajo
+    // fallaba por la restricción única y el bot se quedaba callado. No se
+    // mueve el vínculo sin más porque el otro jugador se quedaría sin avisos
+    // sin enterarse: se explica y se deja que lo cambie con /parar.
+    const vinculoChat = await prisma.suscripcionTelegram.findUnique({
+      where: { chatId: String(chatId) },
+      include: { jugador: { select: { nombre: true } } },
+    });
+    if (vinculoChat && vinculoChat.jugadorId !== jugador.id) {
+      await ctx.reply(
+        `Esta cuenta de Telegram ya recibe los avisos de ${vinculoChat.jugador?.nombre || "otro jugador"}, y solo puede recibir los de uno. ` +
+          `Si quieres recibir los de ${jugador.nombre} en su lugar, escribe /parar y vuelve a abrir el enlace.`
+      );
+      return;
+    }
+
     await prisma.suscripcionTelegram.upsert({
       where: { jugadorId: jugador.id },
       update: { chatId: String(chatId), username: ctx.chat?.username || null },
@@ -96,17 +114,42 @@ export function iniciarBotTelegram() {
     console.error("Error en un handler del bot de Telegram:", err?.message || err, "update:", ctx?.update?.update_id);
   });
 
-  // startPolling() no resuelve hasta que se llama a bot.stop() — se lanza
-  // sin await (fire-and-forget) para no bloquear el arranque del servidor.
-  // onError sustituye al antiguo evento "polling_error".
+  arrancarPolling();
+  console.log("Bot de Telegram iniciado (polling).");
+  return bot;
+}
+
+// startPolling() no resuelve hasta que se llama a bot.stop() — se lanza sin
+// await (fire-and-forget) para no bloquear el arranque del servidor. onError
+// sustituye al antiguo evento "polling_error" y solo cubre los errores que la
+// librería reintenta sola (red, 429...). Los que da por "fatales" hacen que
+// startPolling() rechace y el bot deja de recibir mensajes — y el más
+// habitual es el 409 Conflict de cada despliegue: durante unos segundos el
+// contenedor viejo y el nuevo hacen getUpdates a la vez y Telegram corta a
+// uno. Pasó el 2026-10-08: el contenedor nuevo se quedó sin polling y nadie
+// pudo vincular Telegram (el bot no contestaba a "Iniciar") en todo el
+// torneo de prueba de esa tarde, aunque los avisos sí salían. Por eso se
+// vuelve a arrancar con espera creciente (5 s, 10 s, 20 s... hasta 5 min);
+// la espera vuelve a 5 s en cuanto un arranque aguanta más de un minuto.
+const ESPERA_POLLING_INICIAL_MS = 5 * 1000;
+const ESPERA_POLLING_MAX_MS = 5 * 60 * 1000;
+let esperaPollingMs = ESPERA_POLLING_INICIAL_MS;
+
+function arrancarPolling() {
+  const inicio = Date.now();
   bot
     .startPolling(undefined, {
       onError: (err) => console.error("Error de polling del bot de Telegram:", err?.message || err),
     })
-    .catch((err) => console.error("El polling del bot de Telegram se detuvo con un error:", err?.message || err));
-
-  console.log("Bot de Telegram iniciado (polling).");
-  return bot;
+    .catch((err) => {
+      if (Date.now() - inicio > 60 * 1000) esperaPollingMs = ESPERA_POLLING_INICIAL_MS;
+      console.error(
+        `El polling del bot de Telegram se detuvo con un error (se reintenta en ${Math.round(esperaPollingMs / 1000)} s):`,
+        err?.message || err
+      );
+      setTimeout(arrancarPolling, esperaPollingMs);
+      esperaPollingMs = Math.min(esperaPollingMs * 2, ESPERA_POLLING_MAX_MS);
+    });
 }
 
 // Manda un aviso al chat de Telegram vinculado a este jugador, si tiene

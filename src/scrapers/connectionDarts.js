@@ -611,9 +611,19 @@ export async function extraerClasificacionEquiposConnection(ligaIdsTexto, equipo
 //   3. Si juega en alguna de las ligas indicadas: tabla de su grupo y sus
 //      partidos (mismo formato que en las ligas de equipos).
 //
-// jugadores: [{ jugadorId, alias }]. Devuelve [{ jugadorId, alias,
+// jugadores: [{ jugadorId, alias, localidad? }]. Devuelve [{ jugadorId, alias,
 // encontrado, juega, nombreConnection?, grupo?, filas?, partidos?,
 // avisoPartidos?, error? }].
+// Mayúsculas y sin tildes, para comparar localidades ("Beraun" ≈ "BERAUN").
+function normalizarTexto(t) {
+  return String(t || "")
+    .normalize("NFD")
+    .replace(/[\u0300-\u036f]/g, "")
+    .toUpperCase()
+    .replace(/[^A-Z0-9Ñ]+/g, " ")
+    .trim();
+}
+
 export async function extraerLigaIndividualConnection(ligaIdsTexto, jugadores) {
   const ligaIds = String(ligaIdsTexto || "")
     .split(/[^0-9]+/)
@@ -643,14 +653,30 @@ export async function extraerLigaIndividualConnection(ligaIdsTexto, jugadores) {
     const cacheGrupos = new Map(); // `${ligaId}:${grupoId}` → { rankings, calendario }
     const resultados = [];
 
-    for (const { jugadorId, alias } of jugadores) {
+    for (const { jugadorId, alias, localidad } of jugadores) {
       const aliasNorm = (alias || "").trim().toUpperCase();
       try {
         let playerId = null;
         const busqueda = await api(`/community/${miId}?filter=${encodeURIComponent(alias.trim())}&pageNumber=1`);
-        const exacto = (busqueda.community?.data || []).find((p) => (p.alias || "").trim().toUpperCase() === aliasNorm);
-        if (exacto) playerId = exacto.id;
-        else if (miAlias && (miAlias === aliasNorm || miAlias.startsWith(aliasNorm + " "))) playerId = miId;
+        // Connection permite alias repetidos: si hay varios exactos, se
+        // elige por la localidad guardada en el perfil del socio
+        // (notaBusqueda, la misma que usan las medias).
+        const exactos = (busqueda.community?.data || []).filter((p) => (p.alias || "").trim().toUpperCase() === aliasNorm);
+        const loc = normalizarTexto(localidad);
+        const candidatos = loc
+          ? exactos.filter((p) => normalizarTexto(`${p.city || ""} ${p.region || ""}`).includes(loc))
+          : exactos;
+        if (candidatos.length > 1) {
+          resultados.push({
+            jugadorId,
+            alias,
+            encontrado: false,
+            error: `hay ${candidatos.length} jugadores "${alias}" en Connection; indica tu localidad en el perfil para saber cuál eres`,
+          });
+          continue;
+        }
+        if (candidatos.length === 1) playerId = candidatos[0].id;
+        else if (exactos.length === 0 && miAlias && (miAlias === aliasNorm || miAlias.startsWith(aliasNorm + " "))) playerId = miId;
         if (!playerId) {
           resultados.push({ jugadorId, alias, encontrado: false });
           continue;

@@ -528,6 +528,22 @@ function ordenSemillas(tamano) {
   return orden; // orden[posicion] = número de cabeza de serie que va en esa posición
 }
 
+// Un lado de un participante (jugador del club por id, o nombre escrito a
+// mano para un invitado sin ficha) → { id, nombre }; { error: true } si el
+// id no existe; null si no viene nada. Si el jugador tiene alias puesto en
+// su perfil, se usa ese en vez del nombre real para la etiqueta.
+async function resolverLadoParticipante(id, nombreLibre) {
+  if (id) {
+    const j = await prisma.jugador.findUnique({ where: { id } });
+    if (!j) return { error: true };
+    return { id: j.id, nombre: j.apodo || j.nombre };
+  }
+  if (nombreLibre && nombreLibre.trim()) {
+    return { id: null, nombre: nombreLibre.trim() };
+  }
+  return null;
+}
+
 // POST /api/torneos-club/cuadrantes/:cuadranteId/participantes - añade un
 // participante (individual o pareja ya formada) a un cuadrante, antes del
 // sorteo (protegido).
@@ -535,25 +551,11 @@ router.post("/cuadrantes/:cuadranteId/participantes", requireAdmin, async (req, 
   const { cuadranteId } = req.params;
   const { jugador1Id, nombre1, jugador2Id, nombre2, nombre } = req.body;
 
-  async function resolverLado(id, nombreLibre) {
-    if (id) {
-      const j = await prisma.jugador.findUnique({ where: { id } });
-      if (!j) return { error: true };
-      // Si el jugador tiene alias puesto en su perfil, se usa ese en vez del
-      // nombre real para la etiqueta del participante.
-      return { id: j.id, nombre: j.apodo || j.nombre };
-    }
-    if (nombreLibre && nombreLibre.trim()) {
-      return { id: null, nombre: nombreLibre.trim() };
-    }
-    return null;
-  }
-
-  const lado1 = await resolverLado(jugador1Id, nombre1 || nombre);
+  const lado1 = await resolverLadoParticipante(jugador1Id, nombre1 || nombre);
   if (!lado1) return res.status(400).json({ error: "Falta el primer participante" });
   if (lado1.error) return res.status(404).json({ error: "Jugador no encontrado" });
 
-  const lado2 = jugador2Id || nombre2 ? await resolverLado(jugador2Id, nombre2) : null;
+  const lado2 = jugador2Id || nombre2 ? await resolverLadoParticipante(jugador2Id, nombre2) : null;
   if (lado2?.error) return res.status(404).json({ error: "El segundo jugador no existe" });
 
   const etiqueta = lado2 ? `${lado1.nombre} / ${lado2.nombre}` : lado1.nombre;
@@ -628,6 +630,94 @@ router.put("/participantes/:id", requireAdmin, async (req, res) => {
   });
 
   res.json(participante);
+});
+
+// POST /api/torneos-club/participantes/:id/sustituir - cambia un
+// participante (jugador o pareja) por otro, también con el cuadrante ya
+// sorteado y el torneo empezado (p.ej. una pareja que se cae y entra otra en
+// su hueco). Body igual que el alta: { jugador1Id | nombre1, jugador2Id |
+// nombre2 }. A diferencia del PUT de arriba, aquí SÍ cambia la etiqueta, así
+// que se renombra en todo lo que la usa como enlace dentro de ese
+// cuadrante: los enfrentamientos (CuadroPartido.jugador1/jugador2/ganador),
+// los puntos ya asignados (PuntoJornada) y las partidas de la herramienta
+// de marcador todavía sin jugar. Si hay una partida de la herramienta a
+// medias (con legs ya jugados) se rechaza: sus estadísticas son de la
+// pareja anterior. Las partidas ya terminadas se dejan como están
+// (historial de quien las jugó de verdad).
+router.post("/participantes/:id/sustituir", requireAdmin, async (req, res) => {
+  const { id } = req.params;
+  const { jugador1Id, nombre1, jugador2Id, nombre2 } = req.body || {};
+
+  const actual = await prisma.participanteCuadrante.findUnique({ where: { id } });
+  if (!actual) return res.status(404).json({ error: "Participante no encontrado" });
+
+  const lado1 = await resolverLadoParticipante(jugador1Id, nombre1);
+  if (!lado1) return res.status(400).json({ error: "Falta el primer participante" });
+  if (lado1.error) return res.status(404).json({ error: "Jugador no encontrado" });
+  const lado2 = jugador2Id || nombre2 ? await resolverLadoParticipante(jugador2Id, nombre2) : null;
+  if (lado2?.error) return res.status(404).json({ error: "El segundo jugador no existe" });
+
+  const etiquetaVieja = actual.etiqueta;
+  const etiqueta = lado2 ? `${lado1.nombre} / ${lado2.nombre}` : lado1.nombre;
+  if (etiqueta !== etiquetaVieja) {
+    const repetido = await prisma.participanteCuadrante.findUnique({
+      where: { cuadranteId_etiqueta: { cuadranteId: actual.cuadranteId, etiqueta } },
+    });
+    if (repetido) return res.status(409).json({ error: "Ya hay un participante con ese nombre en este cuadrante" });
+  }
+
+  const partidos = await prisma.cuadroPartido.findMany({
+    where: {
+      cuadranteId: actual.cuadranteId,
+      OR: [{ jugador1: etiquetaVieja }, { jugador2: etiquetaVieja }, { ganador: etiquetaVieja }],
+    },
+    include: { partidaHerramienta: true },
+  });
+  const partidasPendientes = partidos
+    .map((p) => p.partidaHerramienta)
+    .filter((ph) => ph && !ph.finalizada && (ph.etiqueta1 === etiquetaVieja || ph.etiqueta2 === etiquetaVieja));
+  if (partidasPendientes.some((ph) => ph.legsGanados1 + ph.legsGanados2 > 0)) {
+    return res.status(409).json({
+      error: `"${etiquetaVieja}" tiene una partida del marcador a medias. Termínala o bórrala antes de sustituirlos.`,
+    });
+  }
+
+  const nuevosIds = [lado1.id, lado2?.id].filter(Boolean);
+  const nuevosNombres = [lado1, lado2].filter((l) => l?.id).map((l) => l.nombre);
+  const nuevoJ2 = lado2?.id || null;
+
+  const operaciones = [
+    prisma.participanteCuadrante.update({
+      where: { id },
+      data: { etiqueta, jugador1Id: lado1.id, jugador2Id: nuevoJ2 },
+    }),
+    ...partidos.map((p) =>
+      prisma.cuadroPartido.update({
+        where: { id: p.id },
+        data: {
+          jugador1: p.jugador1 === etiquetaVieja ? etiqueta : undefined,
+          jugador2: p.jugador2 === etiquetaVieja ? etiqueta : undefined,
+          ganador: p.ganador === etiquetaVieja ? etiqueta : undefined,
+        },
+      })
+    ),
+    ...partidasPendientes.map((ph) =>
+      prisma.partidaHerramienta.update({
+        where: { id: ph.id },
+        data:
+          ph.etiqueta1 === etiquetaVieja
+            ? { etiqueta1: etiqueta, jugadoresId1: nuevosIds, nombres1: nuevosNombres }
+            : { etiqueta2: etiqueta, jugadoresId2: nuevosIds, nombres2: nuevosNombres },
+      })
+    ),
+    prisma.puntoJornada.updateMany({
+      where: { cuadranteId: actual.cuadranteId, etiqueta: etiquetaVieja },
+      data: { etiqueta, jugador1Id: lado1.id, jugador2Id: nuevoJ2 },
+    }),
+  ];
+  const [participante] = await prisma.$transaction(operaciones);
+
+  res.json({ participante, partidosActualizados: partidos.length });
 });
 
 // POST /api/torneos-club/participantes/:id/invitado-telegram - da de alta

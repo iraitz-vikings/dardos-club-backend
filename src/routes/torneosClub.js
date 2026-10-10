@@ -563,7 +563,7 @@ router.post("/cuadrantes/:cuadranteId/participantes", requireAdmin, async (req, 
 
   try {
     const participante = await prisma.participanteCuadrante.create({
-      data: { cuadranteId, etiqueta, jugador1Id: lado1.id, jugador2Id: lado2?.id || null },
+      data: { cuadranteId, etiqueta, jugador1Id: lado1.id, jugador2Id: lado2?.id || null, confirmado: false },
     });
     return res.status(201).json(participante);
   } catch {
@@ -631,6 +631,32 @@ router.put("/participantes/:id", requireAdmin, async (req, res) => {
   });
 
   res.json(participante);
+});
+
+// PUT /api/torneos-club/participantes/:id/confirmado - marca o desmarca el
+// check de presencia de un participante ({ confirmado: true|false }). Solo
+// los confirmados entran en el sorteo.
+router.put("/participantes/:id/confirmado", requireAdmin, async (req, res) => {
+  try {
+    const participante = await prisma.participanteCuadrante.update({
+      where: { id: req.params.id },
+      data: { confirmado: !!req.body?.confirmado },
+    });
+    res.json(participante);
+  } catch {
+    res.status(404).json({ error: "Participante no encontrado" });
+  }
+});
+
+// PUT /api/torneos-club/cuadrantes/:cuadranteId/participantes/confirmado -
+// marca o desmarca el check de TODOS los participantes de un cuadrante de
+// una vez ({ confirmado: true|false }).
+router.put("/cuadrantes/:cuadranteId/participantes/confirmado", requireAdmin, async (req, res) => {
+  const { count } = await prisma.participanteCuadrante.updateMany({
+    where: { cuadranteId: req.params.cuadranteId },
+    data: { confirmado: !!req.body?.confirmado },
+  });
+  res.json({ actualizados: count });
 });
 
 // POST /api/torneos-club/participantes/:id/sustituir - cambia un
@@ -828,7 +854,7 @@ router.post("/cuadrantes/:cuadranteId/sortear-parejas", requireAdmin, async (req
     const b = barajados[i + 1];
     const etiqueta = `${a.nombre} / ${b.nombre}`;
     const participante = await prisma.participanteCuadrante.create({
-      data: { cuadranteId, etiqueta, jugador1Id: a.id, jugador2Id: b.id },
+      data: { cuadranteId, etiqueta, jugador1Id: a.id, jugador2Id: b.id, confirmado: true },
     });
     creados.push(participante);
   }
@@ -868,7 +894,7 @@ router.post("/cuadrantes/:cuadranteId/sortear-parejas-grupos", requireAdmin, asy
     const nombre2 = e2.jugadorId ? nombresPorId.get(e2.jugadorId) : e2.nombre;
     const etiqueta = `${nombre1} / ${nombre2}`;
     const participante = await prisma.participanteCuadrante.create({
-      data: { cuadranteId, etiqueta, jugador1Id: e1.jugadorId || null, jugador2Id: e2.jugadorId || null },
+      data: { cuadranteId, etiqueta, jugador1Id: e1.jugadorId || null, jugador2Id: e2.jugadorId || null, confirmado: true },
     });
     creadas.push(participante);
   }
@@ -1018,9 +1044,13 @@ router.post("/cuadrantes/:cuadranteId/sorteo", requireAdmin, async (req, res) =>
   let nombres = Array.isArray(participantes) ? participantes.map((n) => String(n).trim()).filter(Boolean) : [];
 
   // Si no se pasan nombres sueltos, se usan los participantes ya apuntados
-  // (individuales o parejas) a este cuadrante.
+  // (individuales o parejas) a este cuadrante que tengan el check de
+  // presencia (ParticipanteCuadrante.confirmado; null = participante
+  // anterior al check, cuenta como confirmado).
   if (nombres.length === 0) {
-    const apuntados = await prisma.participanteCuadrante.findMany({ where: { cuadranteId } });
+    const apuntados = await prisma.participanteCuadrante.findMany({
+      where: { cuadranteId, OR: [{ confirmado: true }, { confirmado: null }] },
+    });
     nombres = apuntados.map((p) => p.etiqueta);
   }
   const semillas = Array.isArray(cabezasDeSerie) ? cabezasDeSerie.map((n) => String(n).trim()).filter(Boolean) : [];
@@ -1031,7 +1061,7 @@ router.post("/cuadrantes/:cuadranteId/sorteo", requireAdmin, async (req, res) =>
   const numPartidosR1 = cuadrante.tamano / 2;
 
   if (nombres.length < 2) {
-    return res.status(400).json({ error: "Hacen falta al menos 2 participantes." });
+    return res.status(400).json({ error: "Hacen falta al menos 2 participantes con check." });
   }
   if (nombres.length > cuadrante.tamano) {
     return res.status(400).json({
@@ -1186,9 +1216,10 @@ router.put("/cuadrantes/:cuadranteId/tamano", requireAdmin, async (req, res) => 
   if (sorteado) {
     return res.status(409).json({ error: "El cuadrante ya está sorteado: solo se puede cambiar el tamaño antes del sorteo." });
   }
-  if (cuadrante.participantes.length > tamanoNum) {
+  const confirmados = cuadrante.participantes.filter((p) => p.confirmado !== false).length;
+  if (confirmados > tamanoNum) {
     return res.status(409).json({
-      error: `Hay ${cuadrante.participantes.length} participantes apuntados, más de los ${tamanoNum} que caben.`,
+      error: `Hay ${confirmados} participantes con check, más de los ${tamanoNum} que caben.`,
     });
   }
 

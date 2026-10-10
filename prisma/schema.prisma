@@ -528,6 +528,14 @@ model ParticipanteCuadrante {
   jugador1    Jugador?  @relation("participanteJugador1", fields: [jugador1Id], references: [id])
   jugador2Id  String?
   jugador2    Jugador?  @relation("participanteJugador2", fields: [jugador2Id], references: [id])
+  // "Check" de presencia: el admin primero apunta al participante y luego
+  // lo marca cuando confirma que está (p.ej. al llegar al local). El sorteo
+  // (POST /cuadrantes/:id/sorteo) solo usa los confirmados. Las altas nuevas
+  // se crean con false; las parejas que genera el sorteo de parejas ciegas
+  // nacen ya confirmadas, porque se forman con los jugadores presentes.
+  // null = participante anterior a esta función: cuenta como confirmado,
+  // para no alterar torneos que ya estaban en marcha.
+  confirmado  Boolean?
   creadoEn    DateTime  @default(now())
 
   @@unique([cuadranteId, etiqueta])

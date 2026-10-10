@@ -478,12 +478,13 @@ router.delete("/:id/definitivo", requireAdmin, async (req, res) => {
   res.status(204).end();
 });
 
+const TAMANOS_CUADRANTE = [4, 8, 16, 32, 64, 128];
+
 router.post("/:id/cuadrantes", requireAdmin, async (req, res) => {
   const { id } = req.params;
   const { nombre, tamano, tipoEliminacion, metodoSorteoParejas } = req.body;
   const tamanoNum = Number(tamano);
-  const tamanosValidos = [4, 8, 16, 32, 64, 128];
-  if (!nombre || !tamanosValidos.includes(tamanoNum)) {
+  if (!nombre || !TAMANOS_CUADRANTE.includes(tamanoNum)) {
     return res.status(400).json({ error: "Falta el nombre o el tamaño no es válido (4, 8, 16, 32, 64 o 128)" });
   }
   const tipo = tipoEliminacion === "doble" ? "doble" : "directa";
@@ -1158,6 +1159,51 @@ router.delete("/cuadrantes/:cuadranteId", requireAdmin, async (req, res) => {
   await prisma.puntoJornada.deleteMany({ where: { cuadranteId } });
   await prisma.cuadrante.delete({ where: { id: cuadranteId } });
   res.status(204).end();
+});
+
+// PUT /api/torneos-club/cuadrantes/:cuadranteId/tamano - cambia el número de
+// participantes (4, 8, 16...) de un cuadrante ya creado, mientras todavía
+// no se ha hecho el sorteo: borra los enfrentamientos vacíos y genera la
+// estructura nueva con el mismo tipo de eliminación. Los participantes
+// apuntados se mantienen. Si ya hay alguien colocado en el cuadro se
+// rechaza (habría que "Reiniciar"/rehacer el sorteo, no redimensionar).
+router.put("/cuadrantes/:cuadranteId/tamano", requireAdmin, async (req, res) => {
+  const { cuadranteId } = req.params;
+  const tamanoNum = Number(req.body?.tamano);
+  if (!TAMANOS_CUADRANTE.includes(tamanoNum)) {
+    return res.status(400).json({ error: "Tamaño no válido (4, 8, 16, 32, 64 o 128)" });
+  }
+
+  const cuadrante = await prisma.cuadrante.findUnique({
+    where: { id: cuadranteId },
+    include: { partidos: { include: { partidaHerramienta: true } }, participantes: true },
+  });
+  if (!cuadrante || !cuadrante.torneoClubId) return res.status(404).json({ error: "Cuadrante no encontrado" });
+
+  const sorteado = cuadrante.partidos.some(
+    (p) => p.jugador1 || p.jugador2 || p.ganador || p.resultado || p.partidaHerramienta
+  );
+  if (sorteado) {
+    return res.status(409).json({ error: "El cuadrante ya está sorteado: solo se puede cambiar el tamaño antes del sorteo." });
+  }
+  if (cuadrante.participantes.length > tamanoNum) {
+    return res.status(409).json({
+      error: `Hay ${cuadrante.participantes.length} participantes apuntados, más de los ${tamanoNum} que caben.`,
+    });
+  }
+
+  const partidos = generarPartidos(tamanoNum, cuadrante.tipoEliminacion);
+  await prisma.$transaction([
+    prisma.cuadroPartido.deleteMany({ where: { cuadranteId } }),
+    prisma.cuadrante.update({ where: { id: cuadranteId }, data: { tamano: tamanoNum } }),
+    prisma.cuadroPartido.createMany({ data: partidos.map((p) => ({ ...p, cuadranteId })) }),
+  ]);
+
+  const actualizado = await prisma.cuadrante.findUnique({
+    where: { id: cuadranteId },
+    include: { partidos: { orderBy: [{ rama: "asc" }, { ronda: "asc" }, { posicion: "asc" }] } },
+  });
+  res.json(actualizado);
 });
 
 // PUT /api/torneos-club/cuadrantes/:cuadranteId/estado - cambia el estado

@@ -717,7 +717,38 @@ router.post("/participantes/:id/sustituir", requireAdmin, async (req, res) => {
   ];
   const [participante] = await prisma.$transaction(operaciones);
 
+  // Si el cuadrante ya estaba sorteado, los que entran reciben el mismo
+  // aviso de bienvenida que tuvieron los demás al hacer el sorteo.
+  if (partidos.length > 0 && etiqueta !== etiquetaVieja) {
+    notificarSorteoCuadrante(actual.cuadranteId, [etiqueta]).catch((err) =>
+      console.error("Error avisando de la bienvenida tras sustituir:", err)
+    );
+  }
+
   res.json({ participante, partidosActualizados: partidos.length });
+});
+
+// POST /api/torneos-club/participantes/:id/bienvenida - (re)envía el aviso
+// de bienvenida al cuadro ("¡Ya estás en el cuadro!") solo a este
+// participante — p.ej. a una pareja que entró por sustitución antes de que
+// la sustitución lo mandara sola, o a alguien que activó los avisos después
+// del sorteo. Mismo aviso que notificarSorteoCuadrante tras el sorteo.
+router.post("/participantes/:id/bienvenida", requireAdmin, async (req, res) => {
+  const participante = await prisma.participanteCuadrante.findUnique({
+    where: { id: req.params.id },
+    include: { cuadrante: { include: { torneoClub: true, liga: true } } },
+  });
+  if (!participante) return res.status(404).json({ error: "Participante no encontrado" });
+  const jugadorIds = [participante.jugador1Id, participante.jugador2Id].filter(Boolean);
+  if (jugadorIds.length === 0) {
+    return res.status(400).json({ error: "No tiene ningún jugador del club vinculado a quien avisar." });
+  }
+  const { torneoClub, liga } = participante.cuadrante;
+  if ((torneoClub || liga)?.notificaciones === false) {
+    return res.status(409).json({ error: "Este torneo tiene los avisos desactivados." });
+  }
+  await notificarSorteoCuadrante(participante.cuadranteId, [participante.etiqueta]);
+  res.json({ avisados: jugadorIds.length });
 });
 
 // POST /api/torneos-club/participantes/:id/invitado-telegram - da de alta

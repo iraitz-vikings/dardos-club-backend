@@ -1,5 +1,6 @@
 import { Router } from "express";
 import { prisma } from "../lib/prisma.js";
+import { Prisma } from "@prisma/client";
 import { randomUUID } from "crypto";
 import { requireAuth } from "./auth.js";
 import { sortearParejasPorGrupos, resolverNombresJugadores } from "../lib/sorteoParejasGrupos.js";
@@ -380,9 +381,22 @@ router.post("/", requireAdmin, async (req, res) => {
   res.status(201).json(torneo);
 });
 
+// Lista de máquinas habilitadas de un torneo (ver TorneoClub.maquinasHabilitadas):
+// números enteros >= 1, sin repetir y ordenados. null o [] = todas.
+function validarMaquinasHabilitadas(valor) {
+  if (valor === undefined || valor === null) return { ok: true, valor: null };
+  if (!Array.isArray(valor)) return { ok: false, error: "Las máquinas habilitadas tienen que ser una lista de números." };
+  const numeros = valor.map(Number);
+  if (numeros.some((n) => !Number.isInteger(n) || n < 1)) {
+    return { ok: false, error: "Las máquinas habilitadas tienen que ser números enteros a partir de 1." };
+  }
+  const unicos = [...new Set(numeros)].sort((a, b) => a - b);
+  return { ok: true, valor: unicos.length ? unicos : null };
+}
+
 router.put("/:id", requireAdmin, async (req, res) => {
   const { id } = req.params;
-  const { nombre, descripcion, fechaInicio, fechaFin, insigniaUrl, visibilidad, numeroMaquinas, tipoEliminacion, finalizado, notificaciones, acero, anclarInicio, temporizadorActivo, temporizadorMinutos, modoJornadas, puntosPorPosicion, imagenEliminadoUrl, imagenCampeonUrl, imagenBienvenidaUrl, configuracionHerramienta, videoDirectoUrl, mensajesAvisos } = req.body;
+  const { nombre, descripcion, fechaInicio, fechaFin, insigniaUrl, visibilidad, numeroMaquinas, tipoEliminacion, finalizado, notificaciones, acero, anclarInicio, temporizadorActivo, temporizadorMinutos, modoJornadas, puntosPorPosicion, imagenEliminadoUrl, imagenCampeonUrl, imagenBienvenidaUrl, configuracionHerramienta, videoDirectoUrl, mensajesAvisos, maquinasHabilitadas } = req.body;
   const puntos = validarPuntosPorPosicion(puntosPorPosicion);
   if (!puntos.ok) return res.status(400).json({ error: puntos.error });
   const herramienta = validarConfiguracionHerramienta(configuracionHerramienta);
@@ -391,6 +405,8 @@ router.put("/:id", requireAdmin, async (req, res) => {
   if (!video.ok) return res.status(400).json({ error: video.error });
   const mensajes = validarMensajesAvisos(mensajesAvisos);
   if (!mensajes.ok) return res.status(400).json({ error: mensajes.error });
+  const habilitadas = validarMaquinasHabilitadas(maquinasHabilitadas);
+  if (!habilitadas.ok) return res.status(400).json({ error: habilitadas.error });
   // El temporizador solo se valida/toca si el PUT trae `temporizadorActivo`
   // explícito (mismo patrón que `notificaciones`): si no viene, se deja tal
   // cual está en la base de datos.
@@ -424,6 +440,7 @@ router.put("/:id", requireAdmin, async (req, res) => {
         configuracionHerramienta: configuracionHerramienta !== undefined ? herramienta.valor : undefined,
         videoDirectoUrl: videoDirectoUrl !== undefined ? video.valor : undefined,
         mensajesAvisos: mensajesAvisos !== undefined ? mensajes.valor : undefined,
+        maquinasHabilitadas: maquinasHabilitadas !== undefined ? habilitadas.valor ?? Prisma.DbNull : undefined,
       },
     });
     res.json(torneo);

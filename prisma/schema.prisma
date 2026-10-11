@@ -387,6 +387,10 @@ model TorneoClub {
   // {minutos}. Puramente informativo — no bloquea ni cierra nada solo.
   temporizadorActivo  Boolean @default(false)
   temporizadorMinutos Int?
+  // Máquinas habilitadas en este torneo, como lista de números (p.ej.
+  // [2, 4, 6, 8]): solo esas se ofrecen al asignar máquina a un partido.
+  // null = todas, de la 1 a `numeroMaquinas` (comportamiento de siempre).
+  maquinasHabilitadas Json?
   // "Torneo por jornadas": cada Cuadrante de este torneo es una jornada
   // independiente (p.ej. clasificatorias para la selección de Euskadi). A
   // diferencia del torneo "clásico" de un solo cuadrante, aquí un mismo

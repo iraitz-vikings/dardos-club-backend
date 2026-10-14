@@ -4,7 +4,9 @@ import { requireAdmin } from "../middleware/requireAdmin.js";
 
 const router = Router();
 
-// GET /api/torneo-destacado - público, devuelve el torneo actual (o null si no hay ninguno)
+// GET /api/torneo-destacado - público, devuelve el torneo actual (o null si no hay ninguno).
+// Incluye `activo`: la home oculta la sección si es false, y el admin lo
+// necesita igualmente para rellenar el formulario.
 router.get("/", async (_req, res) => {
       const torneo = await prisma.torneoDestacado.findUnique({ where: { id: "actual" } });
       res.json(torneo);
@@ -12,7 +14,7 @@ router.get("/", async (_req, res) => {
 
 // PUT /api/torneo-destacado - crea o actualiza el torneo destacado (protegido)
 router.put("/", requireAdmin, async (req, res) => {
-      const { nombre, descripcion, fechaInicio, fechaFin, insigniaUrl, cartelUrl } = req.body;
+      const { nombre, descripcion, fechaInicio, fechaFin, insigniaUrl, cartelUrl, activo } = req.body;
       if (!nombre || !fechaInicio || !fechaFin) {
               return res.status(400).json({ error: "Faltan campos obligatorios" });
       }
@@ -25,6 +27,8 @@ router.put("/", requireAdmin, async (req, res) => {
                                fechaFin: new Date(fechaFin),
                                insigniaUrl: insigniaUrl || null,
                                cartelUrl: cartelUrl || null,
+                               // Si no llega (clientes antiguos), queda activo.
+                               activo: activo !== false,
                      };
                      const torneo = await prisma.torneoDestacado.upsert({
                                where: { id: "actual" },

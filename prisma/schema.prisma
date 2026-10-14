@@ -504,6 +504,9 @@ model TorneoDestacado {
   fechaFin      DateTime
   insigniaUrl   String?
   cartelUrl     String?
+  // false = oculto de la home (sección "Próximo torneo" y su enlace del
+  // menú) sin borrar los datos, para poder volver a activarlo luego.
+  activo        Boolean  @default(true)
   actualizadoEn DateTime @updatedAt
 }
 

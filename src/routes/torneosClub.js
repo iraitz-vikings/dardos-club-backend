@@ -1,7 +1,7 @@
 import { Router } from "express";
 import { prisma } from "../lib/prisma.js";
 import { Prisma } from "@prisma/client";
-import { randomUUID } from "crypto";
+import { randomUUID, randomBytes } from "crypto";
 import { requireAuth } from "./auth.js";
 import { sortearParejasPorGrupos, resolverNombresJugadores } from "../lib/sorteoParejasGrupos.js";
 import { calcularClasificacionCuadrante } from "../lib/clasificacionCuadrante.js";
@@ -650,6 +650,14 @@ router.put("/participantes/:id", requireAdmin, async (req, res) => {
   res.json(participante);
 });
 
+// El check manual del admin cuenta como el check-in de todos los jugadores
+// del participante (y quitarlo los quita), para que el estado del QR (ver
+// src/routes/checkIn.js) no se quede desfasado respecto a lo que se ve en
+// la mesa.
+function datosCheckManual(confirmado) {
+  return { confirmado, checkInJugador1: confirmado, checkInJugador2: confirmado };
+}
+
 // PUT /api/torneos-club/participantes/:id/confirmado - marca o desmarca el
 // check de presencia de un participante ({ confirmado: true|false }). Solo
 // los confirmados entran en el sorteo.
@@ -657,7 +665,7 @@ router.put("/participantes/:id/confirmado", requireAdmin, async (req, res) => {
   try {
     const participante = await prisma.participanteCuadrante.update({
       where: { id: req.params.id },
-      data: { confirmado: !!req.body?.confirmado },
+      data: datosCheckManual(!!req.body?.confirmado),
     });
     res.json(participante);
   } catch {
@@ -671,9 +679,39 @@ router.put("/participantes/:id/confirmado", requireAdmin, async (req, res) => {
 router.put("/cuadrantes/:cuadranteId/participantes/confirmado", requireAdmin, async (req, res) => {
   const { count } = await prisma.participanteCuadrante.updateMany({
     where: { cuadranteId: req.params.cuadranteId },
-    data: { confirmado: !!req.body?.confirmado },
+    data: datosCheckManual(!!req.body?.confirmado),
   });
   res.json({ actualizados: count });
+});
+
+// GET /api/torneos-club/cuadrantes/:cuadranteId/check-in - si el check-in
+// con QR de este cuadrante está abierto, y su token para pintar el QR
+// (/checkin/:token) — ver src/routes/checkIn.js.
+router.get("/cuadrantes/:cuadranteId/check-in", requireAdmin, async (req, res) => {
+  const checkIn = await prisma.checkInCuadrante.findUnique({ where: { cuadranteId: req.params.cuadranteId } });
+  res.json({ abierto: !!checkIn, token: checkIn?.token || null });
+});
+
+// POST /api/torneos-club/cuadrantes/:cuadranteId/check-in - abre el
+// check-in con QR (o devuelve el que ya estuviera abierto, con el mismo
+// token, para no invalidar un QR ya impreso o en pantalla).
+router.post("/cuadrantes/:cuadranteId/check-in", requireAdmin, async (req, res) => {
+  const { cuadranteId } = req.params;
+  const cuadrante = await prisma.cuadrante.findUnique({ where: { id: cuadranteId } });
+  if (!cuadrante) return res.status(404).json({ error: "Cuadrante no encontrado" });
+  const checkIn = await prisma.checkInCuadrante.upsert({
+    where: { cuadranteId },
+    update: {},
+    create: { cuadranteId, token: randomBytes(18).toString("base64url") },
+  });
+  res.json({ abierto: true, token: checkIn.token });
+});
+
+// DELETE /api/torneos-club/cuadrantes/:cuadranteId/check-in - cierra el
+// check-in con QR: el QR deja de valer. Los checks ya hechos se quedan.
+router.delete("/cuadrantes/:cuadranteId/check-in", requireAdmin, async (req, res) => {
+  await prisma.checkInCuadrante.deleteMany({ where: { cuadranteId: req.params.cuadranteId } });
+  res.json({ abierto: false, token: null });
 });
 
 // POST /api/torneos-club/participantes/:id/sustituir - cambia un
@@ -981,6 +1019,9 @@ async function notificarSorteoCuadrante(cuadranteId, posiciones) {
 // calcula sus propias `posiciones` (cruce entre grupos) en vez de dejar que
 // el sorteo genérico las reparta al azar.
 export async function aplicarPosicionesRonda1(cuadranteId, posiciones) {
+  // Con el sorteo hecho, el check-in con QR ya no tiene sentido: se cierra
+  // para que el QR deje de valer (ver src/routes/checkIn.js).
+  await prisma.checkInCuadrante.deleteMany({ where: { cuadranteId } });
   await prisma.cuadroPartido.updateMany({
     where: { cuadranteId },
     data: { jugador1: null, jugador2: null, ganador: null, resultado: null, enCurso: false, enCursoDesde: null, partidoIniciado: false, avisoUnMinutoEnviado: false },

@@ -25,6 +25,7 @@ import uploadRouter from "./routes/upload.js";
 import torneoDestacadoRouter from "./routes/torneoDestacado.js";
 import galeriaRouter from "./routes/galeria.js";
 import torneosClubRouter from "./routes/torneosClub.js";
+import checkInRouter from "./routes/checkIn.js";
 import patrocinadoresRouter from "./routes/patrocinadores.js";
 import authRouter from "./routes/auth.js";
 import mensajeAncladoRouter from "./routes/mensajeAnclado.js";
@@ -120,6 +121,10 @@ app.use("/api/buscar", buscarRouter);
 // Herramienta de marcador jugada desde la página pública (login con PIN,
 // partidos pendientes, jugar y aplicar el resultado) — ver src/routes/partidasHerramienta.js
 app.use("/api/partidas-herramienta", partidasHerramientaRouter);
+
+// Check-in con QR de los participantes de un cuadrante, desde su propia
+// cuenta (PIN o socio) — ver src/routes/checkIn.js.
+app.use("/api/check-in", checkInRouter);
 
 app.get("/api/health", (_req, res) => res.json({ ok: true }));
 

@@ -543,9 +543,30 @@ model ParticipanteCuadrante {
   // null = participante anterior a esta función: cuenta como confirmado,
   // para no alterar torneos que ya estaban en marcha.
   confirmado  Boolean?
+  // Check-in con QR (ver CheckInCuadrante): cada jugador con ficha marca
+  // aquí su propia llegada al leer el QR desde su cuenta. En parejas hacen
+  // falta los dos para que `confirmado` pase a true; en individual basta
+  // con jugador1. El check manual del admin pone/quita los dos a la vez.
+  checkInJugador1 Boolean @default(false)
+  checkInJugador2 Boolean @default(false)
   creadoEn    DateTime  @default(now())
 
   @@unique([cuadranteId, etiqueta])
+}
+
+// Check-in con QR de un cuadrante abierto por el admin: mientras existe la
+// fila, quien lea el QR (/checkin/:token) e inicie sesión (PIN o cuenta de
+// socio) marca su propia presencia — ver src/routes/checkIn.js. Va en un
+// modelo aparte, y no como campo de Cuadrante, para que el token nunca
+// salga en las respuestas públicas de torneos/ligas (que devuelven los
+// cuadrantes enteros): con él se podría hacer check-in desde casa. Se
+// borra al cerrar el check-in o al hacer el sorteo del cuadrante.
+model CheckInCuadrante {
+  id          String    @id @default(uuid())
+  cuadranteId String    @unique
+  cuadrante   Cuadrante @relation(fields: [cuadranteId], references: [id], onDelete: Cascade)
+  token       String    @unique
+  creadoEn    DateTime  @default(now())
 }
 
 model Cuadrante {
@@ -575,6 +596,7 @@ model Cuadrante {
   partidos      CuadroPartido[]
   participantes ParticipanteCuadrante[]
   puntosJornada PuntoJornada[]
+  checkIn       CheckInCuadrante?
 }
 
 // Puntos que un participante (jugador individual, o los dos de una pareja)

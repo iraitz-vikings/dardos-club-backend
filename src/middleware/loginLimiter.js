@@ -43,3 +43,24 @@ export const registroLimiter = limitador(10, "Demasiados intentos. Espera unos m
 export const pinLimiter = limitador(10, "Demasiados intentos con este jugador. Espera unos minutos.", (req) =>
   textoDe(req.body?.jugadorId)
 );
+
+// POST /api/partidas-herramienta/login: además, por jugador SIN mirar la IP.
+// El de arriba (IP + jugador) no frena a quien va cambiando de IP (VPN,
+// proxies, datos móviles): con 10 intentos por IP cada 15 minutos, unas
+// pocas decenas de IPs bastaban para recorrer los 10.000 PIN posibles en
+// horas. Con 30 fallos por jugador cada 6 horas, vengan de donde vengan,
+// acertar un PIN al azar lleva de media más de un mes de intentos
+// seguidos. A cambio, quien quiera fastidiar a un jugador concreto puede
+// bloquearle el PIN como mucho 6 horas (no afecta a su login de socio).
+// Si el jugador no viene en la petición no se limita aquí (la ruta ya
+// responde 400 y el limitador por IP de arriba sigue contando).
+export const pinJugadorLimiter = rateLimit({
+  windowMs: 6 * 60 * 60 * 1000,
+  max: 30,
+  standardHeaders: true,
+  legacyHeaders: false,
+  skipSuccessfulRequests: true,
+  skip: (req) => !textoDe(req.body?.jugadorId),
+  message: { error: "Demasiados intentos fallidos con este jugador. Espera unas horas o pide a un admin que te cambie el PIN." },
+  keyGenerator: (req) => `jugador|${textoDe(req.body?.jugadorId)}`,
+});

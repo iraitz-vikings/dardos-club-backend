@@ -4,7 +4,7 @@ import bcrypt from "bcryptjs";
 import jwt from "jsonwebtoken";
 import crypto from "node:crypto";
 import rateLimit from "express-rate-limit";
-import { pinLimiter } from "../middleware/loginLimiter.js";
+import { pinLimiter, pinJugadorLimiter } from "../middleware/loginLimiter.js";
 import {
   partidosPendientesDeJugador,
   localizarPartidoConConfig,
@@ -15,7 +15,7 @@ import { urlPublicaAmistoso } from "../lib/enlacesPublicos.js";
 import { aplicarResultadoCuadroPartido } from "./torneosClub.js";
 import { aplicarResultadoPartidoLiga } from "./ligasClub.js";
 import { pinValido } from "./jugadores.js";
-import { requireAuth } from "./auth.js";
+import { requireAuth, socioDeLaPeticion } from "./auth.js";
 import { notificarJugador } from "./notificar.js";
 import { leerIdsFabricantes, guardarIdsFabricantes } from "../lib/fabricanteMedias.js";
 import { IDIOMAS_AVISOS_VALIDOS } from "./perfil.js";
@@ -96,9 +96,18 @@ router.get("/jugadores", async (_req, res) => {
 // Si ya tiene uno puesto, no se puede cambiar por aquí (para eso está el
 // admin o el perfil, que si requieren sesión de socio) — solo sirve para la
 // puesta en marcha inicial. pinLimiter por IP + jugador, igual que /login.
+//
+// Hace falta demostrar que eres ese jugador (auditoría 2026-10-19): antes
+// bastaba con elegirlo en la lista pública, que además dice quién no tiene
+// PIN, así que cualquiera podía ponerle PIN a otro y jugar, aplicar
+// resultados o hacer el check-in en su nombre. Vale como prueba:
+// - un socio: su sesión de socio (Bearer) en ese mismo dispositivo;
+// - un invitado: `tokenAviso`, el secreto de su enlace personal de avisos
+//   (/aviso/:token, TelegramCheckIn), desde donde se pone el PIN.
+// Si no, el PIN se lo tiene que poner un admin (o el socio desde su perfil).
 router.post("/pin", pinLimiter, async (req, res) => {
-  const { jugadorId, pin } = req.body;
-  if (!jugadorId || !pinValido(pin)) {
+  const { jugadorId, pin, tokenAviso } = req.body;
+  if (!jugadorId || typeof jugadorId !== "string" || !pinValido(pin)) {
     return res.status(400).json({ error: "Elige quién eres y un PIN de 4 dígitos." });
   }
   const jugador = await prisma.jugador.findUnique({ where: { id: jugadorId } });
@@ -108,16 +117,33 @@ router.post("/pin", pinLimiter, async (req, res) => {
       error: "Ese jugador ya tiene un PIN puesto. Si no os acordáis, un admin puede cambiarlo, o el propio socio desde su perfil.",
     });
   }
+  let esEl = false;
+  if (jugador.usuarioId) {
+    esEl = socioDeLaPeticion(req)?.sub === jugador.usuarioId;
+  } else if (typeof tokenAviso === "string" && tokenAviso) {
+    const checkIn = await prisma.telegramCheckIn.findUnique({ where: { token: tokenAviso } });
+    esEl = checkIn?.jugadorId === jugador.id;
+  }
+  if (!esEl) {
+    return res.status(403).json({
+      sinPrueba: true,
+      esSocio: !!jugador.usuarioId,
+      error: jugador.usuarioId
+        ? "Para ponerte el PIN la primera vez, entra en la zona de socios con tu cuenta (o póntelo desde \"Mi perfil\")."
+        : "Para ponerte el PIN la primera vez, usa tu enlace personal de avisos del club, o pide a un admin que te lo ponga.",
+    });
+  }
   const pinPartidasHash = await bcrypt.hash(pin, 10);
   const actualizado = await prisma.jugador.update({ where: { id: jugador.id }, data: { pinPartidasHash } });
   res.status(201).json({ token: firmarTokenPartida(actualizado), jugador: { id: actualizado.id, nombre: actualizado.apodo || actualizado.nombre } });
 });
 
 // POST /api/partidas-herramienta/login - identificación con PIN (no es un
-// login de socio: ver el comentario de arriba). pinLimiter por IP + jugador,
-// para que probar PINs de 4 dígitos uno detrás de otro no sea viable (ver
+// login de socio: ver el comentario de arriba). pinLimiter por IP + jugador
+// y pinJugadorLimiter por jugador venga de la IP que venga, para que probar
+// PINs de 4 dígitos uno detrás de otro no sea viable (ver
 // middleware/loginLimiter.js).
-router.post("/login", pinLimiter, async (req, res) => {
+router.post("/login", pinLimiter, pinJugadorLimiter, async (req, res) => {
   const { jugadorId, pin } = req.body;
   if (!jugadorId || !pin) return res.status(400).json({ error: "Faltan datos" });
   const jugador = await prisma.jugador.findUnique({ where: { id: jugadorId } });

@@ -234,6 +234,10 @@ router.get("/checkin/:token", async (req, res) => {
   const botUsername = process.env.TELEGRAM_BOT_USERNAME || null;
   res.json({
     nombre: jugador.nombre,
+    // Para que el invitado pueda ponerse aquí su PIN de partidas la primera
+    // vez (POST /api/partidas-herramienta/pin con tokenAviso).
+    jugadorId: jugador.id,
+    tienePinPartidas: !!jugador.pinPartidasHash,
     telegramVinculado: !!jugador.suscripcionTelegram,
     idiomaAvisos: jugador.idiomaAvisos,
     urlTelegram: botUsername ? `https://t.me/${botUsername}?start=${req.params.token}` : null,

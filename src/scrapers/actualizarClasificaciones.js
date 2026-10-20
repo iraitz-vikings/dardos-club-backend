@@ -195,6 +195,13 @@ async function sincronizarPartidosConnection(equipoTorneoId, partidos) {
         existente = await prisma.partido.update({ where: { id: antiguo.id }, data: { idExterno: p.idExterno } });
       }
     }
+    // El partido existe pero colgado de OTRA inscripción (p.ej. se cambió
+    // el "Id del equipo" de una inscripción a otra): el idExterno incluye el
+    // id del equipo en la plataforma, así que es de esta inscripción → se
+    // mueve aquí.
+    if (existente && existente.equipoTorneoId !== equipoTorneoId) {
+      existente = await prisma.partido.update({ where: { id: existente.id }, data: { equipoTorneoId } });
+    }
     if (!existente) {
       await prisma.partido.create({
         data: {

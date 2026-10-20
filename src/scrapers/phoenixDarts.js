@@ -101,6 +101,24 @@ function parsearResultado(texto, alias) {
 async function fijarIdiomaEspanol(page) {
   await page.goto(HOME_URL, { waitUntil: "domcontentloaded", timeout: 30000 }).catch(() => {});
   await page.waitForLoadState("networkidle", { timeout: 15000 }).catch(() => {});
+  // PAÍS = España (2026-10-20): Phoenix elige el país de la sesión por la
+  // IP, y desde Railway (EE. UU.) pinta las fechas como mm/dd y las horas en
+  // hora del Pacífico (ej. "12/01 12:30" para el 1 de diciembre a las 21:30
+  // en España). Se fija igual que el selector de país de la web
+  // (nationForm → changeNation.do, que vuelve a la portada).
+  await Promise.all([
+    page.waitForNavigation({ waitUntil: "domcontentloaded", timeout: 15000 }).catch(() => {}),
+    page
+      .evaluate(() => {
+        const f = document.nationForm;
+        if (f && f.ntnCd) {
+          f.ntnCd.value = "ES";
+          f.submit();
+        }
+      })
+      .catch(() => {}),
+  ]);
+  await page.waitForLoadState("networkidle", { timeout: 15000 }).catch(() => {});
   await Promise.all([
     page.waitForNavigation({ waitUntil: "domcontentloaded", timeout: 15000 }).catch(() => {}),
     page
@@ -415,8 +433,16 @@ async function leerPartidosEquipoPhoenixML(page, cpttnId, searchDivision, nombre
       texto: (o.textContent || "").trim(),
     }));
     const periodo = (document.body.innerText || "").match(/(\d{2})\/(\d{2})\/(\d{4})\s*~\s*(\d{2})\/(\d{2})\/(\d{4})/);
-    return { opciones, periodo: periodo ? [+periodo[3], +periodo[6]] : null };
+    return {
+      opciones,
+      periodo: periodo ? [+periodo[3], +periodo[6]] : null,
+      partesPeriodo: periodo ? [+periodo[1], +periodo[2], +periodo[4], +periodo[5]] : null,
+    };
   });
+  // Por si el país no se pudo fijar a España: si la cabecera del periodo
+  // viene como mm/dd (algún "día" > 12 en segunda posición), se lee así.
+  const pp = info.partesPeriodo;
+  const mesPrimero = !!pp && (pp[1] > 12 || pp[3] > 12) && pp[0] <= 12 && pp[2] <= 12;
 
   const buscado = quitarAcentos(nombreEquipo);
   const nuestro = info.opciones.find((o) => {
@@ -462,7 +488,12 @@ async function leerPartidosEquipoPhoenixML(page, cpttnId, searchDivision, nombre
       }
       return res;
     });
-    for (const f of delAnio) if (f.fecha) filas.push({ ...f, anio });
+    for (const f of delAnio) {
+      if (!f.fecha) continue;
+      // f.fecha = [primer número, segundo número] tal cual sale ("20/10")
+      const [dia, mes] = mesPrimero ? [f.fecha[1], f.fecha[0]] : f.fecha;
+      filas.push({ ...f, fecha: [dia, mes], anio });
+    }
   }
 
   filas.sort((a, b) => fechaMadrid(a.anio, a.fecha[1], a.fecha[0], ...a.hora) - fechaMadrid(b.anio, b.fecha[1], b.fecha[0], ...b.hora));

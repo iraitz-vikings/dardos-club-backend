@@ -422,10 +422,29 @@ function fechaMadrid(anio, mes, dia, hora, minuto) {
 // Connection, ver sincronizarPartidosConnection). idsConResultado: Set de
 // idExterno que ya tienen resultado guardado (no se vuelve a abrir su
 // detalle).
+// Abre una página de calendario asegurando que la sesión sigue con país
+// España. Bug real del 2026-10-20: tras abrir el detalle de un partido
+// terminado (de otro equipo), la siguiente página de calendario salió con
+// las horas en UTC+8 (Old School: "jue 03:30" en vez de "mié 21:30"),
+// aunque la sesión se había fijado a España al principio. La propia página
+// lleva el país actual en su script (`var curNation = "ES";`): si no es ES,
+// se vuelve a fijar y se recarga.
+async function irConPaisEspana(page, url) {
+  for (let intento = 0; intento < 3; intento++) {
+    await page.goto(url, { waitUntil: "domcontentloaded", timeout: 30000 });
+    await page.waitForLoadState("networkidle", { timeout: 15000 }).catch(() => {});
+    const pais = await page
+      .evaluate(() => ((document.documentElement.innerHTML || "").match(/curNation\s*=\s*["'](\w+)["']/) || [])[1] || "")
+      .catch(() => "");
+    if (!pais || pais.toUpperCase() === "ES") return;
+    await fijarIdiomaEspanol(page);
+  }
+  throw new Error("Phoenix Darts no deja fijar el país España (las fechas saldrían en otra zona horaria)");
+}
+
 async function leerPartidosEquipoPhoenixML(page, cpttnId, searchDivision, nombreEquipo, idsConResultado = new Set()) {
   const base = `${MATCH_LIST_ML_URL}?cpttnId=${encodeURIComponent(cpttnId)}&searchDivision=${encodeURIComponent(searchDivision)}`;
-  await page.goto(base, { waitUntil: "domcontentloaded", timeout: 30000 });
-  await page.waitForLoadState("networkidle", { timeout: 15000 }).catch(() => {});
+  await irConPaisEspana(page, base);
 
   const info = await page.evaluate(() => {
     const opciones = [...document.querySelectorAll('select[name="searchTeam"] option')].map((o) => ({
@@ -455,11 +474,7 @@ async function leerPartidosEquipoPhoenixML(page, cpttnId, searchDivision, nombre
   const [desde, hasta] = info.periodo || [anioActual, anioActual];
   const filas = [];
   for (let anio = desde; anio <= hasta; anio++) {
-    await page.goto(`${base}&searchTeam=${encodeURIComponent(nuestro.id)}&searchYear=${anio}&searchMonth=`, {
-      waitUntil: "domcontentloaded",
-      timeout: 30000,
-    });
-    await page.waitForLoadState("networkidle", { timeout: 15000 }).catch(() => {});
+    await irConPaisEspana(page, `${base}&searchTeam=${encodeURIComponent(nuestro.id)}&searchYear=${anio}&searchMonth=`);
     const delAnio = await page.evaluate(() => {
       const tabla = document.querySelector("table.tb_style03");
       if (!tabla) return [];

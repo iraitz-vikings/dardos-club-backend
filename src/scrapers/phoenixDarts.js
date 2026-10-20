@@ -350,6 +350,159 @@ async function leerClasificacionEquiposPhoenixML(page, cpttnId, searchDivision) 
   return filasEquipo.length > 0 ? filasEquipo : null;
 }
 
+// ---------------------------------------------------------------------------
+// Calendario y resultados de NUESTRO equipo (Multi League) — añadido el
+// 2026-10-20 con la "LIGA EQUIPOS 26-27". Páginas públicas:
+//
+// - selectMatchListML.do?cpttnId=&searchDivision=&searchTeam=&searchYear=
+//   &searchMonth= → tabla `table.tb_style03` con los partidos del grupo
+//   (filtrable por equipo y AÑO: sin searchYear solo enseña el año en curso,
+//   así que se pide cada año de la temporada, que sale en la cabecera como
+//   "19/10/2026 ~ 14/03/2027"). El id de cada equipo está en el <select
+//   name="searchTeam"> (texto "VDC EXTREME_LE2627_GRUPO 048").
+//   Cada fila: [fecha "20/10 (Tue.)" (con rowspan si hay varios partidos ese
+//   día; sin celda de fecha en las filas siguientes), hora "21:30", tipo,
+//   local (span.ellipsis = nombre), marcador local, marcador visitante,
+//   visitante, estado ("Preparado", "Terminado"…)]. Las celdas llevan
+//   onclick="goMatchDetail(<brcktId>)". OJO: el "marcador" de la lista son
+//   PUNTOS de liga (victoria = 2), no partidas.
+// - selectMatchDetailORLineupML.do?cpttnId=&brcktId= (redirige al detalle):
+//   `div.vs_info div.set p` = partidas ganadas local / visitante (ej. 7 y 5).
+//   Solo se abre para partidos terminados que aún no tienen resultado
+//   guardado.
+// Las horas se interpretan como hora de España (Europe/Madrid).
+// ---------------------------------------------------------------------------
+
+const MATCH_LIST_ML_URL = "https://play.phoenixdarts.com/selectMatchListML.do";
+const MATCH_DETAIL_ML_URL = "https://play.phoenixdarts.com/selectMatchDetailORLineupML.do";
+
+// "BUZZ LIGHYEAR_LE2627_GRUPO 048" → "BUZZ LIGHYEAR"
+function sinSufijoPhoenix(nombre) {
+  return String(nombre || "").replace(/_[A-Z]{1,6}\d{2,6}(?:_.*)?$/i, "").trim() || String(nombre || "").trim();
+}
+
+// Fecha/hora "de pared" en Madrid → Date (UTC) correcto, con horario de
+// verano/invierno.
+function fechaMadrid(anio, mes, dia, hora, minuto) {
+  const guess = Date.UTC(anio, mes - 1, dia, hora, minuto);
+  const partes = new Intl.DateTimeFormat("en-GB", {
+    timeZone: "Europe/Madrid",
+    hourCycle: "h23",
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+    hour: "2-digit",
+    minute: "2-digit",
+  }).formatToParts(new Date(guess));
+  const v = Object.fromEntries(partes.map((x) => [x.type, x.value]));
+  const comoMadrid = Date.UTC(+v.year, +v.month - 1, +v.day, +v.hour, +v.minute);
+  return new Date(guess - (comoMadrid - guess));
+}
+
+// Partidos de UN equipo del club en su grupo. Devuelve [{ idExterno,
+// jornada, fecha, rival, enCasa, terminado, resultado }] (mismo formato que
+// Connection, ver sincronizarPartidosConnection). idsConResultado: Set de
+// idExterno que ya tienen resultado guardado (no se vuelve a abrir su
+// detalle).
+async function leerPartidosEquipoPhoenixML(page, cpttnId, searchDivision, nombreEquipo, idsConResultado = new Set()) {
+  const base = `${MATCH_LIST_ML_URL}?cpttnId=${encodeURIComponent(cpttnId)}&searchDivision=${encodeURIComponent(searchDivision)}`;
+  await page.goto(base, { waitUntil: "domcontentloaded", timeout: 30000 });
+  await page.waitForLoadState("networkidle", { timeout: 15000 }).catch(() => {});
+
+  const info = await page.evaluate(() => {
+    const opciones = [...document.querySelectorAll('select[name="searchTeam"] option')].map((o) => ({
+      id: o.value,
+      texto: (o.textContent || "").trim(),
+    }));
+    const periodo = (document.body.innerText || "").match(/(\d{2})\/(\d{2})\/(\d{4})\s*~\s*(\d{2})\/(\d{2})\/(\d{4})/);
+    return { opciones, periodo: periodo ? [+periodo[3], +periodo[6]] : null };
+  });
+
+  const buscado = quitarAcentos(nombreEquipo);
+  const nuestro = info.opciones.find((o) => {
+    const t = quitarAcentos(o.texto);
+    return o.id && (t === buscado || t.startsWith(buscado + "_") || quitarAcentos(sinSufijoPhoenix(o.texto)) === buscado);
+  });
+  if (!nuestro) throw new Error(`no aparece "${nombreEquipo}" en el calendario de su grupo`);
+
+  const anioActual = new Date().getFullYear();
+  const [desde, hasta] = info.periodo || [anioActual, anioActual];
+  const filas = [];
+  for (let anio = desde; anio <= hasta; anio++) {
+    await page.goto(`${base}&searchTeam=${encodeURIComponent(nuestro.id)}&searchYear=${anio}&searchMonth=`, {
+      waitUntil: "domcontentloaded",
+      timeout: 30000,
+    });
+    await page.waitForLoadState("networkidle", { timeout: 15000 }).catch(() => {});
+    const delAnio = await page.evaluate(() => {
+      const tabla = document.querySelector("table.tb_style03");
+      if (!tabla) return [];
+      const res = [];
+      let fecha = null;
+      for (const tr of [...tabla.querySelectorAll("tbody tr")]) {
+        const celdas = [...tr.querySelectorAll("td")];
+        const conBrckt = celdas.find((c) => /goMatchDetail\(\s*\d+/.test(c.getAttribute("onclick") || ""));
+        if (!conBrckt) continue;
+        const brcktId = (conBrckt.getAttribute("onclick") || "").match(/goMatchDetail\(\s*(\d+)/)[1];
+        const textoFecha = (celdas[0].textContent || "").match(/(\d{2})\/(\d{2})/);
+        if (textoFecha) fecha = [+textoFecha[1], +textoFecha[2]];
+        const hora = (tr.textContent || "").match(/\b(\d{1,2}):(\d{2})\b/);
+        const local = tr.querySelector("td.l_team span.ellipsis:not(.shop)");
+        const visitante = tr.querySelector("td.r_team span.ellipsis:not(.shop)");
+        const marcadores = tr.querySelectorAll("span.win, span.lose, span.draw");
+        const estado = (celdas[celdas.length - 2]?.textContent || "").trim();
+        res.push({
+          brcktId,
+          fecha,
+          hora: hora ? [+hora[1], +hora[2]] : [0, 0],
+          local: (local?.textContent || "").trim(),
+          visitante: (visitante?.textContent || "").trim(),
+          terminado: marcadores.length > 0 || /terminad/i.test(estado),
+        });
+      }
+      return res;
+    });
+    for (const f of delAnio) if (f.fecha) filas.push({ ...f, anio });
+  }
+
+  filas.sort((a, b) => fechaMadrid(a.anio, a.fecha[1], a.fecha[0], ...a.hora) - fechaMadrid(b.anio, b.fecha[1], b.fecha[0], ...b.hora));
+  const nombreNuestro = quitarAcentos(nuestro.texto);
+  const partidos = [];
+  let jornada = 0;
+  for (const f of filas) {
+    jornada++;
+    const enCasa = quitarAcentos(f.local) === nombreNuestro;
+    const idExterno = `phoenix:${f.brcktId}:${nuestro.id}`;
+    let resultado = null;
+    if (f.terminado && !idsConResultado.has(idExterno)) {
+      try {
+        await page.goto(`${MATCH_DETAIL_ML_URL}?cpttnId=${encodeURIComponent(cpttnId)}&brcktId=${encodeURIComponent(f.brcktId)}`, {
+          waitUntil: "domcontentloaded",
+          timeout: 30000,
+        });
+        await page.waitForLoadState("networkidle", { timeout: 15000 }).catch(() => {});
+        const sets = await page.$$eval("div.vs_info div.set p", (ps) => ps.map((p) => (p.textContent || "").trim()));
+        if (sets.length >= 2 && /^\d+$/.test(sets[0]) && /^\d+$/.test(sets[1])) {
+          resultado = enCasa ? `${sets[0]}-${sets[1]}` : `${sets[1]}-${sets[0]}`;
+        }
+      } catch {
+        resultado = null; // se reintenta en la siguiente actualización
+      }
+    }
+    partidos.push({
+      idExterno,
+      jornada,
+      fecha: fechaMadrid(f.anio, f.fecha[1], f.fecha[0], ...f.hora),
+      fechaEsLimite: false,
+      rival: sinSufijoPhoenix(enCasa ? f.visitante : f.local),
+      enCasa,
+      terminado: f.terminado,
+      resultado,
+    });
+  }
+  return partidos;
+}
+
 // equiposTorneo: [{ id, idExterno, nombre }] — un elemento por cada
 // EquipoTorneo (inscripción de un equipo del club en este Torneo/Liga) que
 // se quiera actualizar. `id` es el id del EquipoTorneo (no del Torneo).
@@ -359,8 +512,10 @@ async function leerClasificacionEquiposPhoenixML(page, cpttnId, searchDivision) 
 // desambiguar si ese equipo compite en más de una competición de Phoenix a
 // la vez. Se reutiliza un único navegador para toda la lista, así que
 // conviene pasar de una vez todos los equipos de un mismo Torneo en lugar
-// de llamar a la función una vez por equipo. Devuelve [{ equipoTorneoId,
-// ok, filas?, error? }].
+// de llamar a la función una vez por equipo. Opcional por equipo:
+// conPartidos (true = leer también su calendario/resultados) e
+// idsConResultado (Set). Devuelve [{ equipoTorneoId, ok, filas?, partidos?,
+// avisoPartidos?, error? }].
 export async function extraerClasificacionEquiposPhoenix(equiposTorneo) {
   const conNombre = equiposTorneo.filter((t) => (t.idExterno || "").trim());
   const resultados = equiposTorneo
@@ -379,7 +534,7 @@ export async function extraerClasificacionEquiposPhoenix(equiposTorneo) {
 
     await fijarIdiomaEspanol(page);
 
-    for (const { id, idExterno, nombre } of conNombre) {
+    for (const { id, idExterno, nombre, conPartidos, idsConResultado } of conNombre) {
       try {
         const destino = await localizarGrupoDelEquipoPhoenix(page, idExterno, nombre);
         if (!destino) {
@@ -399,7 +554,18 @@ export async function extraerClasificacionEquiposPhoenix(equiposTorneo) {
           });
           continue;
         }
-        resultados.push({ equipoTorneoId: id, ok: true, filas });
+        // Calendario y resultados de este equipo (solo si se piden): un
+        // fallo aquí no tumba la clasificación, se avisa aparte.
+        let partidos = null;
+        let avisoPartidos = null;
+        if (conPartidos) {
+          try {
+            partidos = await leerPartidosEquipoPhoenixML(page, destino.cpttnId, destino.searchDivision, idExterno, idsConResultado);
+          } catch (err) {
+            avisoPartidos = `no se pudo leer el calendario (${err.message || err})`;
+          }
+        }
+        resultados.push({ equipoTorneoId: id, ok: true, filas, partidos, avisoPartidos });
       } catch (err) {
         resultados.push({ equipoTorneoId: id, ok: false, error: err.message || "Error consultando Phoenix Darts" });
       }

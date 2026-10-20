@@ -77,6 +77,22 @@ export async function actualizarClasificacionTorneo(torneo) {
       };
     }
 
+    const idsConResultado = new Map(); // equipoTorneoId → Set(idExterno)
+    if (!esConnection) {
+      const conResultado = await prisma.partido.findMany({
+        where: {
+          equipoTorneoId: { in: torneo.equipos.map((e) => e.id) },
+          idExterno: { startsWith: "phoenix:" },
+          resultado: { not: null },
+        },
+        select: { equipoTorneoId: true, idExterno: true },
+      });
+      for (const p of conResultado) {
+        if (!idsConResultado.has(p.equipoTorneoId)) idsConResultado.set(p.equipoTorneoId, new Set());
+        idsConResultado.get(p.equipoTorneoId).add(p.idExterno);
+      }
+    }
+
     // Connection: Torneo.idExterno = ids de liga separados por comas; cada
     // equipo se busca por su nombre en todos los grupos de esas ligas (ver
     // connectionDarts.js). Phoenix: búsqueda por nombre de equipo.
@@ -94,6 +110,11 @@ export async function actualizarClasificacionTorneo(torneo) {
             id: eq.id,
             idExterno: eq.idExternoEquipo || torneo.idExterno,
             nombre: torneo.nombre,
+            // Phoenix: también calendario y resultados del equipo (Multi
+            // League). Los partidos que ya tienen resultado no se vuelven a
+            // abrir.
+            conPartidos: true,
+            idsConResultado: idsConResultado.get(eq.id) || new Set(),
           }))
         );
     const exitos = resultados.filter((r) => r.ok);
@@ -118,11 +139,11 @@ export async function actualizarClasificacionTorneo(torneo) {
       ])
     );
 
-    // Connection: además de la clasificación, sincroniza calendario y
-    // resultados de los partidos de NUESTROS equipos (ver
-    // sincronizarPartidosConnection más abajo).
+    // Connection y Phoenix: además de la clasificación, sincroniza
+    // calendario y resultados de los partidos de NUESTROS equipos (ver
+    // sincronizarPartidosConnection más abajo, mismas reglas para las dos).
     const avisosPartidos = [];
-    if (esConnection) {
+    {
       for (const r of exitos) {
         const eq = torneo.equipos.find((e) => e.id === r.equipoTorneoId);
         const nombreEq = eq?.equipoClub?.nombre || eq?.idExternoEquipo || "Un equipo";
@@ -152,7 +173,7 @@ export async function actualizarClasificacionTorneo(torneo) {
 }
 
 // Crea/actualiza los Partido de una inscripción a partir del calendario de
-// Connection (solo los partidos de ese equipo). Reglas:
+// Connection o de Phoenix (solo los partidos de ese equipo). Reglas:
 //  - Partido nuevo → se crea SIN confirmar (fijado=false), para que el
 //    capitán solo tenga que revisarlo y pulsar "Confirmar" (ahí elige
 //    máquina, y se avisa a la plantilla, como siempre).
@@ -351,11 +372,10 @@ async function motivoActualizarLigaIndividual(torneo, ahora = new Date()) {
 //
 // - Botón "Actualizar todas las clasificaciones ahora" (sin opciones):
 //   actualiza todo, como siempre.
-// - Cron diario (`{ cron: true, otrasPlataformas }`): en Connection solo
-//   los equipos que jugaron ayer (ver equiposConPartidoPorActualizar);
-//   Radikal y Phoenix, que no tienen calendario automático, solo si
-//   `otrasPlataformas` es true (el cron lo pasa de lunes a viernes, como
-//   antes).
+// - Cron diario (`{ cron: true, otrasPlataformas }`): en Connection y
+//   Phoenix solo los equipos que jugaron ayer (ver
+//   equiposConPartidoPorActualizar); Radikal, que no tiene calendario
+//   automático, solo si `otrasPlataformas` es true (de lunes a viernes).
 export async function actualizarTodasLasClasificaciones({ cron = false, otrasPlataformas = true } = {}) {
   // Las competiciones terminadas (histórico) ya no cambian: no se
   // intentan actualizar.
@@ -367,13 +387,18 @@ export async function actualizarTodasLasClasificaciones({ cron = false, otrasPla
   const torneos = [];
   const saltados = [];
   for (const torneo of torneosTodos) {
-    const esConnection = (torneo.plataforma?.nombre || "").toLowerCase().includes("connection");
+    const nombrePlat = (torneo.plataforma?.nombre || "").toLowerCase();
+    const esConnection = nombrePlat.includes("connection");
+    // Phoenix ya tiene calendario automático (2026-10-20): se trata igual
+    // que las ligas de equipos de Connection (solo los equipos que jugaron
+    // ayer, o que aún no tienen partidos).
+    const esPhoenix = nombrePlat.includes("phoenix");
     if (!cron) {
       torneos.push(torneo);
-    } else if (!esConnection) {
+    } else if (!esConnection && !esPhoenix) {
       if (otrasPlataformas) torneos.push(torneo);
       else saltados.push({ torneo: torneo.nombre, motivo: "fin de semana: solo se actualiza de lunes a viernes" });
-    } else if (!torneo.equipos.some((eq) => eq.equipoClubId)) {
+    } else if (esConnection && !torneo.equipos.some((eq) => eq.equipoClubId)) {
       // Liga INDIVIDUAL de Connection (ej. Super One): cada jugador juega
       // cuando queda con su rival dentro de la ventana de la jornada. Se
       // actualiza solo:

@@ -13,7 +13,7 @@ import "express-async-errors";
 
 import { actualizarTodasLasMedias } from "./scrapers/actualizarMedias.js";
 import { actualizarTodasLasClasificaciones } from "./scrapers/actualizarClasificaciones.js";
-import { iniciarBotTelegram } from "./routes/telegram.js";
+import { iniciarBotTelegram, detenerBotTelegram } from "./routes/telegram.js";
 import { limpiarPapelera } from "./lib/limpiarPapelera.js";
 import { purgarRegistroPush } from "./lib/registroPush.js";
 import { enviarRecordatoriosDeHoy } from "./lib/recordatoriosPartidos.js";
@@ -225,4 +225,17 @@ process.on("unhandledRejection", (motivo) => {
 });
 
 const PORT = process.env.PORT || 3000;
-app.listen(PORT, () => console.log(`API escuchando en puerto ${PORT}`));
+const servidor = app.listen(PORT, () => console.log(`API escuchando en puerto ${PORT}`));
+
+// Cierre ordenado cuando Railway retira el contenedor (SIGTERM) o al parar
+// en local (Ctrl+C): se para el bot de Telegram para que el contenedor
+// nuevo no choque con este en getUpdates (409), se deja de aceptar
+// conexiones y se sale. Si algo se queda colgado, se sale igual a los 10 s.
+function cerrar(senal) {
+  console.log(`${senal} recibido: cerrando el servidor...`);
+  detenerBotTelegram();
+  servidor.close(() => process.exit(0));
+  setTimeout(() => process.exit(0), 10 * 1000).unref();
+}
+process.on("SIGTERM", () => cerrar("SIGTERM"));
+process.on("SIGINT", () => cerrar("SIGINT"));

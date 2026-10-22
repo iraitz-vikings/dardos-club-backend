@@ -26,6 +26,9 @@ import { prisma } from "../lib/prisma.js";
 
 
 let bot = null;
+// true desde que el proceso se está cerrando (ver detenerBotTelegram): a
+// partir de ahí el polling no se vuelve a arrancar.
+let detenido = false;
 
 // Arranca el bot (polling) si hay token configurado. Se llama una vez al
 // iniciar el servidor (ver index.js). Si TELEGRAM_BOT_TOKEN no está
@@ -131,18 +134,32 @@ export function iniciarBotTelegram() {
 // torneo de prueba de esa tarde, aunque los avisos sí salían. Por eso se
 // vuelve a arrancar con espera creciente (5 s, 10 s, 20 s... hasta 5 min);
 // la espera vuelve a 5 s en cuanto un arranque aguanta más de un minuto.
+// El 409 es la excepción: es lo esperado mientras dura el solape del
+// despliegue, así que se registra como aviso (no error) y se reintenta
+// siempre a los 5 s sin hacer crecer la espera, para que el contenedor
+// nuevo recupere el polling en cuanto el viejo se apaga (ver
+// detenerBotTelegram).
 const ESPERA_POLLING_INICIAL_MS = 5 * 1000;
 const ESPERA_POLLING_MAX_MS = 5 * 60 * 1000;
 let esperaPollingMs = ESPERA_POLLING_INICIAL_MS;
 
 function arrancarPolling() {
+  if (detenido) return;
   const inicio = Date.now();
   bot
     .startPolling(undefined, {
       onError: (err) => console.error("Error de polling del bot de Telegram:", err?.message || err),
     })
     .catch((err) => {
+      if (detenido) return;
       if (Date.now() - inicio > 60 * 1000) esperaPollingMs = ESPERA_POLLING_INICIAL_MS;
+      if (err?.errorCode === 409) {
+        console.warn(
+          `Polling del bot de Telegram en conflicto con otra instancia (normal durante un despliegue); se reintenta en ${Math.round(ESPERA_POLLING_INICIAL_MS / 1000)} s.`
+        );
+        setTimeout(arrancarPolling, ESPERA_POLLING_INICIAL_MS);
+        return;
+      }
       console.error(
         `El polling del bot de Telegram se detuvo con un error (se reintenta en ${Math.round(esperaPollingMs / 1000)} s):`,
         err?.message || err
@@ -150,6 +167,15 @@ function arrancarPolling() {
       setTimeout(arrancarPolling, esperaPollingMs);
       esperaPollingMs = Math.min(esperaPollingMs * 2, ESPERA_POLLING_MAX_MS);
     });
+}
+
+// Para el polling al cerrar el proceso (SIGTERM de Railway al retirar el
+// contenedor viejo, ver index.js): así suelta getUpdates enseguida y el
+// contenedor nuevo deja de recibir el 409 en su siguiente reintento, en vez
+// de pelearse con él hasta que el viejo muere a la fuerza.
+export function detenerBotTelegram() {
+  detenido = true;
+  if (bot?.isRunning()) bot.stop();
 }
 
 // Manda un aviso al chat de Telegram vinculado a este jugador, si tiene

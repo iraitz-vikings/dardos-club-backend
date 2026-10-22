@@ -15,4 +15,7 @@ RUN npx prisma generate
 
 ENV NODE_ENV=production
 
-CMD ["sh", "-c", "npx prisma db push --skip-generate --accept-data-loss && node src/index.js"]
+# `exec` hace que node sustituya al sh y sea el PID 1: así recibe él el
+# SIGTERM de Railway al retirar el contenedor (sh como PID 1 no lo reenvía)
+# y puede cerrar ordenadamente (ver el final de src/index.js).
+CMD ["sh", "-c", "npx prisma db push --skip-generate --accept-data-loss && exec node src/index.js"]

@@ -424,6 +424,8 @@ router.post("/:id/fusionar", requireAdmin, async (req, res) => {
           ["participanteLiga", "jugador2Id"],
           ["puntoJornada", "jugador1Id"],
           ["puntoJornada", "jugador2Id"],
+          ["inscripcionClub", "jugador1Id"],
+          ["inscripcionClub", "jugador2Id"],
           ["equipoTorneo", "capitanId"],
           ["equipoClub", "capitanId"],
           ["suscripcionPush", "jugadorId"],

@@ -550,7 +550,7 @@ function ordenSemillas(tamano) {
 // mano para un invitado sin ficha) → { id, nombre }; { error: true } si el
 // id no existe; null si no viene nada. Si el jugador tiene alias puesto en
 // su perfil, se usa ese en vez del nombre real para la etiqueta.
-async function resolverLadoParticipante(id, nombreLibre) {
+export async function resolverLadoParticipante(id, nombreLibre) {
   if (id) {
     const j = await prisma.jugador.findUnique({ where: { id } });
     if (!j) return { error: true };

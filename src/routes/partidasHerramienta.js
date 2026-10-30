@@ -9,6 +9,9 @@ import {
   partidosPendientesDeJugador,
   localizarPartidoConConfig,
   resolverParticipante,
+  ladosDePartida,
+  legsGanadosDePartida,
+  indiceLadoDe,
 } from "../lib/partidasHerramienta.js";
 import { limpiarConfigJuego } from "../lib/configuracionHerramienta.js";
 import { urlPublicaAmistoso } from "../lib/enlacesPublicos.js";
@@ -370,58 +373,65 @@ function formatearPartida(fila) {
     visitaEnCurso: fila.visitaEnCurso,
     listosInicio: fila.listosInicio || [],
     modoJuego: fila.modoJuego || null,
+    // Siempre presentes, también en partidas de 2 lados (ver ladosDePartida):
+    // el frontend trabaja solo con estos.
+    lados: ladosDePartida(fila),
+    legsGanadosLados: legsGanadosDePartida(fila),
+    ordenLados: fila.ordenLados || [],
   };
 }
 
-// Partida jugada desde dos dispositivos (uno por lado), con turnos
-// sincronizados por el backend: los amistosos siempre, y los partidos de
-// torneo/liga cuando en la sala de espera los dos lados pulsan "Inicio" cada
-// uno desde el suyo (modoJuego "remoto", ver POST /:id/listo).
+// Partida jugada desde varios dispositivos (uno por lado), con turnos
+// sincronizados por el backend: cuando en la sala de espera todos los lados
+// pulsan "Inicio" cada uno desde el suyo (modoJuego "remoto", ver POST
+// /:id/listo). Cualquier partida (torneo, liga o amistoso) se puede jugar
+// también en local, con todos en un dispositivo. Amistosos de antes de
+// existir modoJuego: remotos, como entonces.
 function esPartidaRemota(partida) {
-  return partida.amistosa || partida.modoJuego === "remoto";
-}
-
-// Lado (1 o 2) de un jugador en la partida, o null si no juega.
-function ladoDe(partida, jugadorId) {
-  if (partida.jugadoresId1.includes(jugadorId)) return 1;
-  if (partida.jugadoresId2.includes(jugadorId)) return 2;
-  return null;
+  return partida.modoJuego ? partida.modoJuego === "remoto" : partida.amistosa;
 }
 
 // La sala de espera se da por completada cuando cada lado tiene al menos un
 // jugador que ha pulsado "Inicio" (en parejas basta con uno de los dos: lo
 // normal es que cada pareja comparta dispositivo).
 function ladosListos(partida, listos) {
-  return [partida.jugadoresId1, partida.jugadoresId2].every((ids) => ids.some((id) => listos.has(id)));
+  return ladosDePartida(partida).every((l) => l.jugadoresId.some((id) => listos.has(id)));
 }
 
+const MAX_JUGADORES_AMISTOSO = 8;
+
 // POST /api/partidas-herramienta/amistosa - un socio logueado (sesión normal,
-// no PIN: hace falta para poder elegir rival del listado del club con
-// garantías) reta a otro jugador del club a un amistoso fuera de torneo/liga
-// (plan "partido-amistoso-remoto", guardado en el proyecto). A diferencia de
-// /iniciar, aquí no hay ronda/jornada de la que heredar juego/reglas: las
-// elige directamente el creador, así que "ambos" (501 o Cricket a elegir) no
-// tiene sentido y se rechaza. body: { rivalJugadorId } o { rivalNombreNuevo }
-// (alta de amigo nueva sobre la marcha, igual que ya se hace al apuntar
-// invitados a un torneo) + { juego, alMejorDe, apertura?, cierre?, modoCricket? }.
+// no PIN: hace falta para poder elegir rivales del listado del club con
+// garantías) reta a otros jugadores del club a un amistoso fuera de
+// torneo/liga (plan "partido-amistoso-remoto", guardado en el proyecto). A
+// diferencia de /iniciar, aquí no hay ronda/jornada de la que heredar
+// juego/reglas: las elige directamente el creador, así que "ambos" (501 o
+// Cricket a elegir) no tiene sentido y se rechaza.
+//
+// body: { participantes: [...] } en orden de tiro, cada uno { yo: true } (el
+// propio creador), { jugadorId } o { nombreNuevo } (alta de amigo nueva sobre
+// la marcha, igual que ya se hace al apuntar invitados a un torneo) — de 2 a
+// MAX_JUGADORES_AMISTOSO, cada uno su propio lado (2026-10-30: antes solo 1
+// contra 1). Se sigue aceptando el formato antiguo { rivalJugadorId } o
+// { rivalNombreNuevo } (el creador primero). Más { juego, alMejorDe,
+// apertura?, cierre?, modoCricket? }.
 router.post("/amistosa", requireAuth, async (req, res) => {
   const creador = await prisma.jugador.findUnique({ where: { usuarioId: req.usuario.sub } });
   if (!creador) {
     return res.status(400).json({ error: "Tu cuenta de socio no tiene una ficha de jugador vinculada." });
   }
 
-  const { rivalJugadorId, rivalNombreNuevo } = req.body;
-  let rival;
-  if (rivalNombreNuevo && rivalNombreNuevo.trim()) {
-    rival = await prisma.jugador.create({ data: { nombre: rivalNombreNuevo.trim() } });
-  } else if (rivalJugadorId) {
-    rival = await prisma.jugador.findUnique({ where: { id: rivalJugadorId } });
-    if (!rival) return res.status(404).json({ error: "Rival no encontrado." });
-  } else {
-    return res.status(400).json({ error: "Falta elegir un rival, o el nombre de un amigo nuevo." });
+  let entrada = Array.isArray(req.body.participantes) ? req.body.participantes : null;
+  if (!entrada) {
+    const { rivalJugadorId, rivalNombreNuevo } = req.body;
+    if (rivalNombreNuevo && String(rivalNombreNuevo).trim()) entrada = [{ yo: true }, { nombreNuevo: rivalNombreNuevo }];
+    else if (rivalJugadorId) entrada = [{ yo: true }, { jugadorId: rivalJugadorId }];
+    else return res.status(400).json({ error: "Falta elegir un rival, o el nombre de un amigo nuevo." });
   }
-  if (rival.id === creador.id) {
-    return res.status(400).json({ error: "No puedes retarte a ti mismo." });
+  if (!entrada.some((p) => p && p.yo)) entrada = [{ yo: true }, ...entrada];
+  if (entrada.length < 2) return res.status(400).json({ error: "Elige al menos un rival." });
+  if (entrada.length > MAX_JUGADORES_AMISTOSO) {
+    return res.status(400).json({ error: `Como mucho ${MAX_JUGADORES_AMISTOSO} jugadores por amistoso.` });
   }
 
   const config = limpiarConfigJuego(req.body, { requerida: true });
@@ -430,6 +440,36 @@ router.post("/amistosa", requireAuth, async (req, res) => {
     return res.status(400).json({ error: 'Elige 501 o Cricket para el amistoso (no vale "ambos").' });
   }
 
+  // Se comprueba todo antes de dar de alta a ningún amigo nuevo, para no
+  // dejar fichas sueltas si la petición acaba rechazada.
+  const ids = new Set();
+  const existentes = {};
+  for (const p of entrada) {
+    if (!p || typeof p !== "object") return res.status(400).json({ error: "Participante no válido." });
+    if (p.yo) {
+      if (ids.has(creador.id)) return res.status(400).json({ error: "Estás repetido en la lista." });
+      ids.add(creador.id);
+    } else if (p.jugadorId) {
+      if (p.jugadorId === creador.id) return res.status(400).json({ error: "No puedes retarte a ti mismo." });
+      if (ids.has(p.jugadorId)) return res.status(400).json({ error: "Hay un jugador repetido en la lista." });
+      const jugador = await prisma.jugador.findUnique({ where: { id: p.jugadorId } });
+      if (!jugador) return res.status(404).json({ error: "Rival no encontrado." });
+      existentes[jugador.id] = jugador;
+      ids.add(jugador.id);
+    } else if (!(typeof p.nombreNuevo === "string" && p.nombreNuevo.trim())) {
+      return res.status(400).json({ error: "Falta el nombre de algún amigo nuevo." });
+    }
+  }
+  const jugadores = [];
+  for (const p of entrada) {
+    if (p.yo) jugadores.push(creador);
+    else if (p.jugadorId) jugadores.push(existentes[p.jugadorId]);
+    else jugadores.push(await prisma.jugador.create({ data: { nombre: p.nombreNuevo.trim() } }));
+  }
+
+  const nombre = (j) => j.apodo || j.nombre;
+  const lados = jugadores.map((j) => ({ etiqueta: nombre(j), jugadoresId: [j.id], nombres: [nombre(j)] }));
+  const resto = jugadores.slice(1);
   const creada = await prisma.partidaHerramienta.create({
     data: {
       amistosa: true,
@@ -438,26 +478,31 @@ router.post("/amistosa", requireAuth, async (req, res) => {
       apertura: config.valor.apertura || null,
       cierre: config.valor.cierre || null,
       modoCricket: config.valor.modoCricket || null,
-      etiqueta1: creador.apodo || creador.nombre,
-      etiqueta2: rival.apodo || rival.nombre,
-      jugadoresId1: [creador.id],
-      jugadoresId2: [rival.id],
-      nombres1: [creador.apodo || creador.nombre],
-      nombres2: [rival.apodo || rival.nombre],
+      etiqueta1: nombre(jugadores[0]),
+      etiqueta2: resto.map(nombre).join(", "),
+      jugadoresId1: [jugadores[0].id],
+      jugadoresId2: resto.map((j) => j.id),
+      nombres1: [nombre(jugadores[0])],
+      nombres2: resto.map(nombre),
+      ...(jugadores.length > 2 ? { lados, legsGanadosLados: lados.map(() => 0) } : {}),
     },
   });
 
-  // Aviso al rival (Web Push y/o Telegram, según lo que tenga activado — si
-  // no tiene nada, notificarJugador no manda nada y no falla, ver
-  // notificar.js). El enlace lleva directo a /partidas con esta partida ya
-  // identificada, para que tras meter el PIN se abra sola sin tener que
+  // Aviso a los rivales (Web Push y/o Telegram, según lo que tenga activado
+  // cada uno — si no tiene nada, notificarJugador no manda nada y no falla,
+  // ver notificar.js). El enlace lleva directo a /partidas con esta partida
+  // ya identificada, para que tras meter el PIN se abra sola sin tener que
   // elegirla de la lista de pendientes.
   const juegoEtiqueta = creada.juego === "cricket" ? "Cricket" : "501";
-  await notificarJugador(rival.id, {
-    titulo: "🎯 Te han retado a un amistoso",
-    cuerpo: `${creador.apodo || creador.nombre} te reta a un amistoso (${juegoEtiqueta}, al mejor de ${creada.alMejorDe}).`,
-    url: urlPublicaAmistoso(creada.id),
-  });
+  const otros = jugadores.filter((j) => j.id !== creador.id);
+  const conQuien = otros.length > 1 ? ` (${otros.length + 1} jugadores)` : "";
+  for (const rival of otros) {
+    await notificarJugador(rival.id, {
+      titulo: "🎯 Te han retado a un amistoso",
+      cuerpo: `${nombre(creador)} te reta a un amistoso${conQuien} (${juegoEtiqueta}, al mejor de ${creada.alMejorDe}).`,
+      url: urlPublicaAmistoso(creada.id),
+    });
+  }
 
   res.status(201).json(formatearPartida(creada));
 });
@@ -481,6 +526,8 @@ router.get("/mis-amistosos", requireAuth, async (req, res) => {
       etiqueta2: p.etiqueta2,
       legsGanados1: p.legsGanados1,
       legsGanados2: p.legsGanados2,
+      lados: ladosDePartida(p).map((l) => l.etiqueta),
+      legsGanadosLados: legsGanadosDePartida(p),
       finalizada: p.finalizada,
       creadoEn: p.creadoEn,
     }))
@@ -668,12 +715,11 @@ router.get("/:id", requireJugadorPartida, async (req, res) => {
 });
 
 // POST /api/partidas-herramienta/:id/listo - sala de espera previa al
-// partido (amistosos y, desde 2026-10-30, también torneo/liga): el jugador
-// pulsa (o cancela, body { listo: false }) "Inicio". El marcador aparece
-// cuando cada lado tiene a alguien listo, y entonces la partida queda en
-// modo "remoto" (cada lado en su dispositivo). En torneo/liga, además, body
-// { local: true } empieza ya el partido con los dos lados en ESTE
-// dispositivo (modo "local", como se jugaba antes). Una vez empezado ya no
+// partido (amistosos, torneo y liga): el jugador pulsa (o cancela, body
+// { listo: false }) "Inicio". El marcador aparece cuando cada lado tiene a
+// alguien listo, y entonces la partida queda en modo "remoto" (cada lado en
+// su dispositivo). Body { local: true } empieza ya el partido con todos los
+// lados en ESTE dispositivo (modo "local"). Una vez empezado ya no
 // se puede cancelar. Se bloquea la fila para que dos pulsaciones
 // simultáneas no se pisen.
 router.post("/:id/listo", requireJugadorPartida, async (req, res) => {
@@ -685,7 +731,6 @@ router.post("/:id/listo", requireJugadorPartida, async (req, res) => {
     if (!partida) return { fallo: [404, "Partida no encontrada"] };
     const ids = [...new Set([...partida.jugadoresId1, ...partida.jugadoresId2])];
     if (!ids.includes(req.jugadorPartidaId)) return { fallo: [403, "No eres parte de este partido."] };
-    if (local && partida.amistosa) return { fallo: [400, "Los amistosos se juegan cada uno desde su dispositivo."] };
     const actuales = new Set(partida.listosInicio || []);
     const empezada = !!partida.modoJuego || partida.legs.length > 0 || ladosListos(partida, actuales);
     if (empezada) {
@@ -711,18 +756,39 @@ router.post("/:id/listo", requireJugadorPartida, async (req, res) => {
   res.json(formatearPartida(resultado.partida));
 });
 
+// POST /api/partidas-herramienta/:id/orden - orden de tiro (body: { orden:
+// [índices de lado] }), solo antes de empezar y por cualquier participante.
+// El leg 1 lo empieza el primero del orden, el 2 el segundo, y así.
+router.post("/:id/orden", requireJugadorPartida, async (req, res) => {
+  const orden = req.body && req.body.orden;
+  const partida = await prisma.partidaHerramienta.findUnique({ where: { id: req.params.id } });
+  if (!partida) return res.status(404).json({ error: "Partida no encontrada" });
+  if (indiceLadoDe(partida, req.jugadorPartidaId) === -1) return res.status(403).json({ error: "No eres parte de este partido." });
+  if (partida.modoJuego || partida.legs.length > 0) return res.status(409).json({ error: "El partido ya ha empezado." });
+  const n = ladosDePartida(partida).length;
+  const valido =
+    Array.isArray(orden) &&
+    orden.length === n &&
+    orden.every((i) => Number.isInteger(i) && i >= 0 && i < n) &&
+    new Set(orden).size === n;
+  if (!valido) return res.status(400).json({ error: "Orden de tiro no válido." });
+  const actualizada = await prisma.partidaHerramienta.update({ where: { id: partida.id }, data: { ordenLados: orden } });
+  res.json(formatearPartida(actualizada));
+});
+
 // POST /api/partidas-herramienta/:id/legs - registra un leg terminado. body:
-// { ladoGanador: 1|2, estadisticas: { [jugadorId]: {...} } }. En cuanto se
+// { ladoGanador: 1..N, estadisticas: { [jugadorId]: {...} } }. En cuanto se
 // alcanza "al mejor de N" (mayoría de legs), se aplica el resultado final al
 // partido real (CuadroPartido o PartidoLiga) con la misma lógica que usa el
 // PUT de administración manual, y esta partida queda marcada `finalizada`.
 router.post("/:id/legs", requireJugadorPartida, async (req, res) => {
   const { ladoGanador, estadisticas } = req.body;
-  if (ladoGanador !== 1 && ladoGanador !== 2) {
-    return res.status(400).json({ error: "Falta indicar qué lado ha ganado el leg (1 o 2)." });
-  }
   const partida = await prisma.partidaHerramienta.findUnique({ where: { id: req.params.id } });
   if (!partida) return res.status(404).json({ error: "Partida no encontrada" });
+  const numLados = ladosDePartida(partida).length;
+  if (!Number.isInteger(ladoGanador) || ladoGanador < 1 || ladoGanador > numLados) {
+    return res.status(400).json({ error: "Falta indicar qué lado ha ganado el leg." });
+  }
   if (partida.finalizada) return res.status(409).json({ error: "Esta partida ya ha terminado." });
   const esParticipante =
     partida.jugadoresId1.includes(req.jugadorPartidaId) || partida.jugadoresId2.includes(req.jugadorPartidaId);
@@ -742,11 +808,16 @@ router.post("/:id/legs", requireJugadorPartida, async (req, res) => {
       registradoEn: new Date().toISOString(),
     },
   ];
+  // Con más de 2 lados, legsGanados2 cuenta los de todos menos el lado 1
+  // (compatibilidad, ver `lados` en schema.prisma); el reparto real va en
+  // legsGanadosLados.
   const legsGanados1 = partida.legsGanados1 + (ladoGanador === 1 ? 1 : 0);
-  const legsGanados2 = partida.legsGanados2 + (ladoGanador === 2 ? 1 : 0);
-  // Mayoría de "al mejor de N" (p.ej. al mejor de 5 -> hacen falta 3).
+  const legsGanados2 = partida.legsGanados2 + (ladoGanador !== 1 ? 1 : 0);
+  const legsGanadosLados = legsGanadosDePartida(partida).map((n, i) => n + (i === ladoGanador - 1 ? 1 : 0));
+  // Mayoría de "al mejor de N" (p.ej. al mejor de 5 -> hacen falta 3). Con
+  // más de 2 jugadores: gana el primero que llega a ese número de legs.
   const legsParaGanar = Math.floor(partida.alMejorDe / 2) + 1;
-  const finalizada = legsGanados1 >= legsParaGanar || legsGanados2 >= legsParaGanar;
+  const finalizada = legsGanadosLados.some((n) => n >= legsParaGanar);
 
   const actualizada = await prisma.partidaHerramienta.update({
     where: { id: partida.id },
@@ -754,12 +825,19 @@ router.post("/:id/legs", requireJugadorPartida, async (req, res) => {
     // medias (ni la del siguiente leg, que todavía no ha empezado ningún
     // dardo) — así el otro dispositivo, al hacer polling, no se queda
     // mirando dardos de un leg que ya no existe.
-    data: { legs, legsGanados1, legsGanados2, finalizada, visitaEnCurso: null },
+    data: {
+      legs,
+      legsGanados1,
+      legsGanados2,
+      ...(numLados > 2 ? { legsGanadosLados } : {}),
+      finalizada,
+      visitaEnCurso: null,
+    },
   });
 
   if (finalizada) {
-    const ganadorEtiqueta = legsGanados1 >= legsParaGanar ? partida.etiqueta1 : partida.etiqueta2;
-    const resultado = `${legsGanados1}-${legsGanados2}`;
+    const ganadorEtiqueta = ladosDePartida(partida)[legsGanadosLados.findIndex((n) => n >= legsParaGanar)].etiqueta;
+    const resultado = legsGanadosLados.join("-");
     console.log(
       `[herramienta] partida ${partida.id} terminada ${resultado} (${partida.etiqueta1} vs ${partida.etiqueta2}), ` +
         `gana ${ganadorEtiqueta}; último leg registrado por jugador ${req.jugadorPartidaId}`
@@ -803,7 +881,7 @@ router.put("/:id/visita", requireJugadorPartida, async (req, res) => {
   const guardada = partida.visitaEnCurso;
   if (esPartidaRemota(partida)) {
     const turnoActual = guardada?.turnoJugadorId;
-    if (turnoActual && ladoDe(partida, turnoActual) !== ladoDe(partida, req.jugadorPartidaId)) {
+    if (turnoActual && indiceLadoDe(partida, turnoActual) !== indiceLadoDe(partida, req.jugadorPartidaId)) {
       return res.status(403).json({ error: "No es tu turno." });
     }
   }

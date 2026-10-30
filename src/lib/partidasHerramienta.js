@@ -54,6 +54,30 @@ export async function resolverParticipante(prisma, { cuadranteId, ligaId, etique
 // los que participa jugadorId y que todavía no tienen ganador ni faltan
 // jugadores por decidir (nada de byes ni huecos vacíos). No filtra por
 // torneo/liga concretos: eso lo hace la ruta si hace falta (query opcional).
+// Lados de una partida de la herramienta, de 2 o más (ver el comentario de
+// `lados` en schema.prisma): [{ etiqueta, jugadoresId, nombres }].
+export function ladosDePartida(partida) {
+  if (Array.isArray(partida.lados) && partida.lados.length >= 2) return partida.lados;
+  return [
+    { etiqueta: partida.etiqueta1, jugadoresId: partida.jugadoresId1, nombres: partida.nombres1 },
+    { etiqueta: partida.etiqueta2, jugadoresId: partida.jugadoresId2, nombres: partida.nombres2 },
+  ];
+}
+
+// Legs ganados por cada lado, en el mismo orden que ladosDePartida.
+export function legsGanadosDePartida(partida) {
+  const lados = ladosDePartida(partida);
+  if (Array.isArray(partida.lados) && partida.lados.length >= 2) {
+    return lados.map((_, i) => partida.legsGanadosLados?.[i] || 0);
+  }
+  return [partida.legsGanados1, partida.legsGanados2];
+}
+
+// Índice (0..N-1) del lado de un jugador en la partida, o -1 si no juega.
+export function indiceLadoDe(partida, jugadorId) {
+  return ladosDePartida(partida).findIndex((l) => l.jugadoresId.includes(jugadorId));
+}
+
 export async function partidosPendientesDeJugador(prisma, jugadorId) {
   const pendientes = [];
 
@@ -144,17 +168,17 @@ export async function partidosPendientesDeJugador(prisma, jugadorId) {
     where: { amistosa: true, finalizada: false },
   });
   for (const partida of amistosos) {
-    const esLado1 = partida.jugadoresId1.includes(jugadorId);
-    const esLado2 = partida.jugadoresId2.includes(jugadorId);
-    if (!esLado1 && !esLado2) continue;
+    const lados = ladosDePartida(partida);
+    const miLado = indiceLadoDe(partida, jugadorId);
+    if (miLado === -1) continue;
     pendientes.push({
       tipo: "amistosa",
       partidaHerramientaId: partida.id,
       entidadTipo: "amistosa",
       entidadId: null,
       entidadNombre: "Amistoso",
-      etiquetaPropia: esLado1 ? partida.etiqueta1 : partida.etiqueta2,
-      etiquetaRival: esLado1 ? partida.etiqueta2 : partida.etiqueta1,
+      etiquetaPropia: lados[miLado].etiqueta,
+      etiquetaRival: lados.filter((_, i) => i !== miLado).map((l) => l.etiqueta).join(", "),
       juegoConfigurado: partida.juego,
       alMejorDe: partida.alMejorDe,
     });

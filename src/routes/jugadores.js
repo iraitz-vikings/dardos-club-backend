@@ -5,6 +5,7 @@ import { requireAuth } from "./auth.js";
 import { requireAdmin } from "../middleware/requireAdmin.js";
 import { actualizarMediasDeJugador } from "../scrapers/actualizarMedias.js";
 import { leerIdsFabricantes, guardarIdsFabricantes } from "../lib/fabricanteMedias.js";
+import { indiceLadoDe, legsGanadosDePartida } from "../lib/partidasHerramienta.js";
 
 const router = Router();
 
@@ -313,10 +314,11 @@ async function estadisticasAceroDeJugador(jugadorId) {
   const statsCricket = bloqueAceroVacioCricket();
 
   for (const partida of partidas) {
-    const lado = partida.jugadoresId1.includes(jugadorId) ? 1 : 2;
-    const legsPropios = lado === 1 ? partida.legsGanados1 : partida.legsGanados2;
-    const legsRivales = lado === 1 ? partida.legsGanados2 : partida.legsGanados1;
-    const ganoElPartido = legsPropios > legsRivales;
+    // Lados de 1 a N (amistosos de más de 2 jugadores, ver ladosDePartida).
+    const lado = indiceLadoDe(partida, jugadorId) + 1;
+    const legsPorLado = legsGanadosDePartida(partida);
+    const legsPropios = legsPorLado[lado - 1];
+    const ganoElPartido = legsPorLado.every((n, i) => i === lado - 1 || legsPropios > n);
     const bloque = partida.juego === "cricket" ? statsCricket : stats501;
 
     bloque.partidosJugados += 1;
@@ -464,7 +466,7 @@ router.post("/:id/fusionar", requireAdmin, async (req, res) => {
         const partidas = await tx.partidaHerramienta.findMany();
         let partidasCambiadas = 0;
         for (const p of partidas) {
-          const texto = JSON.stringify([p.jugadoresId1, p.jugadoresId2, p.legs, p.visitaEnCurso, p.senalCamara, p.listosInicio]);
+          const texto = JSON.stringify([p.jugadoresId1, p.jugadoresId2, p.legs, p.visitaEnCurso, p.senalCamara, p.listosInicio, p.lados]);
           if (!texto.includes(origenId)) continue;
           await tx.partidaHerramienta.update({
             where: { id: p.id },
@@ -475,6 +477,7 @@ router.post("/:id/fusionar", requireAdmin, async (req, res) => {
               ...(p.visitaEnCurso != null ? { visitaEnCurso: cambiarId(p.visitaEnCurso) } : {}),
               ...(p.senalCamara != null ? { senalCamara: cambiarId(p.senalCamara) } : {}),
               listosInicio: sinRepetidos(cambiarId(p.listosInicio || [])),
+              ...(p.lados != null ? { lados: cambiarId(p.lados) } : {}),
             },
           });
           partidasCambiadas += 1;

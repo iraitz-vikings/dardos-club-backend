@@ -847,6 +847,23 @@ model PartidaHerramienta {
   // partidas anteriores a esto, que se tratan como hasta ahora (amistoso =
   // remoto, torneo/liga = local).
   modoJuego      String?
+  // Más de 2 lados (amistosos de 3 o más jugadores, 2026-10-30): la lista
+  // completa de lados, en el orden en que se crearon — [{ etiqueta,
+  // jugadoresId: [...], nombres: [...] }]. Null en partidas de 2 lados, que
+  // siguen usando solo etiqueta1/2, jugadoresId1/2 y nombres1/2. Cuando la
+  // hay, esos campos se rellenan igualmente por compatibilidad: el 1 es el
+  // primer lado y el 2 junta a todos los demás (así "es participante" sigue
+  // funcionando con jugadoresId1 + jugadoresId2). Los legs guardan
+  // ladoGanador de 1 a N, y los legs ganados de cada lado van en
+  // legsGanadosLados (legsGanados1 = los del lado 1, legsGanados2 = los del
+  // resto, también por compatibilidad). Ver ladosDePartida en
+  // src/lib/partidasHerramienta.js.
+  lados            Json?
+  legsGanadosLados Int[] @default([])
+  // Orden de tiro elegido en la sala de espera: índices de lado (0..N-1) en
+  // el orden en que tiran; el leg 1 lo empieza el primero, el 2 el segundo…
+  // Vacío = el orden de los lados tal cual.
+  ordenLados       Int[] @default([])
 
   creadoEn      DateTime @default(now())
   actualizadoEn DateTime @updatedAt

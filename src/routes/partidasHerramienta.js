@@ -369,7 +369,30 @@ function formatearPartida(fila) {
     amistosa: fila.amistosa,
     visitaEnCurso: fila.visitaEnCurso,
     listosInicio: fila.listosInicio || [],
+    modoJuego: fila.modoJuego || null,
   };
+}
+
+// Partida jugada desde dos dispositivos (uno por lado), con turnos
+// sincronizados por el backend: los amistosos siempre, y los partidos de
+// torneo/liga cuando en la sala de espera los dos lados pulsan "Inicio" cada
+// uno desde el suyo (modoJuego "remoto", ver POST /:id/listo).
+function esPartidaRemota(partida) {
+  return partida.amistosa || partida.modoJuego === "remoto";
+}
+
+// Lado (1 o 2) de un jugador en la partida, o null si no juega.
+function ladoDe(partida, jugadorId) {
+  if (partida.jugadoresId1.includes(jugadorId)) return 1;
+  if (partida.jugadoresId2.includes(jugadorId)) return 2;
+  return null;
+}
+
+// La sala de espera se da por completada cuando cada lado tiene al menos un
+// jugador que ha pulsado "Inicio" (en parejas basta con uno de los dos: lo
+// normal es que cada pareja comparta dispositivo).
+function ladosListos(partida, listos) {
+  return [partida.jugadoresId1, partida.jugadoresId2].every((ids) => ids.some((id) => listos.has(id)));
 }
 
 // POST /api/partidas-herramienta/amistosa - un socio logueado (sesión normal,
@@ -644,29 +667,43 @@ router.get("/:id", requireJugadorPartida, async (req, res) => {
   res.json(formatearPartida(partida));
 });
 
-// POST /api/partidas-herramienta/:id/listo - sala de espera de un amistoso
-// remoto: el jugador pulsa (o cancela, body { listo: false }) "Inicio". El
-// marcador aparece cuando han pulsado TODOS los participantes. Una vez están
-// todos listos ya no se puede cancelar (el partido ha empezado). Se bloquea
-// la fila para que dos pulsaciones simultáneas no se pisen.
+// POST /api/partidas-herramienta/:id/listo - sala de espera previa al
+// partido (amistosos y, desde 2026-10-30, también torneo/liga): el jugador
+// pulsa (o cancela, body { listo: false }) "Inicio". El marcador aparece
+// cuando cada lado tiene a alguien listo, y entonces la partida queda en
+// modo "remoto" (cada lado en su dispositivo). En torneo/liga, además, body
+// { local: true } empieza ya el partido con los dos lados en ESTE
+// dispositivo (modo "local", como se jugaba antes). Una vez empezado ya no
+// se puede cancelar. Se bloquea la fila para que dos pulsaciones
+// simultáneas no se pisen.
 router.post("/:id/listo", requireJugadorPartida, async (req, res) => {
   const listo = !(req.body && req.body.listo === false);
+  const local = !!(req.body && req.body.local === true);
   const resultado = await prisma.$transaction(async (tx) => {
     await tx.$queryRaw`SELECT id FROM "PartidaHerramienta" WHERE id = ${req.params.id} FOR UPDATE`;
     const partida = await tx.partidaHerramienta.findUnique({ where: { id: req.params.id } });
     if (!partida) return { fallo: [404, "Partida no encontrada"] };
     const ids = [...new Set([...partida.jugadoresId1, ...partida.jugadoresId2])];
     if (!ids.includes(req.jugadorPartidaId)) return { fallo: [403, "No eres parte de este partido."] };
-    if (!partida.amistosa) return { fallo: [400, "Solo los amistosos tienen sala de espera."] };
+    if (local && partida.amistosa) return { fallo: [400, "Los amistosos se juegan cada uno desde su dispositivo."] };
     const actuales = new Set(partida.listosInicio || []);
-    if (!listo && ids.every((id) => actuales.has(id))) {
-      return { fallo: [409, "El partido ya ha empezado."] };
+    const empezada = !!partida.modoJuego || partida.legs.length > 0 || ladosListos(partida, actuales);
+    if (empezada) {
+      if (!listo || local) return { fallo: [409, "El partido ya ha empezado."] };
+      return { partida };
+    }
+    if (local) {
+      const actualizada = await tx.partidaHerramienta.update({
+        where: { id: partida.id },
+        data: { listosInicio: ids, modoJuego: "local" },
+      });
+      return { partida: actualizada };
     }
     if (listo) actuales.add(req.jugadorPartidaId);
     else actuales.delete(req.jugadorPartidaId);
     const actualizada = await tx.partidaHerramienta.update({
       where: { id: partida.id },
-      data: { listosInicio: [...actuales] },
+      data: { listosInicio: [...actuales], ...(ladosListos(partida, actuales) ? { modoJuego: "remoto" } : {}) },
     });
     return { partida: actualizada };
   });
@@ -738,17 +775,17 @@ router.post("/:id/legs", requireJugadorPartida, async (req, res) => {
 });
 
 // PUT /api/partidas-herramienta/:id/visita - guarda el estado de la visita en
-// curso (partido remoto entre dos dispositivos, hoy solo amistosos — plan
-// "partido-amistoso-remoto" guardado en el proyecto). body libre (forma
+// curso (partido remoto entre dos dispositivos — amistosos y torneo/liga en
+// modo "remoto" — o marcador en directo de torneo/liga, ver GET /directo). body libre (forma
 // depende del juego, ver comentario de `visitaEnCurso` en schema.prisma) pero
 // siempre con `turnoJugadorId`: de quién es el turno DESPUÉS de este envío
 // (el mismo jugador que envía, si sigue tirando dardos de su visita; el
 // rival, si acaba de terminar su turno de 3 dardos).
 //
-// Control de turno en el servidor: solo puede escribir aquí quien ya tenía
-// el turno asignado (partida.visitaEnCurso.turnoJugadorId) — así el
-// dispositivo del rival no puede pisar el marcador del otro mientras no le
-// toca. Si todavía no hay ninguna visita guardada (partida recién creada o
+// Control de turno en el servidor (partidas remotas): solo puede escribir
+// aquí el lado que ya tenía el turno asignado (el de
+// partida.visitaEnCurso.turnoJugadorId) — así el dispositivo del rival no
+// puede pisar el marcador del otro mientras no le toca. Si todavía no hay ninguna visita guardada (partida recién creada o
 // entre leg y leg) se acepta el primer envío de cualquiera de los dos
 // participantes para arrancarla: no hay hoy una regla de "quién empieza"
 // explícita en el backend para amistosos, la fija el frontend.
@@ -763,30 +800,30 @@ router.put("/:id/visita", requireJugadorPartida, async (req, res) => {
   if (!req.body || !req.body.turnoJugadorId) {
     return res.status(400).json({ error: "Falta indicar de quién es el turno." });
   }
-  if (partida.amistosa) {
-    const turnoActual = partida.visitaEnCurso?.turnoJugadorId;
-    if (turnoActual && turnoActual !== req.jugadorPartidaId) {
+  const guardada = partida.visitaEnCurso;
+  if (esPartidaRemota(partida)) {
+    const turnoActual = guardada?.turnoJugadorId;
+    if (turnoActual && ladoDe(partida, turnoActual) !== ladoDe(partida, req.jugadorPartidaId)) {
       return res.status(403).json({ error: "No es tu turno." });
     }
-  } else {
-    // Torneo/liga (marcador en directo para la página pública, ver GET
-    // /:id/directo): se juega en un único dispositivo compartido, con la
-    // sesión de uno solo de los dos jugadores, así que no hay control de
-    // turno. Se manda dardo a dardo, y dos envíos seguidos pueden llegar
-    // desordenados: se descarta uno más antiguo (por `secuencia`) que el ya
-    // guardado, o uno de un leg que ya ha terminado.
-    const guardada = partida.visitaEnCurso;
-    if (typeof req.body.leg === "number" && req.body.leg !== partida.legs.length + 1) {
-      return res.json(formatearPartida(partida));
-    }
-    if (guardada && typeof guardada.secuencia === "number" && !(req.body.secuencia > guardada.secuencia)) {
-      return res.json(formatearPartida(partida));
-    }
+  }
+  // Se manda dardo a dardo, y dos envíos seguidos del mismo dispositivo
+  // pueden llegar desordenados: se descarta uno de un leg que ya ha
+  // terminado, o uno más antiguo (por `secuencia`) que el último guardado
+  // por ese mismo jugador. Solo se compara con envíos del mismo jugador: en
+  // remoto la secuencia la pone el reloj de cada dispositivo, y no tienen
+  // por qué ir en hora entre sí.
+  if (typeof req.body.leg === "number" && req.body.leg !== partida.legs.length + 1) {
+    return res.json(formatearPartida(partida));
+  }
+  const mismoEmisor = !guardada?.enviadoPor || guardada.enviadoPor === req.jugadorPartidaId;
+  if (mismoEmisor && guardada && typeof guardada.secuencia === "number" && !(req.body.secuencia > guardada.secuencia)) {
+    return res.json(formatearPartida(partida));
   }
 
   const actualizada = await prisma.partidaHerramienta.update({
     where: { id: partida.id },
-    data: { visitaEnCurso: req.body },
+    data: { visitaEnCurso: { ...req.body, enviadoPor: req.jugadorPartidaId } },
   });
   res.json(formatearPartida(actualizada));
 });
@@ -1046,9 +1083,16 @@ router.get("/:id/camara/senal", requireJugadorPartida, async (req, res) => {
 
 // PUT /api/partidas-herramienta/:id/camara/senal - el EMISOR manda su oferta
 // y/o candidatos ICE nuevos para un espectador suyo (body: { viewerId,
-// offer?, iceEmisor?: [...] }). Los candidatos se ACUMULAN.
+// offer?, pistas?, iceEmisor?: [...] }). Los candidatos se ACUMULAN.
+// `pistas` va con la oferta: qué cámara es cada vídeo, en el orden en que se
+// añaden ("diana", "lanzador") — desde que se puede jugar con una sola
+// cámara (2026-10-30) el espectador ya no puede dar por hecho que el primero
+// es la diana.
 router.put("/:id/camara/senal", requireJugadorPartida, async (req, res) => {
   const { viewerId, offer, iceEmisor } = req.body || {};
+  const pistas = Array.isArray(req.body?.pistas)
+    ? req.body.pistas.filter((p) => p === "diana" || p === "lanzador").slice(0, 2)
+    : null;
   if (!viewerId) return res.status(400).json({ error: "Falta el id del espectador." });
   const r = await modificarSenal(req.params.id, (senal, partida) => {
     if (!esParticipanteDe(partida, req.jugadorPartidaId)) return { fallo: [403, "No eres parte de este partido."] };
@@ -1057,7 +1101,7 @@ router.put("/:id/camara/senal", requireJugadorPartida, async (req, res) => {
     if (!actual) return { fallo: [404, "Ese espectador ya no está conectado."] };
     emisor.viewers[viewerId] = {
       ...actual,
-      ...(offer ? { offer, estado: "esperando-respuesta" } : {}),
+      ...(offer ? { offer, estado: "esperando-respuesta", ...(pistas ? { pistas } : {}) } : {}),
       iceEmisor: [...(actual.iceEmisor || []), ...(iceEmisor || [])],
       actualizadoEn: new Date().toISOString(),
     };
@@ -1083,6 +1127,7 @@ router.get("/:id/camara/senal/:viewerId", async (req, res) => {
   res.json({
     camarasActivas: !!encontrado.emisor.activas,
     offer: entrada.offer,
+    pistas: entrada.pistas || null,
     iceEmisor: entrada.iceEmisor || [],
   });
 });

@@ -96,6 +96,8 @@ model Jugador {
   telegramCheckIn         TelegramCheckIn?
   puntosJornadaComoJugador1 PuntoJornada[] @relation("puntoJornadaJugador1")
   puntosJornadaComoJugador2 PuntoJornada[] @relation("puntoJornadaJugador2")
+  inscripcionesComoJugador1 InscripcionClub[] @relation("inscripcionJugador1")
+  inscripcionesComoJugador2 InscripcionClub[] @relation("inscripcionJugador2")
 }
 
 // Un dispositivo (navegador) de un socio con avisos activados. Un mismo
@@ -440,6 +442,7 @@ model TorneoClub {
   actualizadoEn   DateTime @updatedAt
 
   cuadrantes Cuadrante[]
+  inscripciones InscripcionClub[]
 }
 
 model CuadroPartido {
@@ -597,6 +600,7 @@ model Cuadrante {
   participantes ParticipanteCuadrante[]
   puntosJornada PuntoJornada[]
   checkIn       CheckInCuadrante?
+  inscripciones InscripcionClub[]
 }
 
 // Puntos que un participante (jugador individual, o los dos de una pareja)
@@ -692,6 +696,60 @@ model LigaClub {
   participantes ParticipanteLiga[]
   partidos      PartidoLiga[]
   cuadrantes    Cuadrante[]
+  inscripciones InscripcionClub[]
+}
+
+// Hoja de inscripciones de "Gestión del club" (panel de admin): quién se
+// apunta a qué torneo/liga del club, si ha pagado (cada jugador por su
+// lado, también en parejas), cómo y cuánto, y si ha confirmado que viene.
+// Es una hoja de trabajo temporal, independiente de los participantes
+// reales (ParticipanteCuadrante / ParticipanteLiga): no entra nadie al
+// torneo hasta que un admin pulsa "Añadir" (ver
+// src/routes/inscripcionesClub.js), y se vacía con el reset al terminar el
+// torneo — no se guarda historial. "confirmado" es solo la asistencia que
+// anuncia el jugador; el check-in de presencia del día sigue siendo el de
+// ParticipanteCuadrante.confirmado.
+//
+// nombre1/nombre2 se guardan siempre (también con ficha) para que la fila
+// siga leyéndose aunque se borre la ficha. Al borrar el torneo/liga se
+// borran sus inscripciones; al borrar el cuadrante solo se desasigna.
+model InscripcionClub {
+  id           String      @id @default(uuid())
+  torneoClubId String?
+  torneoClub   TorneoClub? @relation(fields: [torneoClubId], references: [id], onDelete: Cascade)
+  cuadranteId  String?
+  cuadrante    Cuadrante?  @relation(fields: [cuadranteId], references: [id], onDelete: SetNull)
+  ligaId       String?
+  liga         LigaClub?   @relation(fields: [ligaId], references: [id], onDelete: Cascade)
+  // Grupo de la liga (A, B…) si la liga tiene grupos; se copia al
+  // ParticipanteLiga al añadirlo.
+  grupo        String?
+
+  jugador1Id   String?
+  jugador1     Jugador?    @relation("inscripcionJugador1", fields: [jugador1Id], references: [id], onDelete: SetNull)
+  nombre1      String
+  pagado1      Boolean     @default(false)
+  // "efectivo", "bizum", "transferencia", "tarjeta" u "otro".
+  modoPago1    String?
+  cantidad1    Float?
+
+  jugador2Id   String?
+  jugador2     Jugador?    @relation("inscripcionJugador2", fields: [jugador2Id], references: [id], onDelete: SetNull)
+  nombre2      String?
+  pagado2      Boolean     @default(false)
+  modoPago2    String?
+  cantidad2    Float?
+
+  confirmado   Boolean     @default(false)
+  notas        String?
+  // Cuándo se volcó al torneo/liga (null = todavía no). Evita añadirla dos
+  // veces.
+  anadidoEn    DateTime?
+  creadoEn     DateTime    @default(now())
+  actualizadoEn DateTime   @updatedAt
+
+  @@index([torneoClubId])
+  @@index([ligaId])
 }
 
 model ParticipanteLiga {

@@ -840,6 +840,13 @@ model PartidaHerramienta {
   // han pulsado "Inicio". El marcador solo aparece cuando están todos los
   // participantes (ver POST /:id/listo en src/routes/partidasHerramienta.js).
   listosInicio   String[] @default([])
+  // Cómo se juega la partida, decidido en la sala de espera (también en
+  // torneo/liga desde 2026-10-30): "remoto" (cada lado en su dispositivo,
+  // con turnos sincronizados y cámaras del rival, igual que un amistoso) o
+  // "local" (los dos en un mismo dispositivo junto a la diana). Null en
+  // partidas anteriores a esto, que se tratan como hasta ahora (amistoso =
+  // remoto, torneo/liga = local).
+  modoJuego      String?
 
   creadoEn      DateTime @default(now())
   actualizadoEn DateTime @updatedAt

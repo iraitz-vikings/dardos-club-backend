@@ -40,6 +40,7 @@ import maquinasRouter from "./routes/maquinas.js";
 import fabricantesRouter from "./routes/fabricantes.js";
 import competicionesExternasRouter from "./routes/competicionesExternas.js";
 import inscripcionesClubRouter from "./routes/inscripcionesClub.js";
+import patrocinadoresClubRouter from "./routes/patrocinadoresClub.js";
 import calendarioRouter from "./routes/calendario.js";
 import eventosCalendarioRouter from "./routes/eventosCalendario.js";
 import notificacionesRouter from "./routes/notificaciones.js";
@@ -111,6 +112,8 @@ app.use("/api/fabricantes", fabricantesRouter);
 app.use("/api/competiciones-externas", competicionesExternasRouter);
 // Gestión del club: hoja de inscripciones a torneos/ligas (solo admin).
 app.use("/api/inscripciones-club", inscripcionesClubRouter);
+// Gestión del club: patrocinadores (cantidad y pago; solo admin).
+app.use("/api/patrocinadores-club", patrocinadoresClubRouter);
 
 app.use("/api/calendario", calendarioRouter);
 app.use("/api/eventos-calendario", eventosCalendarioRouter);

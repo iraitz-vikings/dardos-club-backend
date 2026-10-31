@@ -529,6 +529,21 @@ model Patrocinador {
   creadoEn DateTime @default(now())
 }
 
+// Patrocinadores en Gestión del club (panel de admin): lista interna para
+// llevar la parte económica (cuánto aporta cada uno y si ya ha pagado). No
+// tiene nada que ver con Patrocinador (los logos que se publican en la web)
+// y nunca sale en ninguna respuesta pública — ver
+// src/routes/patrocinadoresClub.js.
+model PatrocinadorClub {
+  id            String   @id @default(uuid())
+  nombre        String
+  cantidad      Float?
+  pagado        Boolean  @default(false)
+  logoUrl       String?
+  creadoEn      DateTime @default(now())
+  actualizadoEn DateTime @updatedAt
+}
+
 model ParticipanteCuadrante {
   id          String    @id @default(uuid())
   cuadranteId String

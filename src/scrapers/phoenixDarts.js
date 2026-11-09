@@ -266,18 +266,22 @@ function quitarAcentos(texto) {
 }
 
 // Busca el equipo por nombre exacto (España), expande su ficha para ver
-// "Participated Competitions" y devuelve { cpttnId, searchDivision } del
-// Grupo en el que compite ese equipo dentro de la competición cuyo título
-// mejor coincide con nombreTorneo. Devuelve null si no se encuentra el
-// equipo, o si participa en varias competiciones y ninguna coincide.
-async function localizarGrupoDelEquipoPhoenix(page, nombreEquipo, nombreTorneo) {
+// "Participated Competitions" y devuelve una lista de { cpttnId,
+// searchDivision, titulo } con el Grupo del equipo en CADA competición cuyo
+// título coincide con nombreTorneo (ordenadas de más antigua a más reciente).
+// Hace falta una lista y no una sola: en las fases finales (p.ej. "FINAL
+// SC2026 - NIVEL E") Phoenix crea una competición distinta por ronda ("LAST
+// 128", "LAST 64"...) y el equipo está en varias a la vez. Si el equipo solo
+// tiene una competición se devuelve esa. Lista vacía si no se encuentra el
+// equipo, o si participa en varias y ninguna coincide.
+async function localizarGruposDelEquipoPhoenix(page, nombreEquipo, nombreTorneo) {
   const url = `${SEARCH_TEAM_URL}?searchKey=${encodeURIComponent(nombreEquipo)}&unifiedFg=1&searchNation=ES`;
   await page.goto(url, { waitUntil: "domcontentloaded", timeout: 30000 });
   await page.waitForLoadState("networkidle", { timeout: 15000 }).catch(() => {});
 
   const filas = page.locator("li.each");
   const totalFilas = await filas.count().catch(() => 0);
-  if (totalFilas === 0) return null;
+  if (totalFilas === 0) return [];
 
   const nombreTorneoNorm = quitarAcentos(nombreTorneo);
   const candidatos = []; // { cpttnId, searchDivision, titulo }
@@ -306,13 +310,12 @@ async function localizarGrupoDelEquipoPhoenix(page, nombreEquipo, nombreTorneo) 
     }
   }
 
-  if (candidatos.length === 0) return null;
-  if (candidatos.length === 1) return candidatos[0];
+  if (candidatos.length === 0) return [];
+  if (candidatos.length === 1) return candidatos;
 
-  const coincidencia = candidatos.find(
-    (c) => quitarAcentos(c.titulo).includes(nombreTorneoNorm) || nombreTorneoNorm.includes(quitarAcentos(c.titulo))
-  );
-  return coincidencia || null;
+  return candidatos
+    .filter((c) => quitarAcentos(c.titulo).includes(nombreTorneoNorm) || nombreTorneoNorm.includes(quitarAcentos(c.titulo)))
+    .sort((a, b) => Number(a.cpttnId) - Number(b.cpttnId));
 }
 
 // Lee la tabla `div.ranking_form table.tb_style01` de la página ya
@@ -582,8 +585,8 @@ export async function extraerClasificacionEquiposPhoenix(equiposTorneo) {
 
     for (const { id, idExterno, nombre, conPartidos, idsConResultado } of conNombre) {
       try {
-        const destino = await localizarGrupoDelEquipoPhoenix(page, idExterno, nombre);
-        if (!destino) {
+        const destinos = await localizarGruposDelEquipoPhoenix(page, idExterno, nombre);
+        if (destinos.length === 0) {
           resultados.push({
             equipoTorneoId: id,
             ok: false,
@@ -591,27 +594,45 @@ export async function extraerClasificacionEquiposPhoenix(equiposTorneo) {
           });
           continue;
         }
-        const filas = await leerClasificacionEquiposPhoenixML(page, destino.cpttnId, destino.searchDivision);
-        if (!filas) {
-          resultados.push({
-            equipoTorneoId: id,
-            ok: false,
-            error: `Se encontró el equipo "${idExterno}" en Phoenix Darts pero no se pudo leer su tabla de clasificación (puede que Phoenix Darts haya cambiado el formato de la página).`,
-          });
-          continue;
+        // Clasificación: la de la competición más reciente en la que se
+        // pudo leer (en eliminatorias puede no haber tabla de puntos).
+        let filas = null;
+        for (const destino of [...destinos].reverse()) {
+          filas = await leerClasificacionEquiposPhoenixML(page, destino.cpttnId, destino.searchDivision).catch(() => null);
+          if (filas) break;
         }
-        // Calendario y resultados de este equipo (solo si se piden): un
-        // fallo aquí no tumba la clasificación, se avisa aparte.
+        // Calendario y resultados de este equipo (solo si se piden), de
+        // TODAS las competiciones coincidentes: un fallo en una no tumba
+        // las demás ni la clasificación, se avisa aparte.
         let partidos = null;
         let avisoPartidos = null;
         if (conPartidos) {
-          try {
-            partidos = await leerPartidosEquipoPhoenixML(page, destino.cpttnId, destino.searchDivision, idExterno, idsConResultado);
-          } catch (err) {
-            avisoPartidos = `no se pudo leer el calendario (${err.message || err})`;
+          partidos = [];
+          const fallosCal = [];
+          for (const destino of destinos) {
+            try {
+              partidos.push(...(await leerPartidosEquipoPhoenixML(page, destino.cpttnId, destino.searchDivision, idExterno, idsConResultado)));
+            } catch (err) {
+              fallosCal.push(`${destino.titulo}: ${err.message || err}`);
+            }
           }
+          if (fallosCal.length) avisoPartidos = `no se pudo leer el calendario (${fallosCal.join("; ")})`;
+          if (destinos.length > 1) {
+            // Jornada correlativa entre rondas, por orden de fecha.
+            partidos.sort((x, y) => x.fecha - y.fecha);
+            partidos.forEach((p, i) => (p.jornada = i + 1));
+          }
+          if (partidos.length === 0 && fallosCal.length) partidos = null;
         }
-        resultados.push({ equipoTorneoId: id, ok: true, filas, partidos, avisoPartidos });
+        if (!filas && !(partidos && partidos.length)) {
+          resultados.push({
+            equipoTorneoId: id,
+            ok: false,
+            error: `Se encontró el equipo "${idExterno}" en Phoenix Darts pero no se pudo leer ni su clasificación ni su calendario${avisoPartidos ? ` (${avisoPartidos})` : ""} (puede que Phoenix Darts haya cambiado el formato de la página).`,
+          });
+          continue;
+        }
+        resultados.push({ equipoTorneoId: id, ok: true, filas: filas || [], partidos, avisoPartidos });
       } catch (err) {
         resultados.push({ equipoTorneoId: id, ok: false, error: err.message || "Error consultando Phoenix Darts" });
       }

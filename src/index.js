@@ -34,6 +34,7 @@ import jugadoresRouter from "./routes/jugadores.js";
 import ligasClubRouter from "./routes/ligasClub.js";
 import anunciosRouter from "./routes/anuncios.js";
 import galeriaPrivadaRouter from "./routes/galeriaPrivada.js";
+import tvRouter from "./routes/tv.js";
 import trofeosRouter from "./routes/trofeos.js";
 import equiposClubRouter from "./routes/equiposClub.js";
 import maquinasRouter from "./routes/maquinas.js";
@@ -100,6 +101,9 @@ app.use("/api/ligas-club", ligasClubRouter);
 app.use("/api/anuncios", anunciosRouter);
 
 app.use("/api/galeria-privada", galeriaPrivadaRouter);
+
+// VikingsTV (zona de socios): emisiones y vídeos de YouTube
+app.use("/api/tv", tvRouter);
 
 app.use("/api/trofeos", trofeosRouter);
 

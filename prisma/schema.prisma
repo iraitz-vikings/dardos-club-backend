@@ -1080,3 +1080,17 @@ model JugadorFabricanteId {
 
   @@unique([jugadorId, fabricanteId])
 }
+
+// Vídeos de la sección "VikingsTV" (nombre según club.config.js de
+// dardos-web) de la zona de socios: emisiones y vídeos de YouTube que solo
+// ven los socios con sesión iniciada. Los publican los socios con rol admin
+// desde la propia sección. `enDirecto` marca la emisión que está en marcha:
+// se muestra primero, con aviso de "En directo".
+model VideoTv {
+  id               String   @id @default(uuid())
+  titulo           String
+  url              String
+  descripcion      String?
+  enDirecto        Boolean  @default(false)
+  fechaPublicacion DateTime @default(now())
+}

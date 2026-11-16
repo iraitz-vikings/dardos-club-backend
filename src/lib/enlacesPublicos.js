@@ -41,3 +41,10 @@ export function urlPublicaAmistoso(partidaHerramientaId) {
   const base = frontendUrl();
   return base && partidaHerramientaId ? `${base}/partidas?partida=${partidaHerramientaId}` : undefined;
 }
+
+// Sección VikingsTV de la zona de socios (ver ZonaSocio.jsx en dardos-web:
+// lee ?seccion= al entrar) — para el aviso de "empieza un directo".
+export function urlZonaSocioTv() {
+  const base = frontendUrl();
+  return base ? `${base}/socios?seccion=tv` : undefined;
+}
